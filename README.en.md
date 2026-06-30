@@ -76,8 +76,8 @@ make release
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-0.1.2-mac-arm64.dmg
-dist/codexU-0.1.2-mac-arm64.dmg.sha256
+dist/codexU-0.1.3-mac-arm64.dmg
+dist/codexU-0.1.3-mac-arm64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

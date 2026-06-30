@@ -87,8 +87,8 @@ make release
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-0.1.2-mac-arm64.dmg
-dist/codexU-0.1.2-mac-arm64.dmg.sha256
+dist/codexU-0.1.3-mac-arm64.dmg
+dist/codexU-0.1.3-mac-arm64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。

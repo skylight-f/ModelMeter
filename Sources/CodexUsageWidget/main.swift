@@ -900,15 +900,19 @@ struct UsageWidgetView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 9) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 34, height: 34)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityHidden(true)
                 Text("codexU")
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .foregroundStyle(.primary)
-                Text(accountLabel)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
             }
             Spacer()
+            accountPill
             planPill
             iconButton(systemName: store.isRefreshing ? "hourglass" : "arrow.clockwise") {
                 store.refresh()
@@ -945,7 +949,15 @@ struct UsageWidgetView: View {
     }
 
     private var planPill: some View {
-        Text(planLabel)
+        statusPill(planLabel)
+    }
+
+    private var accountPill: some View {
+        statusPill(accountLabel)
+    }
+
+    private func statusPill(_ label: String) -> some View {
+        Text(label)
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
