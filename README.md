@@ -4,7 +4,7 @@
 
 codexU 是一个 macOS 桌面小组件，用来查看 OpenAI Codex / ChatGPT Codex 的额度窗口、token 用量和今日任务状态。它把常用信息放在桌面上，帮助你快速判断剩余额度、重置时间和当天工作进展。
 
-![codexU 桌面小组件截图](docs/screenshot.png)
+![codexU 桌面小组件截图](docs/screenshot-0.2.0.png)
 
 ## 适合谁
 

@@ -2,7 +2,7 @@
 
 codexU is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex quota, token usage, and today's task status. It keeps the information you check most on the desktop, so you can quickly see remaining quota, reset times, and daily work progress.
 
-![codexU desktop widget screenshot](docs/screenshot.png)
+![codexU desktop widget screenshot](docs/screenshot-0.2.0.png)
 
 ## Who It Is For
 
