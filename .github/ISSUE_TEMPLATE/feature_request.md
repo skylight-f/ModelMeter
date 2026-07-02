@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an improvement for codexU
+about: Suggest an improvement for ModelMeter
 title: "[Feature] "
 labels: enhancement
 assignees: ""

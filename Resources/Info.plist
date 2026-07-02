@@ -5,17 +5,17 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleExecutable</key>
-	<string>codexU</string>
+	<string>ModelMeter</string>
 	<key>CFBundleDisplayName</key>
-	<string>codexU</string>
+	<string>ModelMeter</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.guomeiqing.codexu</string>
 	<key>CFBundleIconFile</key>
-	<string>codexU</string>
+	<string>ModelMeter</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>codexU</string>
+	<string>ModelMeter</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSApplicationCategoryType</key>

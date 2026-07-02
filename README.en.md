@@ -1,8 +1,8 @@
-# codexU
+# ModelMeter
 
-codexU is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex quota, token usage, and today's task status. It keeps the information you check most on the desktop, so you can quickly see remaining quota, reset times, and daily work progress.
+ModelMeter is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex quota, token usage, and today's task status. It keeps the information you check most on the desktop, so you can quickly see remaining quota, reset times, and daily work progress.
 
-![codexU desktop widget screenshot](docs/screenshot-0.2.0.png)
+![ModelMeter desktop widget screenshot](docs/screenshot-0.2.0.png)
 
 ## Who It Is For
 
@@ -34,16 +34,16 @@ codexU is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex quota
 
 ## First Install: Privacy & Security
 
-codexU is distributed outside the Mac App Store. On first launch, macOS may block it until you manually allow it:
+ModelMeter is distributed outside the Mac App Store. On first launch, macOS may block it until you manually allow it:
 
-1. Open `codexU.app` once. If macOS says it cannot be opened, cancel the dialog.
+1. Open `ModelMeter.app` once. If macOS says it cannot be opened, cancel the dialog.
 2. Open **System Settings > Privacy & Security**.
-3. In the **Security** section, click **Open Anyway** for `codexU.app`.
+3. In the **Security** section, click **Open Anyway** for `ModelMeter.app`.
 4. Confirm with Touch ID or your password, then click **Open**.
 
-You can also right-click `codexU.app` in Finder and choose **Open**, then confirm the same security prompt.
+You can also right-click `ModelMeter.app` in Finder and choose **Open**, then confirm the same security prompt.
 
-codexU needs access to local Codex data under `~/.codex/`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
+ModelMeter needs access to local Codex data under `~/.codex/`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
 
 ## Requirements
 
@@ -94,10 +94,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-0.2.0-mac-arm64.dmg
-dist/codexU-0.2.0-mac-arm64.dmg.sha256
-dist/codexU-0.2.0-mac-x86_64.dmg
-dist/codexU-0.2.0-mac-x86_64.dmg.sha256
+dist/ModelMeter-0.2.0-mac-arm64.dmg
+dist/ModelMeter-0.2.0-mac-arm64.dmg.sha256
+dist/ModelMeter-0.2.0-mac-x86_64.dmg
+dist/ModelMeter-0.2.0-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).
@@ -114,21 +114,21 @@ Current Codex quota APIs expose rolling-window percentages and reset times, not 
 
 ## FAQ
 
-### Is codexU an official OpenAI product?
+### Is ModelMeter an official OpenAI product?
 
-No. codexU is an unofficial local macOS utility for reading local Codex app-server responses and local `~/.codex/` data.
+No. ModelMeter is an unofficial local macOS utility for reading local Codex app-server responses and local `~/.codex/` data.
 
-### Does codexU upload my Codex threads or usage data?
+### Does ModelMeter upload my Codex threads or usage data?
 
-No. codexU reads Codex quota, local SQLite usage, and automation metadata locally. It does not upload that data to a third-party service.
+No. ModelMeter reads Codex quota, local SQLite usage, and automation metadata locally. It does not upload that data to a third-party service.
 
-### Why does codexU show remaining percentage instead of absolute quota?
+### Why does ModelMeter show remaining percentage instead of absolute quota?
 
-The current local Codex API exposes rolling-window usage percentages and reset times, not absolute quota sizes. codexU therefore shows remaining percentages for the 5-hour and 7-day windows.
+The current local Codex API exposes rolling-window usage percentages and reset times, not absolute quota sizes. ModelMeter therefore shows remaining percentages for the 5-hour and 7-day windows.
 
-### Does codexU support Intel Macs?
+### Does ModelMeter support Intel Macs?
 
-Yes. Intel Macs should use `codexU-<version>-mac-x86_64.dmg`. From source, package it with `make release-intel`, or override `TARGET_TRIPLE="x86_64-apple-macos14.0"` from a compatible toolchain.
+Yes. Intel Macs should use `ModelMeter-<version>-mac-x86_64.dmg`. From source, package it with `make release-intel`, or override `TARGET_TRIPLE="x86_64-apple-macos14.0"` from a compatible toolchain.
 
 ## License
 

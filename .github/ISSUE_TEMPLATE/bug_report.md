@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a reproducible codexU problem
+about: Report a reproducible ModelMeter problem
 title: "[Bug] "
 labels: bug
 assignees: ""
@@ -15,7 +15,7 @@ assignees: ""
 ## Environment
 
 - macOS:
-- codexU version:
+- ModelMeter version:
 - Codex installed and signed in: yes/no
 
 ## Steps to reproduce

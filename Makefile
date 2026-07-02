@@ -1,5 +1,5 @@
-APP_NAME := codexU
-DISPLAY_NAME := codexU
+APP_NAME := ModelMeter
+DISPLAY_NAME := ModelMeter
 VERSION := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist 2>/dev/null || echo 0.1.0)
 BUILD_DIR := build
 DIST_DIR := dist
@@ -7,7 +7,7 @@ APP_DIR := $(BUILD_DIR)/$(APP_NAME).app
 MACOS_DIR := $(APP_DIR)/Contents/MacOS
 RESOURCES_DIR := $(APP_DIR)/Contents/Resources
 SOURCES := Sources/CodexUsageWidget/main.swift
-APP_ICON := Resources/codexU.icns
+APP_ICON := Resources/ModelMeter.icns
 DEPLOYMENT_TARGET ?= 14.0
 HOST_ARCH := $(shell uname -m)
 APPLE_SILICON_TARGET_TRIPLE ?= arm64-apple-macos$(DEPLOYMENT_TARGET)

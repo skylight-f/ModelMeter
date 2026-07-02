@@ -11,13 +11,13 @@ Please report security issues privately instead of opening a public issue when t
 Include:
 
 - macOS version.
-- codexU version.
+- ModelMeter version.
 - Whether the issue affects app launch, local file reads, quota reads, packaging, or update distribution.
 - Minimal reproduction steps without private Codex data.
 
 ## Local Data Scope
 
-codexU reads:
+ModelMeter reads:
 
 - `~/.codex/state_5.sqlite`
 - `~/.codex/automations/**/automation.toml`

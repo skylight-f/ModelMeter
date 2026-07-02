@@ -1,11 +1,11 @@
-# codexU Design System
+# ModelMeter Design System
 
-本文档定义 codexU macOS 桌面看板的视觉设计体系。目标是让界面从“有玻璃效果的自定义看板”升级为更接近 Apple 原生设计语言的工业级系统：中性材质建立层级，高饱和品牌色负责关键强调，状态色和数据色保持语义清晰。
+本文档定义 ModelMeter macOS 桌面看板的视觉设计体系。目标是让界面从“有玻璃效果的自定义看板”升级为更接近 Apple 原生设计语言的工业级系统：中性材质建立层级，高饱和品牌色负责关键强调，状态色和数据色保持语义清晰。
 
 ## 设计目标
 
 - Apple 原生感：优先使用系统文本层级、系统材质、动态颜色和 SF Symbols，避免网页式大面积色块。
-- 品牌一致性：主色贴合 codexU logo 的蓝紫高饱和渐变，而不是当前偏青绿的数据仪表盘风格。
+- 品牌一致性：主色贴合 ModelMeter logo 的蓝紫高饱和渐变，而不是当前偏青绿的数据仪表盘风格。
 - 高信息密度：保持当前看板的信息容量，但让颜色只承担状态、数据和品牌强调，不干扰阅读。
 - 动态适配：Light、Dark、High Contrast、Reduce Transparency、不同壁纸背景下都要稳定可读。
 - 工业级维护：禁止组件内散落硬编码 RGB。所有颜色必须来自统一 token。
@@ -29,7 +29,7 @@
 
 ## Apple 风格原则
 
-Apple 的颜色和材质体系强调适配性、语义和层级。落地到 codexU，应遵循以下规则：
+Apple 的颜色和材质体系强调适配性、语义和层级。落地到 ModelMeter，应遵循以下规则：
 
 1. 先材质，后颜色。窗口、分组、卡片的层级由 material、fill、separator、shadow 建立，颜色只作为强调。
 2. 色彩有职责边界。Brand、Status、Data、Task、Surface 分开维护，不跨角色复用。
@@ -47,7 +47,7 @@ Apple 的颜色和材质体系强调适配性、语义和层级。落地到 code
 
 ## Logo 色彩抽样
 
-从 `Resources/codexU-icon.png` 抽取到的主要可见色：
+从 `Resources/ModelMeter-icon.png` 抽取到的主要可见色：
 
 | Role | Hex | 用途 |
 | --- | --- | --- |
@@ -168,7 +168,7 @@ Reduce Transparency 开启时，`surface.window` 和 `surface.card` 必须提高
 ### Header
 
 - logo 保持原图，不额外加背景色。
-- `codexU` 使用 `.primary`，不使用品牌蓝，避免与 logo 争夺焦点。
+- `ModelMeter` 使用 `.primary`，不使用品牌蓝，避免与 logo 争夺焦点。
 - account、plan pill 使用中性 fill。只有需要提示升级、错误或未登录时才引入状态色。
 - icon button 默认中性，hover 或 active 时可使用 `brand.tintFill`。
 

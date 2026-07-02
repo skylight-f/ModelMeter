@@ -264,7 +264,7 @@ enum UsageProvider: String, CaseIterable, Equatable {
     case codex
     case mimocode
 
-    static let storageKey = "codexU.usageProvider"
+    static let storageKey = "ModelMeter.usageProvider"
 
     var displayName: String {
         switch self {
@@ -640,7 +640,7 @@ final class CodexUsageReader {
             "params": [
                 "clientInfo": [
                     "name": "codexu",
-                    "title": "codexU",
+                    "title": "ModelMeter",
                     "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.1"
                 ],
                 "capabilities": [
@@ -1807,7 +1807,7 @@ enum WidgetLanguage: String, CaseIterable, Equatable {
     case zh
     case en
 
-    static let storageKey = "codexU.interfaceLanguage"
+    static let storageKey = "ModelMeter.interfaceLanguage"
 
     static var automatic: WidgetLanguage {
         let identifier = TimeZone.current.identifier
@@ -1846,7 +1846,7 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
     case light
     case dark
 
-    static let storageKey = "codexU.interfaceThemeMode"
+    static let storageKey = "ModelMeter.interfaceThemeMode"
 
     static func storedOrAutomatic(defaults: UserDefaults = .standard) -> WidgetThemeMode {
         guard let rawValue = defaults.string(forKey: storageKey),
@@ -1953,7 +1953,7 @@ struct UsageWidgetView: View {
                     .frame(width: 34, height: 34)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .accessibilityHidden(true)
-                Text("codexU")
+                Text("ModelMeter")
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .foregroundStyle(.primary)
             }
@@ -3720,7 +3720,7 @@ private func localizedTaskDetail(_ detail: String, language: WidgetLanguage) -> 
 
 private func localizedReaderMessage(_ message: String, language: WidgetLanguage) -> String {
     guard !language.isChinese else { return message }
-    if message == "正在读取 codexU 数据" { return "Reading codexU data" }
+    if message == "正在读取 ModelMeter 数据" { return "Reading ModelMeter data" }
     if message == "正在读取 Codex 数据" { return "Reading Codex data" }
     if message == "正在读取 MimoCode 数据" { return "Reading MimoCode data" }
     if message.contains("未找到 codex") { return "Codex executable not found" }
@@ -4098,13 +4098,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = item
 
         guard let button = item.button else { return }
-        if let image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "codexU") {
+        if let image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "ModelMeter") {
             image.isTemplate = true
             button.image = image
         } else {
             button.title = "C"
         }
-        button.toolTip = "codexU：点击切换前台/桌面层，快捷键 ⌘U"
+        button.toolTip = "ModelMeter：点击切换前台/桌面层，快捷键 ⌘U"
         button.target = self
         button.action = #selector(statusItemClicked)
     }
@@ -4165,7 +4165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 }
 
 @main
-struct codexUMain {
+struct ModelMeterMain {
     static func main() {
         if CommandLine.arguments.contains("--dump-json") {
             let provider: UsageProvider

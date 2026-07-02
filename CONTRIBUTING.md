@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve codexU.
+Thanks for helping improve ModelMeter.
 
 ## Development
 
@@ -31,4 +31,4 @@ make probe
 
 ## Privacy
 
-codexU reads local Codex files from `~/.codex/`. Do not include real account data, thread titles, local paths, screenshots with private task names, or local SQLite data in issues or pull requests.
+ModelMeter reads local Codex files from `~/.codex/`. Do not include real account data, thread titles, local paths, screenshots with private task names, or local SQLite data in issues or pull requests.

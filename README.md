@@ -1,10 +1,10 @@
-# codexU
+# ModelMeter
 
 [English](README.en.md)
 
-codexU 是一个 macOS 桌面小组件，用来查看 OpenAI Codex / ChatGPT Codex 的额度窗口、token 用量和今日任务状态。它把常用信息放在桌面上，帮助你快速判断剩余额度、重置时间和当天工作进展。
+ModelMeter 是一个 macOS 桌面小组件，用来查看 OpenAI Codex / ChatGPT Codex 的额度窗口、token 用量和今日任务状态。它把常用信息放在桌面上，帮助你快速判断剩余额度、重置时间和当天工作进展。
 
-![codexU 桌面小组件截图](docs/screenshot-0.2.0.png)
+![ModelMeter 桌面小组件截图](docs/screenshot-0.2.0.png)
 
 ## 适合谁
 
@@ -26,7 +26,7 @@ codexU 是一个 macOS 桌面小组件，用来查看 OpenAI Codex / ChatGPT Cod
 
 ## 羊毛进度
 
-“羊毛进度”是 codexU 对本月 Codex 使用量的 API 等效价值估算。它把本机解析到的未缓存输入、命中缓存输入和输出 token，按对应模型的 OpenAI API token 单价折算成美元金额，并和 Plus、Pro 100、Pro 200 以及满额月价值做对比。这个指标解决的问题是：Codex 额度本身通常只显示百分比和重置时间，token 数量也不容易直观看出“用了多少价值”；羊毛进度提供一个统一的金额口径，帮助你判断本月订阅成本大致回收到了哪个区间。
+“羊毛进度”是 ModelMeter 对本月 Codex 使用量的 API 等效价值估算。它把本机解析到的未缓存输入、命中缓存输入和输出 token，按对应模型的 OpenAI API token 单价折算成美元金额，并和 Plus、Pro 100、Pro 200 以及满额月价值做对比。这个指标解决的问题是：Codex 额度本身通常只显示百分比和重置时间，token 数量也不容易直观看出“用了多少价值”；羊毛进度提供一个统一的金额口径，帮助你判断本月订阅成本大致回收到了哪个区间。
 
 单次 token 用量的估算公式为：
 
@@ -46,32 +46,32 @@ API 等效价值 =
 - 顶部外观切换：在自动、浅色和深色模式之间切换；自动模式跟随系统设置。
 - 顶部 `中 | EN`：切换中文或英文界面，手动选择会在下次启动时保留。
 - 右上角刷新按钮：立即刷新额度、token 统计、趋势图和任务看板。
-- 右上角关闭按钮：退出 codexU。
+- 右上角关闭按钮：退出 ModelMeter。
 - 拖动小组件背景：移动小组件位置。
 
 ## 首次安装：隐私与安全
 
-codexU 目前通过 GitHub Release 的 DMG 安装包分发，不经过 Mac App Store。第一次打开时，macOS 可能会拦截，需要手动允许：
+ModelMeter 目前通过 GitHub Release 的 DMG 安装包分发，不经过 Mac App Store。第一次打开时，macOS 可能会拦截，需要手动允许：
 
-1. 打开 `codexU.app` 一次。如果系统提示无法打开，先取消弹窗。
+1. 打开 `ModelMeter.app` 一次。如果系统提示无法打开，先取消弹窗。
 2. 打开 **系统设置 > 隐私与安全性**。
-3. 在 **安全性** 区域找到 `codexU.app`，点击 **仍要打开**。
+3. 在 **安全性** 区域找到 `ModelMeter.app`，点击 **仍要打开**。
 4. 使用 Touch ID 或密码确认，然后点击 **打开**。
 
-也可以在 Finder 中右键点击 `codexU.app`，选择 **打开**，再确认系统安全提示。
+也可以在 Finder 中右键点击 `ModelMeter.app`，选择 **打开**，再确认系统安全提示。
 
-codexU 需要读取本机 `~/.codex/` 下的 Codex 数据。如果 macOS 弹出文件或文件夹访问授权，请允许访问，否则小组件无法读取本机 usage、线程和自动化任务信息。
+ModelMeter 需要读取本机 `~/.codex/` 下的 Codex 数据。如果 macOS 弹出文件或文件夹访问授权，请允许访问，否则小组件无法读取本机 usage、线程和自动化任务信息。
 
 ## 安装
 
 从 GitHub Release 下载与你的 Mac 芯片匹配的安装包：
 
-- Apple Silicon：`codexU-<version>-mac-arm64.dmg`
-- Intel：`codexU-<version>-mac-x86_64.dmg`
+- Apple Silicon：`ModelMeter-<version>-mac-arm64.dmg`
+- Intel：`ModelMeter-<version>-mac-x86_64.dmg`
 
 1. 打开 DMG。
-2. 将 `codexU.app` 拖到 `Applications` 文件夹。
-3. 从 `Applications` 打开 codexU。
+2. 将 `ModelMeter.app` 拖到 `Applications` 文件夹。
+3. 从 `Applications` 打开 ModelMeter。
 4. 按上面的 **首次安装：隐私与安全** 步骤完成手动放行。
 
 ## 运行要求
@@ -123,10 +123,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-0.2.0-mac-arm64.dmg
-dist/codexU-0.2.0-mac-arm64.dmg.sha256
-dist/codexU-0.2.0-mac-x86_64.dmg
-dist/codexU-0.2.0-mac-x86_64.dmg.sha256
+dist/ModelMeter-0.2.0-mac-arm64.dmg
+dist/ModelMeter-0.2.0-mac-arm64.dmg.sha256
+dist/ModelMeter-0.2.0-mac-x86_64.dmg
+dist/ModelMeter-0.2.0-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
@@ -143,21 +143,21 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 
 ## 常见问题
 
-### codexU 是官方 OpenAI 产品吗？
+### ModelMeter 是官方 OpenAI 产品吗？
 
-不是。codexU 是一个非官方的本地 macOS 工具，用于读取本机 Codex app-server 和本机 `~/.codex/` 数据。
+不是。ModelMeter 是一个非官方的本地 macOS 工具，用于读取本机 Codex app-server 和本机 `~/.codex/` 数据。
 
-### codexU 会上传我的 Codex 线程或 usage 数据吗？
+### ModelMeter 会上传我的 Codex 线程或 usage 数据吗？
 
-不会。codexU 只在本机读取 Codex 账户额度、本机 SQLite usage 和 automation 元数据，不把这些数据上传到第三方服务。
+不会。ModelMeter 只在本机读取 Codex 账户额度、本机 SQLite usage 和 automation 元数据，不把这些数据上传到第三方服务。
 
 ### 为什么显示的是剩余百分比，而不是绝对额度？
 
-当前 Codex 本地 API 暴露的是滚动窗口已用百分比和重置时间，不暴露绝对额度数量，所以 codexU 展示的是 5 小时和 7 天窗口的剩余百分比。
+当前 Codex 本地 API 暴露的是滚动窗口已用百分比和重置时间，不暴露绝对额度数量，所以 ModelMeter 展示的是 5 小时和 7 天窗口的剩余百分比。
 
 ### 支持 Intel Mac 吗？
 
-支持。Intel Mac 下载 `codexU-<version>-mac-x86_64.dmg`。从源码打包时使用 `make release-intel`，或在支持对应 target 的机器上使用 `TARGET_TRIPLE="x86_64-apple-macos14.0"`。
+支持。Intel Mac 下载 `ModelMeter-<version>-mac-x86_64.dmg`。从源码打包时使用 `make release-intel`，或在支持对应 target 的机器上使用 `TARGET_TRIPLE="x86_64-apple-macos14.0"`。
 
 ## License
 
