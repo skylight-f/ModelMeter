@@ -4,35 +4,87 @@ import SwiftUI
 func modelTokenPrice(for model: String?) -> ModelTokenPrice {
     let normalized = (model ?? "").lowercased()
 
+    // GPT-5.5 系列 (USD)
     if normalized.contains("gpt-5.5-pro") {
-        return ModelTokenPrice(model: "gpt-5.5-pro", inputPerMillion: 30, cachedInputPerMillion: 30, outputPerMillion: 180)
+        return ModelTokenPrice(model: "gpt-5.5-pro", inputPerMillion: 30, cachedInputPerMillion: 30, outputPerMillion: 180, currency: .usd)
     }
     if normalized.contains("gpt-5.5") || normalized == "chat-latest" {
-        return ModelTokenPrice(model: "gpt-5.5", inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30)
-    }
-    if normalized.contains("gpt-5.4-mini") {
-        return ModelTokenPrice(model: "gpt-5.4-mini", inputPerMillion: 0.75, cachedInputPerMillion: 0.075, outputPerMillion: 4.5)
-    }
-    if normalized.contains("gpt-5.4-nano") {
-        return ModelTokenPrice(model: "gpt-5.4-nano", inputPerMillion: 0.2, cachedInputPerMillion: 0.02, outputPerMillion: 1.25)
-    }
-    if normalized.contains("gpt-5.4-pro") {
-        return ModelTokenPrice(model: "gpt-5.4-pro", inputPerMillion: 30, cachedInputPerMillion: 30, outputPerMillion: 180)
-    }
-    if normalized.contains("gpt-5.4") {
-        return ModelTokenPrice(model: "gpt-5.4", inputPerMillion: 2.5, cachedInputPerMillion: 0.25, outputPerMillion: 15)
-    }
-    if normalized.contains("gpt-5.3-codex")
-        || normalized.contains("gpt-5.2-codex")
-        || normalized.contains("gpt-5.3-chat")
-        || normalized.contains("gpt-5.2") {
-        return ModelTokenPrice(model: "gpt-5.2-codex", inputPerMillion: 1.75, cachedInputPerMillion: 0.175, outputPerMillion: 14)
-    }
-    if normalized.contains("gpt-5-codex") || normalized == "gpt-5" {
-        return ModelTokenPrice(model: "gpt-5", inputPerMillion: 1.25, cachedInputPerMillion: 0.125, outputPerMillion: 10)
+        return ModelTokenPrice(model: "gpt-5.5", inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30, currency: .usd)
     }
 
-    return ModelTokenPrice(model: "gpt-5.5", inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30)
+    // GPT-5.4 系列 (USD)
+    if normalized.contains("gpt-5.4-mini") {
+        return ModelTokenPrice(model: "gpt-5.4-mini", inputPerMillion: 0.75, cachedInputPerMillion: 0.075, outputPerMillion: 4.5, currency: .usd)
+    }
+    if normalized.contains("gpt-5.4-nano") {
+        return ModelTokenPrice(model: "gpt-5.4-nano", inputPerMillion: 0.2, cachedInputPerMillion: 0.02, outputPerMillion: 1.25, currency: .usd)
+    }
+    if normalized.contains("gpt-5.4-pro") {
+        return ModelTokenPrice(model: "gpt-5.4-pro", inputPerMillion: 30, cachedInputPerMillion: 30, outputPerMillion: 180, currency: .usd)
+    }
+    if normalized.contains("gpt-5.4") {
+        return ModelTokenPrice(model: "gpt-5.4", inputPerMillion: 2.5, cachedInputPerMillion: 0.25, outputPerMillion: 15, currency: .usd)
+    }
+
+    // Codex 模型 (USD)
+    if normalized.contains("gpt-5.3-codex") || normalized.contains("gpt-5.2-codex") || normalized.contains("gpt-5.3-chat") {
+        return ModelTokenPrice(model: "gpt-5.3-codex", inputPerMillion: 1.75, cachedInputPerMillion: 0.175, outputPerMillion: 14, currency: .usd)
+    }
+
+    // ChatGPT (USD)
+    if normalized.contains("chatgpt") || normalized.contains("chat-latest") {
+        return ModelTokenPrice(model: "chat-latest", inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30, currency: .usd)
+    }
+
+    // GitHub Copilot 模型 (USD)
+    if normalized.contains("github-copilot") || normalized.contains("copilot") {
+        return ModelTokenPrice(model: "copilot", inputPerMillion: 2.5, cachedInputPerMillion: 0.25, outputPerMillion: 15, currency: .usd)
+    }
+
+    // MimoCode 模型 (CNY)
+    if normalized.contains("mimo-auto") || normalized.contains("mimo-v2.5") || normalized.contains("mimo") {
+        return ModelTokenPrice(model: "mimo", inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8, currency: .cny)
+    }
+
+    // DeepSeek (CNY)
+    if normalized.contains("deepseek-v4-pro") || normalized.contains("deepseek-v4") || normalized.contains("ds-v4") {
+        return ModelTokenPrice(model: "deepseek-v4-pro", inputPerMillion: 4, cachedInputPerMillion: 1, outputPerMillion: 16, currency: .cny)
+    }
+    if normalized.contains("deepseek") || normalized.contains("ds-") {
+        return ModelTokenPrice(model: "deepseek", inputPerMillion: 1, cachedInputPerMillion: 0.2, outputPerMillion: 4, currency: .cny)
+    }
+
+    // Qwen (CNY)
+    if normalized.contains("qwen3.7-max") || normalized.contains("qwen-max") {
+        return ModelTokenPrice(model: "qwen-max", inputPerMillion: 4, cachedInputPerMillion: 1, outputPerMillion: 16, currency: .cny)
+    }
+    if normalized.contains("qwen3.7-plus") || normalized.contains("qwen-plus") {
+        return ModelTokenPrice(model: "qwen-plus", inputPerMillion: 0.8, cachedInputPerMillion: 0.2, outputPerMillion: 4, currency: .cny)
+    }
+    if normalized.contains("qwen") {
+        return ModelTokenPrice(model: "qwen", inputPerMillion: 0.8, cachedInputPerMillion: 0.2, outputPerMillion: 4, currency: .cny)
+    }
+
+    // GLM (CNY)
+    if normalized.contains("glm-5.2") || normalized.contains("glm-5.1") || normalized.contains("glm-5") {
+        return ModelTokenPrice(model: "glm-5", inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8, currency: .cny)
+    }
+    if normalized.contains("glm") {
+        return ModelTokenPrice(model: "glm", inputPerMillion: 0.5, cachedInputPerMillion: 0.15, outputPerMillion: 2, currency: .cny)
+    }
+
+    // Kimi (CNY)
+    if normalized.contains("kimi") {
+        return ModelTokenPrice(model: "kimi", inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8, currency: .cny)
+    }
+
+    // MiniMax (CNY)
+    if normalized.contains("minimax") {
+        return ModelTokenPrice(model: "minimax", inputPerMillion: 1, cachedInputPerMillion: 0.2, outputPerMillion: 4, currency: .cny)
+    }
+
+    // 默认
+    return ModelTokenPrice(model: "unknown", inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0, currency: .usd)
 }
 
 func estimatedCostUSD(tokens: TokenBreakdown, price: ModelTokenPrice) -> Double {
@@ -91,6 +143,7 @@ func normalizedModelName(_ model: String?, fallback: String) -> String {
 func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage], providers: [String: String] = [:]) -> [ModelUsageItem] {
     usageByModel.map { key, value in
         let provider = providers[key] ?? modelProvider(from: key)
+        let price = modelTokenPrice(for: key)
         return ModelUsageItem(
             model: key,
             provider: provider,
@@ -98,7 +151,11 @@ func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage], providers
             uncachedInputTokens: value.tokens.uncachedInputTokens,
             cachedInputTokens: value.tokens.billableCachedInputTokens,
             outputTokens: value.tokens.outputTokens,
-            estimatedCostUSD: value.estimatedCostUSD
+            estimatedCostUSD: value.estimatedCostUSD,
+            inputPricePerMillion: price.inputPerMillion,
+            cachedInputPricePerMillion: price.cachedInputPerMillion,
+            outputPricePerMillion: price.outputPerMillion,
+            currency: price.currency
         )
     }
     .sorted { lhs, rhs in
@@ -473,7 +530,11 @@ func dumpJSON(_ snapshot: UsageSnapshot) {
                 "model": item.model, "provider": item.provider,
                 "tokens": item.tokens, "uncachedInputTokens": item.uncachedInputTokens,
                 "cachedInputTokens": item.cachedInputTokens, "outputTokens": item.outputTokens,
-                "estimatedCostUSD": item.estimatedCostUSD
+                "estimatedCostUSD": item.estimatedCostUSD,
+                "inputPricePerMillion": item.inputPricePerMillion,
+                "cachedInputPricePerMillion": item.cachedInputPricePerMillion,
+                "outputPricePerMillion": item.outputPricePerMillion,
+                "currency": item.currency.rawValue
             ] as [String: Any]
         }
         localObject["sevenDayModelUsage"] = local.sevenDayModelUsage.map { item in
@@ -481,7 +542,11 @@ func dumpJSON(_ snapshot: UsageSnapshot) {
                 "model": item.model, "provider": item.provider,
                 "tokens": item.tokens, "uncachedInputTokens": item.uncachedInputTokens,
                 "cachedInputTokens": item.cachedInputTokens, "outputTokens": item.outputTokens,
-                "estimatedCostUSD": item.estimatedCostUSD
+                "estimatedCostUSD": item.estimatedCostUSD,
+                "inputPricePerMillion": item.inputPricePerMillion,
+                "cachedInputPricePerMillion": item.cachedInputPricePerMillion,
+                "outputPricePerMillion": item.outputPricePerMillion,
+                "currency": item.currency.rawValue
             ] as [String: Any]
         }
         localObject["lifetimeModelUsage"] = local.lifetimeModelUsage.map { item in
@@ -489,7 +554,11 @@ func dumpJSON(_ snapshot: UsageSnapshot) {
                 "model": item.model, "provider": item.provider,
                 "tokens": item.tokens, "uncachedInputTokens": item.uncachedInputTokens,
                 "cachedInputTokens": item.cachedInputTokens, "outputTokens": item.outputTokens,
-                "estimatedCostUSD": item.estimatedCostUSD
+                "estimatedCostUSD": item.estimatedCostUSD,
+                "inputPricePerMillion": item.inputPricePerMillion,
+                "cachedInputPricePerMillion": item.cachedInputPricePerMillion,
+                "outputPricePerMillion": item.outputPricePerMillion,
+                "currency": item.currency.rawValue
             ] as [String: Any]
         }
 

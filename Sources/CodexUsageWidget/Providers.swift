@@ -7,6 +7,12 @@ struct ModelTokenPrice {
     let inputPerMillion: Double
     let cachedInputPerMillion: Double
     let outputPerMillion: Double
+    let currency: Currency
+
+    enum Currency: String {
+        case usd = "$"
+        case cny = "¥"
+    }
 }
 
 struct SessionUsageSource {

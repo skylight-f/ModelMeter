@@ -1278,17 +1278,33 @@ struct ModelUsageRow: View {
         }
     }
 
+    private var hasPriceData: Bool {
+        item.inputPricePerMillion > 0 || item.outputPricePerMillion > 0
+    }
+
+    private var priceText: String {
+        let symbol = item.currency.rawValue
+        return "\(symbol)\(String(format: "%.2f", item.inputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.cachedInputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.outputPricePerMillion))"
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.model)
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
-                Text(item.provider)
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(providerColor)
+                HStack(spacing: 4) {
+                    Text(item.provider)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(providerColor)
+                    if hasPriceData {
+                        Text(priceText)
+                            .font(.system(size: 7, weight: .medium, design: .rounded))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
             }
-            .frame(minWidth: 70, alignment: .leading)
+            .frame(minWidth: hasPriceData ? 90 : 70, alignment: .leading)
 
             Spacer(minLength: 4)
 

@@ -139,6 +139,10 @@ struct ModelUsageItem: Identifiable, Equatable {
     let cachedInputTokens: Int64
     let outputTokens: Int64
     let estimatedCostUSD: Double
+    let inputPricePerMillion: Double
+    let cachedInputPricePerMillion: Double
+    let outputPricePerMillion: Double
+    let currency: ModelTokenPrice.Currency
 
     var id: String { model }
 }
