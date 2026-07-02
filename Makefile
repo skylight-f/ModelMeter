@@ -6,7 +6,7 @@ DIST_DIR := dist
 APP_DIR := $(BUILD_DIR)/$(APP_NAME).app
 MACOS_DIR := $(APP_DIR)/Contents/MacOS
 RESOURCES_DIR := $(APP_DIR)/Contents/Resources
-SOURCES := Sources/CodexUsageWidget/main.swift
+SOURCES := $(wildcard Sources/CodexUsageWidget/*.swift)
 APP_ICON := Resources/ModelMeter.icns
 DEPLOYMENT_TARGET ?= 14.0
 HOST_ARCH := $(shell uname -m)
@@ -33,7 +33,7 @@ build:
 	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)"
 	cp Resources/Info.plist "$(APP_DIR)/Contents/Info.plist"
 	cp "$(APP_ICON)" "$(RESOURCES_DIR)/"
-	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) "$(SOURCES)" \
+	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SOURCES) \
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		-framework Cocoa \
 		-framework Carbon \
