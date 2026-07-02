@@ -130,6 +130,7 @@ struct DetailedUsage: Equatable {
 
 struct ModelUsageItem: Identifiable, Equatable {
     let model: String
+    let provider: String
     let tokens: Int64
     let uncachedInputTokens: Int64
     let cachedInputTokens: Int64
@@ -137,6 +138,78 @@ struct ModelUsageItem: Identifiable, Equatable {
     let estimatedCostUSD: Double
 
     var id: String { model }
+}
+
+private func modelProvider(from model: String) -> String {
+    let lower = model.lowercased()
+
+    // OpenAI
+    if lower.hasPrefix("gpt-") || lower.hasPrefix("o1") || lower.hasPrefix("o3") || lower.hasPrefix("chatgpt") {
+        return "OpenAI"
+    }
+    if lower.contains("codex") && !lower.contains("claude") {
+        return "OpenAI"
+    }
+
+    // Anthropic
+    if lower.hasPrefix("claude") {
+        return "Anthropic"
+    }
+
+    // Google
+    if lower.hasPrefix("gemini") || lower.hasPrefix("gemma") || lower.hasPrefix("palm") {
+        return "Google"
+    }
+
+    // DeepSeek
+    if lower.hasPrefix("deepseek") || lower.hasPrefix("ds-") || lower.contains("deepseek") {
+        return "DeepSeek"
+    }
+
+    // Alibaba
+    if lower.hasPrefix("qwen") || lower.contains("qwen") {
+        return "Alibaba"
+    }
+
+    // Meta
+    if lower.hasPrefix("llama") || lower.hasPrefix("codellama") || lower.contains("llama") {
+        return "Meta"
+    }
+
+    // Mistral
+    if lower.hasPrefix("mistral") || lower.hasPrefix("mixtral") || lower.contains("mistral") {
+        return "Mistral"
+    }
+
+    // Cohere
+    if lower.hasPrefix("command") || lower.hasPrefix("c4ai") {
+        return "Cohere"
+    }
+
+    // xAI
+    if lower.hasPrefix("grok") {
+        return "xAI"
+    }
+
+    // 01.AI
+    if lower.hasPrefix("yi-") {
+        return "01.AI"
+    }
+
+    // Moonshot
+    if lower.hasPrefix("moonshot") || lower.hasPrefix("kimi") {
+        return "Moonshot"
+    }
+
+    // 检查是否包含已知提供商关键词
+    if lower.contains("openai") { return "OpenAI" }
+    if lower.contains("anthropic") { return "Anthropic" }
+    if lower.contains("google") { return "Google" }
+    if lower.contains("deepseek") { return "DeepSeek" }
+    if lower.contains("alibaba") || lower.contains("tongyi") { return "Alibaba" }
+    if lower.contains("meta") || lower.contains("facebook") { return "Meta" }
+
+    return "AI"
 }
 
 struct LocalUsage: Equatable {
@@ -260,6 +333,28 @@ struct UsageSnapshot: Equatable {
     }
 }
 
+struct DiscoveredProvider: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let shortName: String
+    let icon: String
+    let databasePaths: [String]
+    let type: ProviderType
+
+    var displayName: String { name }
+    var shortLabel: String { shortName }
+
+    static func == (lhs: DiscoveredProvider, rhs: DiscoveredProvider) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+enum ProviderType {
+    case codex
+    case mimocode
+    case generic
+}
+
 enum UsageProvider: String, CaseIterable, Equatable {
     case codex
     case mimocode
@@ -374,6 +469,8 @@ final class UsageStore: ObservableObject {
     @Published var provider: UsageProvider
     @Published var snapshot: UsageSnapshot
     @Published var isRefreshing = false
+    @Published var discoveredProviders: [DiscoveredProvider] = []
+    @Published var selectedDiscoveredProvider: DiscoveredProvider?
 
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
@@ -382,6 +479,27 @@ final class UsageStore: ObservableObject {
     init(provider: UsageProvider = .stored()) {
         self.provider = provider
         self.snapshot = .empty(provider: provider)
+        discoverProviders()
+    }
+
+    func discoverProviders() {
+        discoveredProviders = CodexUsageReader.discoverProviders()
+        if let savedId = UserDefaults.standard.string(forKey: "ModelMeter.selectedProviderId"),
+           let found = discoveredProviders.first(where: { $0.id == savedId }) {
+            selectedDiscoveredProvider = found
+        } else {
+            selectedDiscoveredProvider = discoveredProviders.first
+        }
+    }
+
+    func selectDiscoveredProvider(_ discoveredProvider: DiscoveredProvider) {
+        selectedDiscoveredProvider = discoveredProvider
+        UserDefaults.standard.set(discoveredProvider.id, forKey: "ModelMeter.selectedProviderId")
+
+        // 同步更新 provider 属性
+        if let usageProvider = UsageProvider(rawValue: discoveredProvider.id) {
+            selectProvider(usageProvider)
+        }
     }
 
     func start() {
@@ -419,6 +537,11 @@ final class UsageStore: ObservableObject {
         self.provider = provider
         snapshot = .empty(provider: provider)
         refresh()
+
+        // 同步更新 discoveredProviders 选择器
+        if let discovered = discoveredProviders.first(where: { $0.id == provider.rawValue }) {
+            selectedDiscoveredProvider = discovered
+        }
     }
 
     private func refreshTaskBoard() {
@@ -445,6 +568,89 @@ final class CodexUsageReader {
 
     init(provider: UsageProvider = .codex) {
         self.provider = provider
+    }
+
+    static func discoverProviders() -> [DiscoveredProvider] {
+        var providers: [DiscoveredProvider] = []
+        let home = NSHomeDirectory()
+
+        // Codex
+        let codexPaths = [
+            home + "/.codex/state_5.sqlite",
+            home + "/.codex/sqlite/state_5.sqlite"
+        ]
+        if codexPaths.contains(where: { FileManager.default.fileExists(atPath: $0) }) {
+            providers.append(DiscoveredProvider(
+                id: "codex",
+                name: "Codex",
+                shortName: "Codex",
+                icon: "brain.head.profile",
+                databasePaths: codexPaths,
+                type: .codex
+            ))
+        }
+
+        // MimoCode
+        let mimoPaths = [home + "/.local/share/mimocode/mimocode.db"]
+        if mimoPaths.contains(where: { FileManager.default.fileExists(atPath: $0) }) {
+            providers.append(DiscoveredProvider(
+                id: "mimocode",
+                name: "MimoCode",
+                shortName: "Mimo",
+                icon: "sparkles",
+                databasePaths: mimoPaths,
+                type: .mimocode
+            ))
+        }
+
+        // Claude Code
+        let claudePaths = [
+            home + "/.claude/state.db",
+            home + "/.claude/sqlite/state.db"
+        ]
+        if claudePaths.contains(where: { FileManager.default.fileExists(atPath: $0) }) {
+            providers.append(DiscoveredProvider(
+                id: "claude",
+                name: "Claude Code",
+                shortName: "Claude",
+                icon: "ant",
+                databasePaths: claudePaths,
+                type: .generic
+            ))
+        }
+
+        // Cursor
+        let cursorPaths = [
+            home + "/.cursor/state.vscsqlite",
+            home + "/Library/Application Support/Cursor/User/workspaceStorage/state.vscsqlite"
+        ]
+        if cursorPaths.contains(where: { FileManager.default.fileExists(atPath: $0) }) {
+            providers.append(DiscoveredProvider(
+                id: "cursor",
+                name: "Cursor",
+                shortName: "Cursor",
+                icon: "arrow.left.arrow.right",
+                databasePaths: cursorPaths,
+                type: .generic
+            ))
+        }
+
+        // Windsurf
+        let windsurfPaths = [
+            home + "/.codeium/windsurf/state.vscsqlite"
+        ]
+        if windsurfPaths.contains(where: { FileManager.default.fileExists(atPath: $0) }) {
+            providers.append(DiscoveredProvider(
+                id: "windsurf",
+                name: "Windsurf",
+                shortName: "Windsurf",
+                icon: "wind",
+                databasePaths: windsurfPaths,
+                type: .generic
+            ))
+        }
+
+        return providers
     }
 
     func load() -> UsageSnapshot {
@@ -872,7 +1078,7 @@ final class CodexUsageReader {
         messages: inout [String]
     ) -> DetailedUsage? {
         let sourceQuery = """
-        SELECT rollout_path AS rolloutPath, model
+        SELECT rollout_path AS rolloutPath, model, model_provider AS modelProvider
         FROM threads
         WHERE rollout_path IS NOT NULL
           AND rollout_path <> ''
@@ -881,9 +1087,13 @@ final class CodexUsageReader {
         """
 
         var seenPaths = Set<String>()
+        var modelProviders: [String: String] = [:]
         let sources = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: sourceQuery).compactMap { object -> SessionUsageSource? in
             guard let path = object["rolloutPath"] as? String, !path.isEmpty, seenPaths.insert(path).inserted else {
                 return nil
+            }
+            if let model = object["model"] as? String, let provider = object["modelProvider"] as? String {
+                modelProviders[model] = provider
             }
             return SessionUsageSource(rolloutPath: path, model: object["model"] as? String)
         }
@@ -955,9 +1165,9 @@ final class CodexUsageReader {
             return nil
         }
 
-        todayModelUsage = sortedModelUsageItems(todayUsageByModel)
-        sevenDayModelUsage = sortedModelUsageItems(sevenDayUsageByModel)
-        lifetimeModelUsage = sortedModelUsageItems(lifetimeUsageByModel)
+        todayModelUsage = sortedModelUsageItems(todayUsageByModel, providers: modelProviders)
+        sevenDayModelUsage = sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders)
+        lifetimeModelUsage = sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders)
         return accumulator.makeUsage()
     }
 
@@ -1351,7 +1561,8 @@ final class CodexUsageReader {
           json_extract(data, '$.tokens.output') AS outputTokens,
           json_extract(data, '$.tokens.reasoning') AS reasoningTokens,
           json_extract(data, '$.tokens.cache.read') AS cachedInputTokens,
-          json_extract(data, '$.modelID') AS model
+          json_extract(data, '$.modelID') AS model,
+          json_extract(data, '$.providerID') AS provider
         FROM message
         WHERE json_extract(data, '$.tokens.total') IS NOT NULL
         ORDER BY session_id ASC, time_created ASC, id ASC;
@@ -1370,6 +1581,7 @@ final class CodexUsageReader {
         var todayUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
+        var modelProviders: [String: String] = [:]
 
         let dayFormatter = DateFormatter()
         dayFormatter.calendar = calendar
@@ -1410,7 +1622,14 @@ final class CodexUsageReader {
             )
             let price = modelTokenPrice(for: object["model"] as? String)
             let modelName = normalizedModelName(object["model"] as? String, fallback: price.model)
+            let providerID = (object["provider"] as? String) ?? ""
             let costUSD = estimatedCostUSD(tokens: delta, price: price)
+
+            // 存储 provider 信息
+            if !providerID.isEmpty {
+                modelProviders[modelName] = providerID
+            }
+
             if date >= dayStart {
                 var usage = todayUsageByModel[modelName] ?? .zero
                 usage.add(tokens: delta, costUSD: costUSD)
@@ -1474,9 +1693,9 @@ final class CodexUsageReader {
             lastUpdatedAt: dateFromEpoch(sessionCount["lastUpdatedAt"]),
             dailyBuckets: dailyBuckets,
             recentThreads: recent,
-            todayModelUsage: sortedModelUsageItems(todayUsageByModel),
-            sevenDayModelUsage: sortedModelUsageItems(sevenDayUsageByModel),
-            lifetimeModelUsage: sortedModelUsageItems(lifetimeUsageByModel),
+            todayModelUsage: sortedModelUsageItems(todayUsageByModel, providers: modelProviders),
+            sevenDayModelUsage: sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders),
+            lifetimeModelUsage: sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders),
             detailedUsage: totals
         )
     }
@@ -1704,10 +1923,12 @@ private func normalizedModelName(_ model: String?, fallback: String) -> String {
     return String(candidate.prefix(25)) + "..."
 }
 
-private func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage]) -> [ModelUsageItem] {
+private func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage], providers: [String: String] = [:]) -> [ModelUsageItem] {
     usageByModel.map { key, value in
-        ModelUsageItem(
+        let provider = providers[key] ?? modelProvider(from: key)
+        return ModelUsageItem(
             model: key,
+            provider: provider,
             tokens: value.tokens.visibleTotalTokens,
             uncachedInputTokens: value.tokens.uncachedInputTokens,
             cachedInputTokens: value.tokens.billableCachedInputTokens,
@@ -1956,10 +2177,15 @@ struct UsageWidgetView: View {
                 Text("ModelMeter")
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .foregroundStyle(.primary)
+                    .fixedSize()
             }
             Spacer()
-            ProviderSwitch(provider: store.provider, language: language) { selectedProvider in
-                store.selectProvider(selectedProvider)
+            DiscoveredProviderPicker(
+                providers: store.discoveredProviders,
+                selected: store.selectedDiscoveredProvider,
+                language: language
+            ) { selectedProvider in
+                store.selectDiscoveredProvider(selectedProvider)
             }
             ThemeSwitch(themeMode: themeMode, language: language) { selectedMode in
                 themeMode = selectedMode
@@ -1974,6 +2200,10 @@ struct UsageWidgetView: View {
             iconButton(systemName: store.isRefreshing ? "hourglass" : "arrow.clockwise") {
                 store.refresh()
             }
+            iconButton(systemName: "rectangle.on.rectangle") {
+                AppDelegate.shared?.toggleWindowLayer()
+            }
+            .help(language.text("切换前台/桌面层 (⌘U)", "Toggle front/desktop layer (⌘U)"))
             iconButton(systemName: "xmark") {
                 NSApp.terminate(nil)
             }
@@ -2411,6 +2641,57 @@ struct ProviderSwitch: View {
         .frame(width: 122)
         .help(language.text("数据源：Codex / MimoCode", "Source: Codex / MimoCode"))
         .accessibilityLabel(language.text("数据源", "Source"))
+    }
+}
+
+struct DiscoveredProviderPicker: View {
+    let providers: [DiscoveredProvider]
+    let selected: DiscoveredProvider?
+    let language: WidgetLanguage
+    let onSelect: (DiscoveredProvider) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(providers) { provider in
+                Button {
+                    onSelect(provider)
+                } label: {
+                    HStack {
+                        Image(systemName: provider.icon)
+                        Text(provider.name)
+                        if provider.id == selected?.id {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if let selected {
+                    Image(systemName: selected.icon)
+                        .font(.system(size: 10))
+                    Text(selected.shortName)
+                        .font(.system(size: 10, weight: .medium))
+                } else {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 10))
+                    Text(language.text("无数据源", "No source"))
+                        .font(.system(size: 10, weight: .medium))
+                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(WidgetPalette.surfaceTrack)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .frame(minWidth: 80)
+        .help(language.text("选择数据源", "Select data source"))
     }
 }
 
@@ -3003,12 +3284,29 @@ struct ModelUsageRow: View {
         return Double(item.cachedInputTokens) / Double(totalInput) * 100
     }
 
+    private var providerColor: Color {
+        switch item.provider {
+        case "OpenAI": return .blue
+        case "Anthropic": return .orange
+        case "Google": return .green
+        case "DeepSeek": return .purple
+        case "Alibaba": return .red
+        case "Meta": return .cyan
+        default: return .gray
+        }
+    }
+
     var body: some View {
         HStack(spacing: 8) {
-            Text(item.model)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
-                .frame(minWidth: 65, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.model)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                Text(item.provider)
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(providerColor)
+            }
+            .frame(minWidth: 70, alignment: .leading)
 
             Spacer(minLength: 4)
 
@@ -3057,8 +3355,8 @@ struct ModelUsageRow: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
         .help(language.text(
-            "\(item.model): 总计 \(formatTokens(item.tokens)), 缓存命中 \(Int(cacheHitRate))%",
-            "\(item.model): total \(formatTokens(item.tokens)), cache hit \(Int(cacheHitRate))%"
+            "\(item.provider) \(item.model): 总计 \(formatTokens(item.tokens)), 缓存命中 \(Int(cacheHitRate))%",
+            "\(item.provider) \(item.model): total \(formatTokens(item.tokens)), cache hit \(Int(cacheHitRate))%"
         ))
     }
 }
@@ -3861,6 +4159,7 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         localObject["todayModelUsage"] = local.todayModelUsage.map { item in
             [
                 "model": item.model,
+                "provider": item.provider,
                 "tokens": item.tokens,
                 "uncachedInputTokens": item.uncachedInputTokens,
                 "cachedInputTokens": item.cachedInputTokens,
@@ -3871,6 +4170,7 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         localObject["sevenDayModelUsage"] = local.sevenDayModelUsage.map { item in
             [
                 "model": item.model,
+                "provider": item.provider,
                 "tokens": item.tokens,
                 "uncachedInputTokens": item.uncachedInputTokens,
                 "cachedInputTokens": item.cachedInputTokens,
@@ -3881,6 +4181,7 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         localObject["lifetimeModelUsage"] = local.lifetimeModelUsage.map { item in
             [
                 "model": item.model,
+                "provider": item.provider,
                 "tokens": item.tokens,
                 "uncachedInputTokens": item.uncachedInputTokens,
                 "cachedInputTokens": item.cachedInputTokens,
@@ -4038,6 +4339,7 @@ final class DesktopWidgetWindow: NSPanel {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    static var shared: AppDelegate?
     private let store = UsageStore()
     private var window: DesktopWidgetWindow?
     private var statusItem: NSStatusItem?
@@ -4046,6 +4348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var isFrontMode = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppDelegate.shared = self
         NSApp.setActivationPolicy(.accessory)
         WidgetThemeMode.storedOrAutomatic().applyAppearance()
         debugLog("app launched bundle=\(Bundle.main.bundlePath)")
