@@ -143,6 +143,7 @@ struct ModelUsageItem: Identifiable, Equatable {
     let cachedInputPricePerMillion: Double
     let outputPricePerMillion: Double
     let currency: ModelTokenPrice.Currency
+    let avgTokensPerSecond: Double
 
     var id: String { model }
 }

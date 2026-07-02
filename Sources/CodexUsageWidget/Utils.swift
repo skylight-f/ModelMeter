@@ -140,10 +140,11 @@ func normalizedModelName(_ model: String?, fallback: String) -> String {
     return String(candidate.prefix(25)) + "..."
 }
 
-func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage], providers: [String: String] = [:]) -> [ModelUsageItem] {
+func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage], providers: [String: String] = [:], throughput: [String: Double] = [:]) -> [ModelUsageItem] {
     usageByModel.map { key, value in
         let provider = providers[key] ?? modelProvider(from: key)
         let price = modelTokenPrice(for: key)
+        let tps = throughput[key] ?? 0
         return ModelUsageItem(
             model: key,
             provider: provider,
@@ -155,7 +156,8 @@ func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage], providers
             inputPricePerMillion: price.inputPerMillion,
             cachedInputPricePerMillion: price.cachedInputPerMillion,
             outputPricePerMillion: price.outputPerMillion,
-            currency: price.currency
+            currency: price.currency,
+            avgTokensPerSecond: tps
         )
     }
     .sorted { lhs, rhs in

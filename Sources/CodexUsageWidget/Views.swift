@@ -539,6 +539,11 @@ struct UsageWidgetView: View {
 
                     Spacer(minLength: 4)
 
+                    Text(language.text("速度", "TPS"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(minWidth: 36, alignment: .trailing)
+
                     Text(language.text("未缓存", "Unc"))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(uncachedInputColor)
@@ -1592,6 +1597,20 @@ struct ModelUsageRow: View {
             .frame(minWidth: hasPriceData ? 90 : 70, alignment: .leading)
 
             Spacer(minLength: 4)
+
+            if item.avgTokensPerSecond > 0 {
+                Text(String(format: "%.0f/s", item.avgTokensPerSecond))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .frame(minWidth: 36, alignment: .trailing)
+            } else {
+                Text("-")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.tertiary)
+                    .frame(minWidth: 36, alignment: .trailing)
+            }
 
             Text(formatTokens(item.uncachedInputTokens))
                 .font(.system(size: 11, weight: .medium, design: .rounded))

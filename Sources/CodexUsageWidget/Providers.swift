@@ -1165,6 +1165,7 @@ final class CodexUsageReader {
         SELECT
           session_id AS sessionId,
           time_created AS timeCreated,
+          json_extract(data, '$.time.completed') AS timeCompleted,
           json_extract(data, '$.tokens.total') AS totalTokens,
           json_extract(data, '$.tokens.input') AS inputTokens,
           json_extract(data, '$.tokens.output') AS outputTokens,
@@ -1191,6 +1192,8 @@ final class CodexUsageReader {
         var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
         var modelProviders: [String: String] = [:]
+        var modelTotalTokens: [String: Int64] = [:]
+        var modelTotalTimeMs: [String: Double] = [:]
 
         let dayFormatter = DateFormatter()
         dayFormatter.calendar = calendar
@@ -1201,6 +1204,19 @@ final class CodexUsageReader {
             guard let sessionId = object["sessionId"] as? String,
                   let date = dateFromEpoch(object["timeCreated"])
             else { continue }
+
+            // 计算输出吞吐量
+            let outputTokens = int64Value(object["outputTokens"]) ?? 0
+            let timeCreated = (object["timeCreated"] as? Double) ?? 0
+            let timeCompleted = (object["timeCompleted"] as? Double) ?? 0
+            if timeCompleted > timeCreated, outputTokens > 0 {
+                let durationMs = timeCompleted - timeCreated
+                let modelName = normalizedModelName(object["model"] as? String, fallback: "")
+                if !modelName.isEmpty {
+                    modelTotalTokens[modelName, default: 0] += outputTokens
+                    modelTotalTimeMs[modelName, default: 0] += durationMs
+                }
+            }
 
             let uncachedInputTokens = int64Value(object["inputTokens"]) ?? 0
             let cachedInputTokens = int64Value(object["cachedInputTokens"]) ?? 0
@@ -1302,11 +1318,21 @@ final class CodexUsageReader {
             lastUpdatedAt: dateFromEpoch(sessionCount["lastUpdatedAt"]),
             dailyBuckets: dailyBuckets,
             recentThreads: recent,
-            todayModelUsage: sortedModelUsageItems(todayUsageByModel, providers: modelProviders),
-            sevenDayModelUsage: sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders),
-            lifetimeModelUsage: sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders),
+            todayModelUsage: sortedModelUsageItems(todayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
+            sevenDayModelUsage: sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
+            lifetimeModelUsage: sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
             detailedUsage: totals
         )
+    }
+
+    private func calculateThroughput(_ totalTokens: [String: Int64], _ totalTimeMs: [String: Double]) -> [String: Double] {
+        var result: [String: Double] = [:]
+        for (model, tokens) in totalTokens {
+            if let timeMs = totalTimeMs[model], timeMs > 0 {
+                result[model] = Double(tokens) * 1000.0 / timeMs
+            }
+        }
+        return result
     }
 
     private func readMimoTaskBoard(messages: inout [String]) -> TaskBoard? {
