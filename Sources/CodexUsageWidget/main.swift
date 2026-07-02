@@ -131,6 +131,9 @@ struct DetailedUsage: Equatable {
 struct ModelUsageItem: Identifiable, Equatable {
     let model: String
     let tokens: Int64
+    let uncachedInputTokens: Int64
+    let cachedInputTokens: Int64
+    let outputTokens: Int64
     let estimatedCostUSD: Double
 
     var id: String { model }
@@ -145,7 +148,31 @@ struct LocalUsage: Equatable {
     let dailyBuckets: [DailyTokenBucket]
     let recentThreads: [LocalThread]
     let todayModelUsage: [ModelUsageItem]
+    let sevenDayModelUsage: [ModelUsageItem]
+    let lifetimeModelUsage: [ModelUsageItem]
     let detailedUsage: DetailedUsage?
+}
+
+enum ModelUsagePeriod: String, CaseIterable {
+    case today
+    case sevenDay
+    case lifetime
+
+    var labelZh: String {
+        switch self {
+        case .today: return "今日"
+        case .sevenDay: return "近七天"
+        case .lifetime: return "累计"
+        }
+    }
+
+    var labelEn: String {
+        switch self {
+        case .today: return "Today"
+        case .sevenDay: return "7 Days"
+        case .lifetime: return "All"
+        }
+    }
 }
 
 enum TaskColumnKind: String, Equatable {
@@ -806,12 +833,16 @@ final class CodexUsageReader {
         }
 
         var todayModelUsage: [ModelUsageItem] = []
+        var sevenDayModelUsage: [ModelUsageItem] = []
+        var lifetimeModelUsage: [ModelUsageItem] = []
         let detailedUsage = readDetailedUsage(
             sqlitePath: sqlitePath,
             dbPath: dbPath,
             dayStart: dayStart,
             sevenDayStart: sevenDayStart,
             todayModelUsage: &todayModelUsage,
+            sevenDayModelUsage: &sevenDayModelUsage,
+            lifetimeModelUsage: &lifetimeModelUsage,
             messages: &messages
         )
 
@@ -824,6 +855,8 @@ final class CodexUsageReader {
             dailyBuckets: dailyBuckets,
             recentThreads: recent,
             todayModelUsage: todayModelUsage,
+            sevenDayModelUsage: sevenDayModelUsage,
+            lifetimeModelUsage: lifetimeModelUsage,
             detailedUsage: detailedUsage
         )
     }
@@ -834,6 +867,8 @@ final class CodexUsageReader {
         dayStart: Date,
         sevenDayStart: Date,
         todayModelUsage: inout [ModelUsageItem],
+        sevenDayModelUsage: inout [ModelUsageItem],
+        lifetimeModelUsage: inout [ModelUsageItem],
         messages: inout [String]
     ) -> DetailedUsage? {
         let sourceQuery = """
@@ -873,6 +908,8 @@ final class CodexUsageReader {
 
         var accumulator = DetailedUsageAccumulator()
         var todayUsageByModel: [String: PricedTokenUsage] = [:]
+        var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
+        var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
         for source in sources {
             guard let entry = cachedSessionUsage(
                 source: source,
@@ -896,11 +933,20 @@ final class CodexUsageReader {
                     sevenDayStart: sevenDayStart,
                     monthStart: monthStart
                 )
+                let costUSD = estimatedCostUSD(tokens: delta.tokens, price: price)
                 if delta.date >= dayStart {
                     var usage = todayUsageByModel[modelName] ?? .zero
-                    usage.add(tokens: delta.tokens, costUSD: estimatedCostUSD(tokens: delta.tokens, price: price))
+                    usage.add(tokens: delta.tokens, costUSD: costUSD)
                     todayUsageByModel[modelName] = usage
                 }
+                if delta.date >= sevenDayStart {
+                    var usage = sevenDayUsageByModel[modelName] ?? .zero
+                    usage.add(tokens: delta.tokens, costUSD: costUSD)
+                    sevenDayUsageByModel[modelName] = usage
+                }
+                var lifetimeUsage = lifetimeUsageByModel[modelName] ?? .zero
+                lifetimeUsage.add(tokens: delta.tokens, costUSD: costUSD)
+                lifetimeUsageByModel[modelName] = lifetimeUsage
             }
         }
 
@@ -910,6 +956,8 @@ final class CodexUsageReader {
         }
 
         todayModelUsage = sortedModelUsageItems(todayUsageByModel)
+        sevenDayModelUsage = sortedModelUsageItems(sevenDayUsageByModel)
+        lifetimeModelUsage = sortedModelUsageItems(lifetimeUsageByModel)
         return accumulator.makeUsage()
     }
 
@@ -1320,6 +1368,8 @@ final class CodexUsageReader {
         var tokensBySession: [String: Int64] = [:]
         var tokensByDay: [String: Int64] = [:]
         var todayUsageByModel: [String: PricedTokenUsage] = [:]
+        var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
+        var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
 
         let dayFormatter = DateFormatter()
         dayFormatter.calendar = calendar
@@ -1358,17 +1408,24 @@ final class CodexUsageReader {
                 sevenDayStart: sevenDayStart,
                 monthStart: monthStart
             )
+            let price = modelTokenPrice(for: object["model"] as? String)
+            let modelName = normalizedModelName(object["model"] as? String, fallback: price.model)
+            let costUSD = estimatedCostUSD(tokens: delta, price: price)
             if date >= dayStart {
-                let price = modelTokenPrice(for: object["model"] as? String)
-                let modelName = normalizedModelName(object["model"] as? String, fallback: price.model)
                 var usage = todayUsageByModel[modelName] ?? .zero
-                usage.add(tokens: delta, costUSD: estimatedCostUSD(tokens: delta, price: price))
+                usage.add(tokens: delta, costUSD: costUSD)
                 todayUsageByModel[modelName] = usage
             }
-            tokensBySession[sessionId, default: 0] += delta.visibleTotalTokens
             if date >= sevenDayStart {
+                var usage = sevenDayUsageByModel[modelName] ?? .zero
+                usage.add(tokens: delta, costUSD: costUSD)
+                sevenDayUsageByModel[modelName] = usage
                 tokensByDay[dayFormatter.string(from: date), default: 0] += delta.visibleTotalTokens
             }
+            var lifetimeUsage = lifetimeUsageByModel[modelName] ?? .zero
+            lifetimeUsage.add(tokens: delta, costUSD: costUSD)
+            lifetimeUsageByModel[modelName] = lifetimeUsage
+            tokensBySession[sessionId, default: 0] += delta.visibleTotalTokens
         }
 
         let totals = accumulator.makeUsage()
@@ -1418,6 +1475,8 @@ final class CodexUsageReader {
             dailyBuckets: dailyBuckets,
             recentThreads: recent,
             todayModelUsage: sortedModelUsageItems(todayUsageByModel),
+            sevenDayModelUsage: sortedModelUsageItems(sevenDayUsageByModel),
+            lifetimeModelUsage: sortedModelUsageItems(lifetimeUsageByModel),
             detailedUsage: totals
         )
     }
@@ -1650,6 +1709,9 @@ private func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage]) -
         ModelUsageItem(
             model: key,
             tokens: value.tokens.visibleTotalTokens,
+            uncachedInputTokens: value.tokens.uncachedInputTokens,
+            cachedInputTokens: value.tokens.billableCachedInputTokens,
+            outputTokens: value.tokens.outputTokens,
             estimatedCostUSD: value.estimatedCostUSD
         )
     }
@@ -1825,6 +1887,7 @@ struct UsageWidgetView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var language = WidgetLanguage.storedOrAutomatic()
     @State private var themeMode = WidgetThemeMode.storedOrAutomatic()
+    @State private var selectedModelUsagePeriod: ModelUsagePeriod = .today
 
     static let widgetWidth: CGFloat = 820
     static let widgetDefaultHeight: CGFloat = 720
@@ -1867,6 +1930,7 @@ struct UsageWidgetView: View {
                         environmentChecklistSection
                     }
                     usageOverviewSection
+                    modelUsageCardSection
                     taskBoardSection
                 }
                 .padding(.bottom, 2)
@@ -2036,14 +2100,18 @@ struct UsageWidgetView: View {
                         .frame(maxWidth: .infinity, alignment: .top)
                 }
             }
-            if !todayModelUsage.isEmpty {
-                Divider()
-                    .padding(.top, 2)
-                modelUsageSection
-            }
         }
         .padding(12)
         .sectionBackground()
+    }
+
+    private var modelUsageCardSection: some View {
+        guard !(snapshot.local?.todayModelUsage.isEmpty ?? true) else { return AnyView(EmptyView()) }
+        return AnyView(
+            modelUsageSection
+                .padding(12)
+                .sectionBackground()
+        )
     }
 
     private var footer: some View {
@@ -2079,21 +2147,109 @@ struct UsageWidgetView: View {
         ]
     }
 
-    private var todayModelUsage: [ModelUsageItem] {
-        snapshot.local?.todayModelUsage ?? []
+    private var currentModelUsage: [ModelUsageItem] {
+        switch selectedModelUsagePeriod {
+        case .today:
+            return snapshot.local?.todayModelUsage ?? []
+        case .sevenDay:
+            return snapshot.local?.sevenDayModelUsage ?? []
+        case .lifetime:
+            return snapshot.local?.lifetimeModelUsage ?? []
+        }
     }
 
     private var modelUsageSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionTitle(
-                title: language.text("今日模型用量", "Today's model usage"),
-                detail: language.text("\(todayModelUsage.count) 个模型", "\(todayModelUsage.count) models")
-            )
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 138), spacing: 8)], alignment: .leading, spacing: 8) {
-                ForEach(todayModelUsage) { item in
-                    ModelUsageCard(item: item, language: language)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center) {
+                SectionTitle(
+                    title: language.text("模型用量", "Model usage"),
+                    detail: language.text("\(currentModelUsage.count) 个模型", "\(currentModelUsage.count) models")
+                )
+
+                Spacer()
+
+                // Tab 切换
+                HStack(spacing: 2) {
+                    ForEach(ModelUsagePeriod.allCases, id: \.self) { period in
+                        Button {
+                            selectedModelUsagePeriod = period
+                        } label: {
+                            Text(language.text(period.labelZh, period.labelEn))
+                                .font(.system(size: 10, weight: selectedModelUsagePeriod == period ? .semibold : .regular))
+                                .foregroundStyle(selectedModelUsagePeriod == period ? .primary : .secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(selectedModelUsagePeriod == period ? WidgetPalette.surfaceTrack : Color.clear)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
+
+            VStack(spacing: 0) {
+                // 表头
+                HStack(spacing: 8) {
+                    Text(language.text("模型", "Model"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 65, alignment: .leading)
+
+                    Spacer(minLength: 4)
+
+                    Text(language.text("未缓存", "Unc"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(uncachedInputColor)
+                        .frame(minWidth: 42, alignment: .trailing)
+
+                    Text(language.text("缓存", "Cache"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(cachedInputColor)
+                        .frame(minWidth: 42, alignment: .trailing)
+
+                    Text(language.text("输出", "Out"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(WidgetPalette.statusSuccess)
+                        .frame(minWidth: 42, alignment: .trailing)
+
+                    Text(language.text("总消耗", "Total"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(minWidth: 46, alignment: .trailing)
+
+                    Text(language.text("缓存率", "Hit"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 36, alignment: .trailing)
+
+                    Text(language.text("费用", "Cost"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 46, alignment: .trailing)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+
+                Divider()
+
+                // 数据行
+                if currentModelUsage.isEmpty {
+                    Text(language.text("暂无数据", "No data"))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                } else {
+                    ForEach(currentModelUsage) { item in
+                        ModelUsageRow(item: item, language: language)
+                        if item.id != currentModelUsage.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+            .cardBackground(cornerRadius: 10)
         }
     }
 
@@ -2837,31 +2993,73 @@ struct TokenSplitLegendRow: View {
     }
 }
 
-struct ModelUsageCard: View {
+struct ModelUsageRow: View {
     let item: ModelUsageItem
     let language: WidgetLanguage
 
+    private var cacheHitRate: Double {
+        let totalInput = item.uncachedInputTokens + item.cachedInputTokens
+        guard totalInput > 0 else { return 0 }
+        return Double(item.cachedInputTokens) / Double(totalInput) * 100
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 8) {
             Text(item.model)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .lineLimit(1)
-            Text(formatTokens(item.tokens))
-                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .frame(minWidth: 65, alignment: .leading)
+
+            Spacer(minLength: 4)
+
+            Text(formatTokens(item.uncachedInputTokens))
+                .font(.system(size: 11, weight: .medium, design: .rounded))
                 .monospacedDigit()
+                .foregroundStyle(uncachedInputColor)
                 .lineLimit(1)
-                .minimumScaleFactor(0.72)
+                .frame(minWidth: 42, alignment: .trailing)
+
+            Text(formatTokens(item.cachedInputTokens))
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(cachedInputColor)
+                .lineLimit(1)
+                .frame(minWidth: 42, alignment: .trailing)
+
+            Text(formatTokens(item.outputTokens))
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(WidgetPalette.statusSuccess)
+                .lineLimit(1)
+                .frame(minWidth: 42, alignment: .trailing)
+
+            Text(formatTokens(item.tokens))
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(minWidth: 46, alignment: .trailing)
+
+            Text(cacheHitRate > 0 ? "\(Int(cacheHitRate))%" : "-")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(cacheHitRate >= 50 ? WidgetPalette.brandSecondary : .secondary)
+                .lineLimit(1)
+                .frame(minWidth: 36, alignment: .trailing)
+
             Text(formatUSD(item.estimatedCostUSD))
-                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .frame(minWidth: 46, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
-        .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .cardBackground(cornerRadius: 10, elevated: true)
-        .help(language.text("\(item.model) 今日 tokens", "\(item.model) tokens today"))
+        .padding(.horizontal, 10)
+        .help(language.text(
+            "\(item.model): 总计 \(formatTokens(item.tokens)), 缓存命中 \(Int(cacheHitRate))%",
+            "\(item.model): total \(formatTokens(item.tokens)), cache hit \(Int(cacheHitRate))%"
+        ))
     }
 }
 
@@ -3657,6 +3855,37 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
                 "lifetime": jsonObject(detailed.lifetime),
                 "parsedFileCount": detailed.parsedFileCount,
                 "tokenEventCount": detailed.tokenEventCount
+            ] as [String: Any]
+        }
+
+        localObject["todayModelUsage"] = local.todayModelUsage.map { item in
+            [
+                "model": item.model,
+                "tokens": item.tokens,
+                "uncachedInputTokens": item.uncachedInputTokens,
+                "cachedInputTokens": item.cachedInputTokens,
+                "outputTokens": item.outputTokens,
+                "estimatedCostUSD": item.estimatedCostUSD
+            ] as [String: Any]
+        }
+        localObject["sevenDayModelUsage"] = local.sevenDayModelUsage.map { item in
+            [
+                "model": item.model,
+                "tokens": item.tokens,
+                "uncachedInputTokens": item.uncachedInputTokens,
+                "cachedInputTokens": item.cachedInputTokens,
+                "outputTokens": item.outputTokens,
+                "estimatedCostUSD": item.estimatedCostUSD
+            ] as [String: Any]
+        }
+        localObject["lifetimeModelUsage"] = local.lifetimeModelUsage.map { item in
+            [
+                "model": item.model,
+                "tokens": item.tokens,
+                "uncachedInputTokens": item.uncachedInputTokens,
+                "cachedInputTokens": item.cachedInputTokens,
+                "outputTokens": item.outputTokens,
+                "estimatedCostUSD": item.estimatedCostUSD
             ] as [String: Any]
         }
 
