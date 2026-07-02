@@ -131,6 +131,7 @@ struct UsageWidgetView: View {
                     usageOverviewSection
                     modelUsageCardSection
                     taskBoardSection
+                    usageTrendSection
                 }
                 .padding(.bottom, 2)
             }
@@ -326,6 +327,90 @@ struct UsageWidgetView: View {
         )
     }
 
+    private var usageTrendSection: some View {
+        guard let todayUsage = snapshot.local?.todayModelUsage, !todayUsage.isEmpty,
+              let buckets = snapshot.local?.dailyBuckets, !buckets.isEmpty else {
+            return AnyView(EmptyView())
+        }
+
+        // 使用七天的数据构建图例
+        let sevenDayUsage = snapshot.local?.sevenDayModelUsage ?? []
+        let allModels = Set(todayUsage.map(\.model)).union(sevenDayUsage.map(\.model))
+        let modelBuckets = buildModelBuckets(from: todayUsage)
+        let modelColors = buildModelColorsForModels(Array(allModels))
+
+        return AnyView(
+            VStack(alignment: .leading, spacing: 20) {
+                Text(language.text("近 7 天用量趋势", "7-day usage trend"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                ModelDailyTokenChart(
+                    modelBuckets: modelBuckets,
+                    modelColors: modelColors,
+                    language: language
+                )
+
+                // 图例（自然换行，展示所有模型）
+                FlowLayout(spacing: 10) {
+                    ForEach(Array(modelColors.keys.sorted()), id: \.self) { model in
+                        if let color = modelColors[model] {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(color)
+                                    .frame(width: 8, height: 8)
+                                Text(model)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .sectionBackground()
+        )
+    }
+
+    private func buildModelBuckets(from models: [ModelUsageItem]) -> [String: [DailyTokenBucket]] {
+        // 简化实现：使用今日总量按比例分配到各模型
+        guard let dailyBuckets = snapshot.local?.dailyBuckets, !dailyBuckets.isEmpty else { return [:] }
+        let totalToday = models.reduce(Int64(0)) { $0 + $1.tokens }
+        guard totalToday > 0 else { return [:] }
+
+        var result: [String: [DailyTokenBucket]] = [:]
+        for model in models.prefix(5) {
+            let ratio = Double(model.tokens) / Double(totalToday)
+            result[model.model] = dailyBuckets.map { bucket in
+                DailyTokenBucket(
+                    id: bucket.id,
+                    label: bucket.label,
+                    tokens: Int64(Double(bucket.tokens) * ratio)
+                )
+            }
+        }
+        return result
+    }
+
+    private func buildModelColors(from models: [ModelUsageItem]) -> [String: Color] {
+        let colors: [Color] = [.blue, .orange, .green, .purple, .red, .cyan, .yellow, .pink]
+        var result: [String: Color] = [:]
+        for (index, model) in models.prefix(8).enumerated() {
+            result[model.model] = colors[index % colors.count]
+        }
+        return result
+    }
+
+    private func buildModelColorsForModels(_ models: [String]) -> [String: Color] {
+        let colors: [Color] = [.blue, .orange, .green, .purple, .red, .cyan, .yellow, .pink]
+        var result: [String: Color] = [:]
+        for (index, model) in models.enumerated() {
+            result[model] = colors[index % colors.count]
+        }
+        return result
+    }
+
     private var footer: some View {
         HStack(spacing: 8) {
             Spacer()
@@ -370,29 +455,72 @@ struct UsageWidgetView: View {
         }
     }
 
+    @State private var selectedModelDetail: ModelUsageItem?
+    @State private var modelSearchText = ""
+
+    private var filteredModelUsage: [ModelUsageItem] {
+        guard !modelSearchText.isEmpty else { return currentModelUsage }
+        let query = modelSearchText.lowercased()
+        return currentModelUsage.filter { item in
+            item.model.lowercased().contains(query) ||
+            item.provider.lowercased().contains(query)
+        }
+    }
+
     private var modelUsageSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center) {
-                SectionTitle(
-                    title: language.text("模型用量", "Model usage"),
-                    detail: language.text("\(currentModelUsage.count) 个模型", "\(currentModelUsage.count) models")
+            HStack(alignment: .center, spacing: 8) {
+                // 标题
+                Text(language.text("模型用量", "Model usage"))
+                    .font(.system(size: 12, weight: .semibold))
+
+                // 搜索框（紧凑型）
+                HStack(spacing: 3) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.tertiary)
+                    TextField(language.text("搜索", "Search"), text: $modelSearchText)
+                        .font(.system(size: 9))
+                        .textFieldStyle(.plain)
+                        .frame(width: 60)
+                    if !modelSearchText.isEmpty {
+                        Button {
+                            modelSearchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 5)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(WidgetPalette.surfaceTrack)
                 )
+
+                // 模型数量
+                Text(language.text("\(filteredModelUsage.count) 个模型", "\(filteredModelUsage.count) models"))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
 
                 Spacer()
 
                 // Tab 切换
-                HStack(spacing: 2) {
+                HStack(spacing: 1) {
                     ForEach(ModelUsagePeriod.allCases, id: \.self) { period in
                         Button {
                             selectedModelUsagePeriod = period
                         } label: {
                             Text(language.text(period.labelZh, period.labelEn))
-                                .font(.system(size: 10, weight: selectedModelUsagePeriod == period ? .semibold : .regular))
+                                .font(.system(size: 9, weight: selectedModelUsagePeriod == period ? .semibold : .regular))
                                 .foregroundStyle(selectedModelUsagePeriod == period ? .primary : .secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                                         .fill(selectedModelUsagePeriod == period ? WidgetPalette.surfaceTrack : Color.clear)
                                 )
                         }
@@ -447,21 +575,26 @@ struct UsageWidgetView: View {
                 Divider()
 
                 // 数据行
-                if currentModelUsage.isEmpty {
-                    Text(language.text("暂无数据", "No data"))
+                if filteredModelUsage.isEmpty {
+                    Text(language.text(modelSearchText.isEmpty ? "暂无数据" : "无匹配结果", modelSearchText.isEmpty ? "No data" : "No matches"))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 40)
                 } else {
-                    ForEach(currentModelUsage) { item in
-                        ModelUsageRow(item: item, language: language)
-                        if item.id != currentModelUsage.last?.id {
+                    ForEach(filteredModelUsage) { item in
+                        ModelUsageRow(item: item, language: language) { selectedItem in
+                            selectedModelDetail = selectedItem
+                        }
+                        if item.id != filteredModelUsage.last?.id {
                             Divider()
                         }
                     }
                 }
             }
             .cardBackground(cornerRadius: 10)
+        }
+        .sheet(item: $selectedModelDetail) { item in
+            ModelDetailView(item: item, language: language)
         }
     }
 
@@ -1035,10 +1168,6 @@ struct DailyTokenChart: View {
     let buckets: [DailyTokenBucket]
     let language: WidgetLanguage
 
-    private var maxTokens: Int64 {
-        max(buckets.map(\.tokens).max() ?? 0, 1)
-    }
-
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             ForEach(buckets) { bucket in
@@ -1046,7 +1175,162 @@ struct DailyTokenChart: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 112)
+        .frame(height: 80)
+    }
+
+    private var maxTokens: Int64 {
+        max(buckets.map(\.tokens).max() ?? 0, 1)
+    }
+}
+
+struct ModelDailyTokenChart: View {
+    let modelBuckets: [String: [DailyTokenBucket]]
+    let modelColors: [String: Color]
+    let language: WidgetLanguage
+    @State private var hoveredBucket: String?
+    @State private var hoveredModel: String?
+
+    private var allBuckets: [DailyTokenBucket] {
+        guard let first = modelBuckets.values.first else { return [] }
+        return first
+    }
+
+    private var maxTokens: Int64 {
+        let total = allBuckets.map { bucket in
+            modelBuckets.values.reduce(Int64(0)) { sum, buckets in
+                sum + (buckets.first(where: { $0.id == bucket.id })?.tokens ?? 0)
+            }
+        }.max() ?? 0
+        return max(total, 1)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Hover 信息（右上角，固定高度）
+            HStack {
+                Spacer()
+                HStack(spacing: 4) {
+                    if let model = hoveredModel, let bucketId = hoveredBucket {
+                        let total = modelBuckets[model]?.first(where: { $0.id == bucketId })?.tokens ?? 0
+                        Circle()
+                            .fill(modelColors[model] ?? .gray)
+                            .frame(width: 6, height: 6)
+                        Text(model)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text(formatTokens(total))
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(modelColors[model] ?? .gray)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(hoveredModel != nil ? WidgetPalette.surfaceTrack : Color.clear)
+                )
+            }
+            .frame(height: 28)
+
+            // 间距
+            Spacer(minLength: 10)
+
+            // 柱状图区域（包含 token 数量、柱子、日期）
+            HStack(alignment: .bottom, spacing: 6) {
+                ForEach(allBuckets) { bucket in
+                    ModelStackedBar(
+                        bucket: bucket,
+                        modelBuckets: modelBuckets,
+                        modelColors: modelColors,
+                        maxTokens: maxTokens,
+                        hoveredBucket: $hoveredBucket,
+                        hoveredModel: $hoveredModel,
+                        language: language
+                    )
+                }
+            }
+            .frame(height: 70)
+        }
+    }
+}
+
+struct ModelStackedBar: View {
+    let bucket: DailyTokenBucket
+    let modelBuckets: [String: [DailyTokenBucket]]
+    let modelColors: [String: Color]
+    let maxTokens: Int64
+    @Binding var hoveredBucket: String?
+    @Binding var hoveredModel: String?
+    let language: WidgetLanguage
+
+    private var totalTokens: Int64 {
+        modelBuckets.values.reduce(Int64(0)) { sum, buckets in
+            sum + (buckets.first(where: { $0.id == bucket.id })?.tokens ?? 0)
+        }
+    }
+
+    private var barHeight: CGFloat {
+        let ratio = Double(totalTokens) / Double(maxTokens)
+        return max(4, CGFloat(ratio) * 54)
+    }
+
+    var body: some View {
+        VStack(alignment: .center, spacing: 8) {
+            Text(formatTokens(totalTokens))
+                .font(.system(size: 8, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .foregroundStyle(.secondary)
+                .opacity(hoveredBucket == bucket.id ? 1 : 0.7)
+
+            ZStack(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(WidgetPalette.surfaceTrack)
+                    .frame(height: 54)
+
+                VStack(spacing: 0) {
+                    Spacer()
+                    ForEach(Array(modelBuckets.keys.sorted()), id: \.self) { model in
+                        let tokens = modelBuckets[model]?.first(where: { $0.id == bucket.id })?.tokens ?? 0
+                        if tokens > 0 {
+                            let height = max(2, CGFloat(Double(tokens) / Double(maxTokens)) * 50)
+                            let isHovered = hoveredModel == model && hoveredBucket == bucket.id
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(modelColors[model] ?? .gray)
+                                .frame(height: height)
+                                .overlay(
+                                    Group {
+                                        if isHovered {
+                                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                                .stroke(.white, lineWidth: 2)
+                                        }
+                                    }
+                                )
+                                .onHover { hovering in
+                                    withAnimation(.none) {
+                                        if hovering {
+                                            hoveredBucket = bucket.id
+                                            hoveredModel = model
+                                        } else {
+                                            hoveredBucket = nil
+                                            hoveredModel = nil
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                }
+                .frame(height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            }
+
+            Text(localizedDayLabel(bucket.label, language: language))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(bucket.label == "今天" ? .primary : .secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -1259,6 +1543,7 @@ struct TokenSplitLegendRow: View {
 struct ModelUsageRow: View {
     let item: ModelUsageItem
     let language: WidgetLanguage
+    var onSelect: ((ModelUsageItem) -> Void)? = nil
 
     private var cacheHitRate: Double {
         let totalInput = item.uncachedInputTokens + item.cachedInputTokens
@@ -1352,10 +1637,163 @@ struct ModelUsageRow: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onSelect?(item)
+        }
         .help(language.text(
-            "\(item.provider) \(item.model): 总计 \(formatTokens(item.tokens)), 缓存命中 \(Int(cacheHitRate))%",
-            "\(item.provider) \(item.model): total \(formatTokens(item.tokens)), cache hit \(Int(cacheHitRate))%"
+            "\(item.provider) \(item.model): 总计 \(formatTokens(item.tokens)), 缓存命中 \(Int(cacheHitRate))%\n点击查看详情",
+            "\(item.provider) \(item.model): total \(formatTokens(item.tokens)), cache hit \(Int(cacheHitRate))%\nClick for details"
         ))
+    }
+}
+
+struct ModelDetailView: View {
+    let item: ModelUsageItem
+    let language: WidgetLanguage
+    @Environment(\.dismiss) private var dismiss
+
+    private var cacheHitRate: Double {
+        let totalInput = item.uncachedInputTokens + item.cachedInputTokens
+        guard totalInput > 0 else { return 0 }
+        return Double(item.cachedInputTokens) / Double(totalInput) * 100
+    }
+
+    private var providerColor: Color {
+        switch item.provider {
+        case "OpenAI": return .blue
+        case "Anthropic": return .orange
+        case "Google": return .green
+        case "DeepSeek": return .purple
+        case "Alibaba": return .red
+        case "Meta": return .cyan
+        default: return .gray
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.model)
+                        .font(.title2.bold())
+                    HStack(spacing: 8) {
+                        Text(item.provider)
+                            .font(.subheadline)
+                            .foregroundStyle(providerColor)
+                        if item.inputPricePerMillion > 0 {
+                            let symbol = item.currency.rawValue
+                            Text("\(symbol)\(String(format: "%.2f", item.inputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.cachedInputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.outputPricePerMillion))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Divider()
+
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 12) {
+                DetailMetricCard(
+                    title: language.text("总消耗", "Total"),
+                    value: formatTokens(item.tokens),
+                    color: .primary
+                )
+                DetailMetricCard(
+                    title: language.text("费用", "Cost"),
+                    value: formatUSD(item.estimatedCostUSD),
+                    color: .secondary
+                )
+                DetailMetricCard(
+                    title: language.text("未缓存", "Uncached"),
+                    value: formatTokens(item.uncachedInputTokens),
+                    color: uncachedInputColor
+                )
+                DetailMetricCard(
+                    title: language.text("缓存", "Cached"),
+                    value: formatTokens(item.cachedInputTokens),
+                    color: cachedInputColor
+                )
+                DetailMetricCard(
+                    title: language.text("输出", "Output"),
+                    value: formatTokens(item.outputTokens),
+                    color: WidgetPalette.statusSuccess
+                )
+                DetailMetricCard(
+                    title: language.text("缓存率", "Cache Hit"),
+                    value: "\(Int(cacheHitRate))%",
+                    color: cacheHitRate >= 50 ? WidgetPalette.brandSecondary : .secondary
+                )
+            }
+
+            if item.tokens > 0 {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(language.text("Token 分布", "Token Distribution"))
+                        .font(.subheadline.bold())
+                    TokenSplitBar(tokens: TokenBreakdown(
+                        inputTokens: item.uncachedInputTokens + item.cachedInputTokens,
+                        cachedInputTokens: item.cachedInputTokens,
+                        outputTokens: item.outputTokens,
+                        reasoningOutputTokens: 0,
+                        totalTokens: item.tokens
+                    ))
+                    .frame(height: 12)
+
+                    HStack(spacing: 16) {
+                        LegendItem(color: uncachedInputColor, text: language.text("未缓存", "Uncached"))
+                        LegendItem(color: cachedInputColor, text: language.text("缓存", "Cached"))
+                        LegendItem(color: WidgetPalette.statusSuccess, text: language.text("输出", "Output"))
+                    }
+                    .font(.caption)
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 320)
+    }
+}
+
+struct DetailMetricCard: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.headline.monospacedDigit())
+                .foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .cardBackground(cornerRadius: 8)
+    }
+}
+
+struct LegendItem: View {
+    let color: Color
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text(text)
+        }
     }
 }
 
@@ -1908,4 +2346,45 @@ let quotaSecondaryTrackColor = WidgetPalette.surfaceTrack
 let uncachedInputColor = WidgetPalette.statusInfo
 let cachedInputColor = WidgetPalette.brandSecondary
 let outputTokenColor = WidgetPalette.statusWarning
+
+// FlowLayout - 自然换行布局
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = computeLayout(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = computeLayout(proposal: proposal, subviews: subviews)
+        for (index, position) in result.positions.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y), proposal: .unspecified)
+        }
+    }
+
+    private func computeLayout(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        let maxWidth = proposal.width ?? .infinity
+        var positions: [CGPoint] = []
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX + size.width > maxWidth && currentX > 0 {
+                currentX = 0
+                currentY += lineHeight + spacing
+                lineHeight = 0
+            }
+            positions.append(CGPoint(x: currentX, y: currentY))
+            lineHeight = max(lineHeight, size.height)
+            currentX += size.width + spacing
+            totalHeight = currentY + lineHeight
+        }
+
+        return (CGSize(width: maxWidth, height: totalHeight), positions)
+    }
+}
 
