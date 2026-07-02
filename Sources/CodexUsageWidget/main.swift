@@ -128,6 +128,14 @@ struct DetailedUsage: Equatable {
     let tokenEventCount: Int
 }
 
+struct ModelUsageItem: Identifiable, Equatable {
+    let model: String
+    let tokens: Int64
+    let estimatedCostUSD: Double
+
+    var id: String { model }
+}
+
 struct LocalUsage: Equatable {
     let lifetimeTokens: Int64
     let todayTokens: Int64
@@ -136,6 +144,7 @@ struct LocalUsage: Equatable {
     let lastUpdatedAt: Date?
     let dailyBuckets: [DailyTokenBucket]
     let recentThreads: [LocalThread]
+    let todayModelUsage: [ModelUsageItem]
     let detailedUsage: DetailedUsage?
 }
 
@@ -174,6 +183,7 @@ struct TaskBoard: Equatable {
 }
 
 struct UsageSnapshot: Equatable {
+    let provider: UsageProvider
     let refreshedAt: Date
     let account: AccountInfo?
     let limitId: String?
@@ -186,22 +196,28 @@ struct UsageSnapshot: Equatable {
     let taskBoard: TaskBoard?
     let messages: [String]
 
-    static let empty = UsageSnapshot(
-        refreshedAt: Date(),
-        account: nil,
-        limitId: nil,
-        limitName: nil,
-        primary: nil,
-        secondary: nil,
-        credits: nil,
-        cloudLifetimeTokens: nil,
-        local: nil,
-        taskBoard: nil,
-        messages: ["正在读取 codexU 数据"]
-    )
+    static let empty = UsageSnapshot.empty(provider: .codex)
+
+    static func empty(provider: UsageProvider) -> UsageSnapshot {
+        UsageSnapshot(
+            provider: provider,
+            refreshedAt: Date(),
+            account: nil,
+            limitId: nil,
+            limitName: nil,
+            primary: nil,
+            secondary: nil,
+            credits: nil,
+            cloudLifetimeTokens: nil,
+            local: nil,
+            taskBoard: nil,
+            messages: ["正在读取 \(provider.displayName) 数据"]
+        )
+    }
 
     func replacingTaskBoard(_ taskBoard: TaskBoard?) -> UsageSnapshot {
         UsageSnapshot(
+            provider: provider,
             refreshedAt: refreshedAt,
             account: account,
             limitId: limitId,
@@ -214,6 +230,42 @@ struct UsageSnapshot: Equatable {
             taskBoard: taskBoard,
             messages: messages
         )
+    }
+}
+
+enum UsageProvider: String, CaseIterable, Equatable {
+    case codex
+    case mimocode
+
+    static let storageKey = "codexU.usageProvider"
+
+    var displayName: String {
+        switch self {
+        case .codex:
+            return "Codex"
+        case .mimocode:
+            return "MimoCode"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .codex:
+            return "Codex"
+        case .mimocode:
+            return "Mimo"
+        }
+    }
+
+    static func stored(defaults: UserDefaults = .standard) -> UsageProvider {
+        guard let rawValue = defaults.string(forKey: storageKey),
+              let provider = UsageProvider(rawValue: rawValue)
+        else { return .codex }
+        return provider
+    }
+
+    func persist(defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: Self.storageKey)
     }
 }
 
@@ -292,12 +344,18 @@ private struct DetailedUsageAccumulator {
 }
 
 final class UsageStore: ObservableObject {
-    @Published var snapshot: UsageSnapshot = .empty
+    @Published var provider: UsageProvider
+    @Published var snapshot: UsageSnapshot
     @Published var isRefreshing = false
 
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
     private var isRefreshingTaskBoard = false
+
+    init(provider: UsageProvider = .stored()) {
+        self.provider = provider
+        self.snapshot = .empty(provider: provider)
+    }
 
     func start() {
         refresh()
@@ -317,9 +375,10 @@ final class UsageStore: ObservableObject {
     func refresh() {
         guard !isRefreshing else { return }
         isRefreshing = true
+        let provider = provider
 
         DispatchQueue.global(qos: .utility).async {
-            let snapshot = CodexUsageReader().load()
+            let snapshot = CodexUsageReader(provider: provider).load()
             DispatchQueue.main.async {
                 self.snapshot = snapshot
                 self.isRefreshing = false
@@ -327,14 +386,25 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    func selectProvider(_ provider: UsageProvider) {
+        guard self.provider != provider else { return }
+        provider.persist()
+        self.provider = provider
+        snapshot = .empty(provider: provider)
+        refresh()
+    }
+
     private func refreshTaskBoard() {
         guard !isRefreshing, !isRefreshingTaskBoard else { return }
         isRefreshingTaskBoard = true
+        let provider = provider
 
         DispatchQueue.global(qos: .utility).async {
-            let taskBoard = CodexUsageReader().loadTaskBoard()
+            let taskBoard = CodexUsageReader(provider: provider).loadTaskBoard()
             DispatchQueue.main.async {
-                self.snapshot = self.snapshot.replacingTaskBoard(taskBoard)
+                if self.provider == provider {
+                    self.snapshot = self.snapshot.replacingTaskBoard(taskBoard)
+                }
                 self.isRefreshingTaskBoard = false
             }
         }
@@ -342,16 +412,43 @@ final class UsageStore: ObservableObject {
 }
 
 final class CodexUsageReader {
+    private let provider: UsageProvider
     private let fileManager = FileManager.default
     private static var sessionUsageCache: [String: SessionUsageCacheEntry] = [:]
 
+    init(provider: UsageProvider = .codex) {
+        self.provider = provider
+    }
+
     func load() -> UsageSnapshot {
         var messages: [String] = []
+        if provider == .mimocode {
+            let account = readMimoAccount()
+            let local = readMimoLocalUsage(messages: &messages)
+            let taskBoard = readMimoTaskBoard(messages: &messages)
+
+            return UsageSnapshot(
+                provider: provider,
+                refreshedAt: Date(),
+                account: account,
+                limitId: nil,
+                limitName: nil,
+                primary: nil,
+                secondary: nil,
+                credits: nil,
+                cloudLifetimeTokens: nil,
+                local: local,
+                taskBoard: taskBoard,
+                messages: messages
+            )
+        }
+
         let appServer = readAppServer(messages: &messages)
         let local = readLocalUsage(messages: &messages)
         let taskBoard = readTaskBoard(messages: &messages)
 
         return UsageSnapshot(
+            provider: provider,
             refreshedAt: Date(),
             account: appServer.account,
             limitId: appServer.limitId,
@@ -368,6 +465,9 @@ final class CodexUsageReader {
 
     func loadTaskBoard() -> TaskBoard? {
         var messages: [String] = []
+        if provider == .mimocode {
+            return readMimoTaskBoard(messages: &messages)
+        }
         return readTaskBoard(messages: &messages)
     }
 
@@ -705,11 +805,13 @@ final class CodexUsageReader {
             )
         }
 
+        var todayModelUsage: [ModelUsageItem] = []
         let detailedUsage = readDetailedUsage(
             sqlitePath: sqlitePath,
             dbPath: dbPath,
             dayStart: dayStart,
             sevenDayStart: sevenDayStart,
+            todayModelUsage: &todayModelUsage,
             messages: &messages
         )
 
@@ -721,6 +823,7 @@ final class CodexUsageReader {
             lastUpdatedAt: dateFromEpoch(totalsObject["lastUpdatedAt"]),
             dailyBuckets: dailyBuckets,
             recentThreads: recent,
+            todayModelUsage: todayModelUsage,
             detailedUsage: detailedUsage
         )
     }
@@ -730,6 +833,7 @@ final class CodexUsageReader {
         dbPath: String,
         dayStart: Date,
         sevenDayStart: Date,
+        todayModelUsage: inout [ModelUsageItem],
         messages: inout [String]
     ) -> DetailedUsage? {
         let sourceQuery = """
@@ -768,6 +872,7 @@ final class CodexUsageReader {
         plainFormatter.formatOptions = [.withInternetDateTime]
 
         var accumulator = DetailedUsageAccumulator()
+        var todayUsageByModel: [String: PricedTokenUsage] = [:]
         for source in sources {
             guard let entry = cachedSessionUsage(
                 source: source,
@@ -781,6 +886,7 @@ final class CodexUsageReader {
             }
 
             let price = modelTokenPrice(for: source.model)
+            let modelName = normalizedModelName(source.model, fallback: price.model)
             for delta in entry.deltas {
                 accumulator.add(
                     delta.tokens,
@@ -790,6 +896,11 @@ final class CodexUsageReader {
                     sevenDayStart: sevenDayStart,
                     monthStart: monthStart
                 )
+                if delta.date >= dayStart {
+                    var usage = todayUsageByModel[modelName] ?? .zero
+                    usage.add(tokens: delta.tokens, costUSD: estimatedCostUSD(tokens: delta.tokens, price: price))
+                    todayUsageByModel[modelName] = usage
+                }
             }
         }
 
@@ -798,6 +909,7 @@ final class CodexUsageReader {
             return nil
         }
 
+        todayModelUsage = sortedModelUsageItems(todayUsageByModel)
         return accumulator.makeUsage()
     }
 
@@ -1143,6 +1255,277 @@ final class CodexUsageReader {
         return items.sorted { $0.title < $1.title }
     }
 
+    private func readMimoAccount() -> AccountInfo? {
+        guard let dbPath = mimoDatabasePath(),
+              let sqlitePath = sqliteExecutablePath()
+        else { return nil }
+
+        let query = """
+        SELECT a.email AS email
+        FROM account a
+        LEFT JOIN account_state s ON s.active_account_id = a.id
+        ORDER BY s.active_account_id IS NULL ASC, a.time_updated DESC
+        LIMIT 1;
+        """
+
+        let email = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: query).first?["email"] as? String
+        return AccountInfo(type: "mimocode", planType: "MimoCode", emailPresent: email != nil && !(email?.isEmpty ?? true))
+    }
+
+    private func readMimoLocalUsage(messages: inout [String]) -> LocalUsage? {
+        guard let dbPath = mimoDatabasePath() else {
+            messages.append("未找到 MimoCode mimocode.db")
+            return nil
+        }
+
+        guard let sqlitePath = sqliteExecutablePath() else {
+            messages.append("未找到 sqlite3")
+            return nil
+        }
+
+        let calendar = Calendar.current
+        let now = Date()
+        let dayStart = calendar.startOfDay(for: now)
+        let sevenDayStart = calendar.date(byAdding: .day, value: -6, to: dayStart) ?? dayStart
+        var monthComponents = calendar.dateComponents([.year, .month], from: now)
+        monthComponents.day = 1
+        monthComponents.hour = 0
+        monthComponents.minute = 0
+        monthComponents.second = 0
+        let monthStart = calendar.date(from: monthComponents) ?? dayStart
+
+        let eventQuery = """
+        SELECT
+          session_id AS sessionId,
+          time_created AS timeCreated,
+          json_extract(data, '$.tokens.total') AS totalTokens,
+          json_extract(data, '$.tokens.input') AS inputTokens,
+          json_extract(data, '$.tokens.output') AS outputTokens,
+          json_extract(data, '$.tokens.reasoning') AS reasoningTokens,
+          json_extract(data, '$.tokens.cache.read') AS cachedInputTokens,
+          json_extract(data, '$.modelID') AS model
+        FROM message
+        WHERE json_extract(data, '$.tokens.total') IS NOT NULL
+        ORDER BY session_id ASC, time_created ASC, id ASC;
+        """
+
+        let eventObjects = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: eventQuery)
+        guard !eventObjects.isEmpty else {
+            messages.append("未找到 MimoCode token 事件")
+            return nil
+        }
+
+        var accumulator = DetailedUsageAccumulator()
+        var previousBySession: [String: TokenBreakdown] = [:]
+        var tokensBySession: [String: Int64] = [:]
+        var tokensByDay: [String: Int64] = [:]
+        var todayUsageByModel: [String: PricedTokenUsage] = [:]
+
+        let dayFormatter = DateFormatter()
+        dayFormatter.calendar = calendar
+        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dayFormatter.dateFormat = "yyyy-MM-dd"
+
+        for object in eventObjects {
+            guard let sessionId = object["sessionId"] as? String,
+                  let date = dateFromEpoch(object["timeCreated"])
+            else { continue }
+
+            let uncachedInputTokens = int64Value(object["inputTokens"]) ?? 0
+            let cachedInputTokens = int64Value(object["cachedInputTokens"]) ?? 0
+            let current = TokenBreakdown(
+                inputTokens: uncachedInputTokens + cachedInputTokens,
+                cachedInputTokens: cachedInputTokens,
+                outputTokens: int64Value(object["outputTokens"]) ?? 0,
+                reasoningOutputTokens: int64Value(object["reasoningTokens"]) ?? 0,
+                totalTokens: int64Value(object["totalTokens"]) ?? 0
+            )
+
+            var delta = current.delta(from: previousBySession[sessionId] ?? .zero)
+            if delta.hasNegativeValue {
+                delta = current
+            }
+            previousBySession[sessionId] = current
+            guard !delta.isZero else { continue }
+
+            accumulator.parsedFileCount += 1
+            accumulator.tokenEventCount += 1
+            accumulator.add(
+                delta,
+                at: date,
+                price: modelTokenPrice(for: object["model"] as? String),
+                dayStart: dayStart,
+                sevenDayStart: sevenDayStart,
+                monthStart: monthStart
+            )
+            if date >= dayStart {
+                let price = modelTokenPrice(for: object["model"] as? String)
+                let modelName = normalizedModelName(object["model"] as? String, fallback: price.model)
+                var usage = todayUsageByModel[modelName] ?? .zero
+                usage.add(tokens: delta, costUSD: estimatedCostUSD(tokens: delta, price: price))
+                todayUsageByModel[modelName] = usage
+            }
+            tokensBySession[sessionId, default: 0] += delta.visibleTotalTokens
+            if date >= sevenDayStart {
+                tokensByDay[dayFormatter.string(from: date), default: 0] += delta.visibleTotalTokens
+            }
+        }
+
+        let totals = accumulator.makeUsage()
+        let labelFormatter = DateFormatter()
+        labelFormatter.calendar = calendar
+        labelFormatter.locale = Locale(identifier: "zh_CN")
+        labelFormatter.dateFormat = "M/d"
+        let dailyBuckets = (0..<7).compactMap { index -> DailyTokenBucket? in
+            guard let date = calendar.date(byAdding: .day, value: index - 6, to: dayStart) else { return nil }
+            let key = dayFormatter.string(from: date)
+            return DailyTokenBucket(
+                id: key,
+                label: index == 6 ? "今天" : labelFormatter.string(from: date),
+                tokens: tokensByDay[key] ?? 0
+            )
+        }
+
+        let sessionCountQuery = "SELECT COUNT(*) AS threadCount, COALESCE(MAX(time_updated), 0) AS lastUpdatedAt FROM session;"
+        let sessionCount = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: sessionCountQuery).first ?? [:]
+
+        let recentQuery = """
+        SELECT id, title, directory, time_updated AS updatedAt, time_archived AS archivedAt
+        FROM session
+        ORDER BY time_updated DESC
+        LIMIT 5;
+        """
+
+        let recent = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: recentQuery).map { object in
+            let sessionId = object["id"] as? String ?? UUID().uuidString
+            return LocalThread(
+                id: sessionId,
+                title: normalizedTitle(object["title"] as? String, fallback: nil),
+                tokens: tokensBySession[sessionId] ?? 0,
+                updatedAt: dateFromEpoch(object["updatedAt"]),
+                model: nil,
+                cwd: object["directory"] as? String ?? "",
+                archived: dateFromEpoch(object["archivedAt"]) != nil
+            )
+        }
+
+        return LocalUsage(
+            lifetimeTokens: totals.lifetime.tokens.visibleTotalTokens,
+            todayTokens: totals.today.tokens.visibleTotalTokens,
+            sevenDayTokens: totals.sevenDay.tokens.visibleTotalTokens,
+            threadCount: intValue(sessionCount["threadCount"]) ?? 0,
+            lastUpdatedAt: dateFromEpoch(sessionCount["lastUpdatedAt"]),
+            dailyBuckets: dailyBuckets,
+            recentThreads: recent,
+            todayModelUsage: sortedModelUsageItems(todayUsageByModel),
+            detailedUsage: totals
+        )
+    }
+
+    private func readMimoTaskBoard(messages: inout [String]) -> TaskBoard? {
+        guard let dbPath = mimoDatabasePath(),
+              let sqlitePath = sqliteExecutablePath()
+        else {
+            messages.append("任务看板未找到 MimoCode SQLite 数据源")
+            return nil
+        }
+
+        let calendar = Calendar.current
+        let now = Date()
+        let dayStart = calendar.startOfDay(for: now)
+        let activeCutoff = now.addingTimeInterval(-2 * 60 * 60)
+        let dayStartMs = Int(dayStart.timeIntervalSince1970 * 1000)
+
+        let todayQuery = """
+        SELECT id, title, directory, time_updated AS updatedAt, time_archived AS archivedAt
+        FROM session
+        WHERE time_archived IS NULL
+          AND (
+            time_updated >= \(dayStartMs)
+            OR time_created >= \(dayStartMs)
+          )
+        ORDER BY time_updated DESC
+        LIMIT 24;
+        """
+
+        let archivedQuery = """
+        SELECT id, title, directory, COALESCE(time_archived, time_updated) AS updatedAt, time_archived AS archivedAt
+        FROM session
+        WHERE time_archived IS NOT NULL
+          AND time_archived >= \(dayStartMs)
+        ORDER BY time_archived DESC
+        LIMIT 12;
+        """
+
+        var activeItems: [TaskItem] = []
+        var pendingItems: [TaskItem] = []
+
+        for object in runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: todayQuery) {
+            let updatedAt = dateFromEpoch(object["updatedAt"])
+            let kind: TaskColumnKind = (updatedAt ?? .distantPast) >= activeCutoff ? .active : .pending
+            let item = makeMimoSessionTaskItem(object: object, updatedAt: updatedAt, kind: kind)
+            if kind == .active {
+                activeItems.append(item)
+            } else {
+                pendingItems.append(item)
+            }
+        }
+
+        let doneItems = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: archivedQuery).map { object in
+            makeMimoSessionTaskItem(object: object, updatedAt: dateFromEpoch(object["updatedAt"]), kind: .done)
+        }
+
+        return TaskBoard(refreshedAt: Date(), columns: [
+            TaskColumn(id: .active, title: "进行中", count: activeItems.count, items: Array(activeItems.prefix(3))),
+            TaskColumn(id: .pending, title: "待处理", count: pendingItems.count, items: Array(pendingItems.prefix(3))),
+            TaskColumn(id: .scheduled, title: "定时", count: 0, items: []),
+            TaskColumn(id: .done, title: "完成", count: doneItems.count, items: Array(doneItems.prefix(3)))
+        ])
+    }
+
+    private func makeMimoSessionTaskItem(object: [String: Any], updatedAt: Date?, kind: TaskColumnKind) -> TaskItem {
+        let rawId = object["id"] as? String ?? UUID().uuidString
+        let compactId = rawId.replacingOccurrences(of: "-", with: "")
+        let code = "MIMO-" + compactId.suffix(4).uppercased()
+        let chip: String
+
+        switch kind {
+        case .active:
+            chip = "Active"
+        case .pending:
+            chip = "Idle"
+        case .scheduled:
+            chip = "Cron"
+        case .done:
+            chip = "Done"
+        }
+
+        return TaskItem(
+            id: rawId + kind.rawValue,
+            code: String(code),
+            title: normalizedTitle(object["title"] as? String, fallback: nil),
+            detail: shortWorkspaceName(object["directory"] as? String ?? ""),
+            chip: chip,
+            updatedAt: updatedAt,
+            tokens: nil,
+            kind: kind
+        )
+    }
+
+    private func mimoDatabasePath() -> String? {
+        firstExistingPath([
+            NSHomeDirectory() + "/.local/share/mimocode/mimocode.db"
+        ])
+    }
+
+    private func sqliteExecutablePath() -> String? {
+        firstExistingPath([
+            "/usr/bin/sqlite3",
+            "/opt/homebrew/bin/sqlite3",
+            "/opt/homebrew/share/android-commandlinetools/platform-tools/sqlite3"
+        ])
+    }
+
     private func runSQLiteJSON(sqlitePath: String, dbPath: String, query: String) -> [[String: Any]] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sqlitePath)
@@ -1252,6 +1635,30 @@ private func normalizedTitle(_ title: String?, fallback: String?) -> String {
 
     if singleLine.count <= 48 { return singleLine }
     return String(singleLine.prefix(45)) + "..."
+}
+
+private func normalizedModelName(_ model: String?, fallback: String) -> String {
+    let raw = (model ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let candidate = raw.isEmpty ? fallback : raw
+    if candidate.count <= 28 { return candidate }
+    return String(candidate.prefix(25)) + "..."
+}
+
+private func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage]) -> [ModelUsageItem] {
+    usageByModel.map { key, value in
+        ModelUsageItem(
+            model: key,
+            tokens: value.tokens.visibleTotalTokens,
+            estimatedCostUSD: value.estimatedCostUSD
+        )
+    }
+    .sorted { lhs, rhs in
+        if lhs.tokens == rhs.tokens {
+            return lhs.model.localizedCaseInsensitiveCompare(rhs.model) == .orderedAscending
+        }
+        return lhs.tokens > rhs.tokens
+    }
 }
 
 private func shortWorkspaceName(_ path: String) -> String {
@@ -1487,6 +1894,9 @@ struct UsageWidgetView: View {
                     .foregroundStyle(.primary)
             }
             Spacer()
+            ProviderSwitch(provider: store.provider, language: language) { selectedProvider in
+                store.selectProvider(selectedProvider)
+            }
             ThemeSwitch(themeMode: themeMode, language: language) { selectedMode in
                 themeMode = selectedMode
                 selectedMode.persist()
@@ -1626,6 +2036,11 @@ struct UsageWidgetView: View {
                         .frame(maxWidth: .infinity, alignment: .top)
                 }
             }
+            if !todayModelUsage.isEmpty {
+                Divider()
+                    .padding(.top, 2)
+                modelUsageSection
+            }
         }
         .padding(12)
         .sectionBackground()
@@ -1644,7 +2059,7 @@ struct UsageWidgetView: View {
     }
 
     private var planLabel: String {
-        snapshot.account?.planType?.uppercased() ?? "LOCAL"
+        snapshot.account?.planType?.uppercased() ?? snapshot.provider.displayName.uppercased()
     }
 
     private var taskBoardSummary: String {
@@ -1664,8 +2079,30 @@ struct UsageWidgetView: View {
         ]
     }
 
+    private var todayModelUsage: [ModelUsageItem] {
+        snapshot.local?.todayModelUsage ?? []
+    }
+
+    private var modelUsageSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionTitle(
+                title: language.text("今日模型用量", "Today's model usage"),
+                detail: language.text("\(todayModelUsage.count) 个模型", "\(todayModelUsage.count) models")
+            )
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 138), spacing: 8)], alignment: .leading, spacing: 8) {
+                ForEach(todayModelUsage) { item in
+                    ModelUsageCard(item: item, language: language)
+                }
+            }
+        }
+    }
+
     private var shouldShowEnvironmentChecklist: Bool {
-        if snapshot.messages.contains("正在读取 codexU 数据") { return false }
+        if snapshot.messages.contains("正在读取 \(snapshot.provider.displayName) 数据") { return false }
+        if snapshot.provider == .mimocode {
+            return (!snapshot.messages.isEmpty && snapshot.local == nil)
+                || snapshot.local == nil
+        }
         return (!snapshot.messages.isEmpty && (snapshot.primary == nil || snapshot.local == nil))
             || snapshot.account == nil
             || snapshot.local == nil
@@ -1675,7 +2112,7 @@ struct UsageWidgetView: View {
         var items: [DiagnosticItem] = []
         let messages = snapshot.messages.joined(separator: "\n")
 
-        if snapshot.primary == nil || snapshot.account == nil {
+        if snapshot.provider == .codex && (snapshot.primary == nil || snapshot.account == nil) {
             if messages.contains("未找到 codex") {
                 items.append(DiagnosticItem(
                     id: "codex-missing",
@@ -1704,7 +2141,23 @@ struct UsageWidgetView: View {
         }
 
         if snapshot.local == nil {
-            if messages.contains("state_5.sqlite") {
+            if messages.contains("mimocode.db") {
+                items.append(DiagnosticItem(
+                    id: "mimo-db",
+                    title: language.text("未找到 MimoCode 数据库", "MimoCode database not found"),
+                    detail: language.text("打开 MimoCode 并至少完成一次会话后，再回到小组件点击刷新。", "Open MimoCode and complete at least one session, then refresh this widget."),
+                    systemName: "externaldrive.badge.questionmark",
+                    tint: WidgetPalette.statusWarning
+                ))
+            } else if messages.contains("MimoCode token") {
+                items.append(DiagnosticItem(
+                    id: "mimo-tokens",
+                    title: language.text("未找到 MimoCode token 事件", "MimoCode token events not found"),
+                    detail: language.text("当前 MimoCode 数据库中还没有可统计的 token 记录。", "The current MimoCode database does not contain token records yet."),
+                    systemName: "chart.bar.doc.horizontal",
+                    tint: WidgetPalette.statusInfo
+                ))
+            } else if messages.contains("state_5.sqlite") {
                 items.append(DiagnosticItem(
                     id: "sqlite-db",
                     title: language.text("未找到本机 Codex 统计库", "Local Codex database not found"),
@@ -1779,6 +2232,29 @@ struct LanguageSwitch: View {
         .pickerStyle(.segmented)
         .controlSize(.mini)
         .frame(width: 70)
+    }
+}
+
+struct ProviderSwitch: View {
+    let provider: UsageProvider
+    let language: WidgetLanguage
+    let onSelect: (UsageProvider) -> Void
+
+    var body: some View {
+        Picker("", selection: Binding(
+            get: { provider },
+            set: { onSelect($0) }
+        )) {
+            ForEach(UsageProvider.allCases, id: \.self) { item in
+                Text(item.shortLabel).tag(item)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .controlSize(.mini)
+        .frame(width: 122)
+        .help(language.text("数据源：Codex / MimoCode", "Source: Codex / MimoCode"))
+        .accessibilityLabel(language.text("数据源", "Source"))
     }
 }
 
@@ -2201,6 +2677,11 @@ struct DetailedTokenMetricCard: View {
         usage?.tokens.visibleTotalTokens ?? fallbackTokens
     }
 
+    private var cacheHitRate: Double? {
+        guard let tokens = usage?.tokens, tokens.inputTokens > 0 else { return nil }
+        return Double(tokens.billableCachedInputTokens) / Double(tokens.inputTokens)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -2225,11 +2706,17 @@ struct DetailedTokenMetricCard: View {
                     .minimumScaleFactor(0.72)
             }
 
-            Text(formatTokens(displayTokens))
-                .font(.system(size: 21, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
+            HStack(alignment: .center, spacing: 8) {
+                Text(formatTokens(displayTokens))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+
+                Spacer(minLength: 4)
+
+                CacheHitBadge(rate: cacheHitRate, language: language)
+            }
 
             TokenSplitBar(tokens: usage?.tokens)
                 .frame(height: 8)
@@ -2255,6 +2742,39 @@ struct DetailedTokenMetricCard: View {
         .padding(10)
         .frame(maxWidth: .infinity, minHeight: 128, alignment: .leading)
         .cardBackground(cornerRadius: 10)
+    }
+}
+
+struct CacheHitBadge: View {
+    let rate: Double?
+    let language: WidgetLanguage
+
+    var body: some View {
+        ZStack {
+            Color.clear
+            Text(rateText)
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(hitColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .frame(width: 34, height: 34)
+        .contentShape(Rectangle())
+        .help(language.text("缓存命中率 = 缓存输入 / 输入总量", "Cache hit rate = cached input / total input"))
+        .accessibilityLabel(language.text("缓存命中率 \(rateText)", "Cache hit rate \(rateText)"))
+    }
+
+    private var rateText: String {
+        guard let rate else { return "--" }
+        return "\(Int((rate * 100).rounded()))%"
+    }
+
+    private var hitColor: Color {
+        guard let rate else { return WidgetPalette.statusInfo }
+        if rate >= 0.85 { return WidgetPalette.statusSuccess }
+        if rate >= 0.60 { return WidgetPalette.statusWarning }
+        return WidgetPalette.statusDanger
     }
 }
 
@@ -2314,6 +2834,34 @@ struct TokenSplitLegendRow: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
         }
+    }
+}
+
+struct ModelUsageCard: View {
+    let item: ModelUsageItem
+    let language: WidgetLanguage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(item.model)
+                .font(.system(size: 10, weight: .semibold))
+                .lineLimit(1)
+            Text(formatTokens(item.tokens))
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(formatUSD(item.estimatedCostUSD))
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .cardBackground(cornerRadius: 10, elevated: true)
+        .help(language.text("\(item.model) 今日 tokens", "\(item.model) tokens today"))
     }
 }
 
@@ -2975,10 +3523,14 @@ private func localizedTaskDetail(_ detail: String, language: WidgetLanguage) -> 
 private func localizedReaderMessage(_ message: String, language: WidgetLanguage) -> String {
     guard !language.isChinese else { return message }
     if message == "正在读取 codexU 数据" { return "Reading codexU data" }
+    if message == "正在读取 Codex 数据" { return "Reading Codex data" }
+    if message == "正在读取 MimoCode 数据" { return "Reading MimoCode data" }
     if message.contains("未找到 codex") { return "Codex executable not found" }
     if message.contains("app-server 启动失败") { return "Failed to start app-server" }
     if message.contains("app-server 响应超时") { return "app-server response timed out" }
     if message.contains("未找到 Codex state_5.sqlite") { return "Codex state_5.sqlite not found" }
+    if message.contains("未找到 MimoCode mimocode.db") { return "MimoCode mimocode.db not found" }
+    if message.contains("未找到 MimoCode token") { return "MimoCode token events not found" }
     if message.contains("未找到 sqlite3") { return "sqlite3 not found" }
     if message.contains("SQLite 查询失败") { return "SQLite query failed" }
     if message.contains("未找到 Codex session 日志") { return "Codex session logs not found" }
@@ -3041,6 +3593,7 @@ private func jsonObject(_ usage: PricedTokenUsage) -> [String: Any] {
 
 private func dumpJSON(_ snapshot: UsageSnapshot) {
     var object: [String: Any] = [
+        "provider": snapshot.provider.rawValue,
         "refreshedAt": isoString(snapshot.refreshedAt) ?? "",
         "messages": snapshot.messages
     ]
@@ -3386,7 +3939,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct codexUMain {
     static func main() {
         if CommandLine.arguments.contains("--dump-json") {
-            dumpJSON(CodexUsageReader().load())
+            let provider: UsageProvider
+            if let index = CommandLine.arguments.firstIndex(of: "--provider"),
+               CommandLine.arguments.indices.contains(index + 1),
+               let selected = UsageProvider(rawValue: CommandLine.arguments[index + 1]) {
+                provider = selected
+            } else {
+                provider = .stored()
+            }
+            dumpJSON(CodexUsageReader(provider: provider).load())
             return
         }
 
