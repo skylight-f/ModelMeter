@@ -111,6 +111,7 @@ final class StudioWindow: NSWindow {
         title = "Prompt Studio"
         isReleasedWhenClosed = false
         minSize = CGSize(width: 980, height: 640)
+        level = .floating
         center()
     }
 }
@@ -291,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
+        panel.level = .floating
         panel.title = WidgetLanguage.storedOrAutomatic().text("设置", "Settings")
         panel.contentView = GlassHostingContainer(rootView: settingsView, cornerRadius: 18, draggable: false)
         panel.isReleasedWhenClosed = false

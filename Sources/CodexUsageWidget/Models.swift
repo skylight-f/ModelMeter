@@ -524,3 +524,43 @@ struct AgentProfile: Identifiable, Equatable, Codable {
         )
     }
 }
+
+struct ModelConsumptionStat: Identifiable, Equatable {
+    let id = UUID()
+    let model: String
+    let provider: String
+    let totalTokens: Int64
+    let requestCount: Int
+    let avgTokens: Int64
+    let lastUsed: Date
+
+    static func == (lhs: ModelConsumptionStat, rhs: ModelConsumptionStat) -> Bool {
+        lhs.model == rhs.model && lhs.totalTokens == rhs.totalTokens
+    }
+}
+
+struct ModelConsumptionDetail {
+    let lastUsed: Date
+}
+
+struct ProjectActivityStat: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    let path: String
+    let sessionCount: Int
+    let totalTokens: Int64
+
+    static func == (lhs: ProjectActivityStat, rhs: ProjectActivityStat) -> Bool {
+        lhs.name == rhs.name && lhs.totalTokens == rhs.totalTokens
+    }
+}
+
+struct RequestStats {
+    let totalRequests: Int
+    let totalTokens: Int64
+    let avgTokensPerRequest: Int64
+    let uniqueModels: Int
+    let uniqueProjects: Int
+}
+
+

@@ -385,6 +385,12 @@ struct UsageWidgetView: View {
         )
     }
 
+
+
+
+
+
+
     private var usageTrendSection: some View {
         guard let modelBuckets = snapshot.local?.sevenDayModelBuckets, !modelBuckets.isEmpty else {
             return AnyView(EmptyView())
@@ -687,8 +693,9 @@ struct UsageWidgetView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 40)
                 } else {
+                    let maxTokens = filteredModelUsage.map(\.tokens).max() ?? 1
                     ForEach(filteredModelUsage) { item in
-                        ModelUsageRow(item: item, language: language) { selectedItem in
+                        ModelUsageRow(item: item, language: language, maxTokens: maxTokens) { selectedItem in
                             selectedModelDetail = selectedItem
                         }
                         if item.id != filteredModelUsage.last?.id {
@@ -3676,6 +3683,7 @@ struct TokenSplitLegendRow: View {
 struct ModelUsageRow: View {
     let item: ModelUsageItem
     let language: WidgetLanguage
+    let maxTokens: Int64
     var onSelect: ((ModelUsageItem) -> Void)? = nil
 
     private var cacheHitRate: Double {
@@ -3685,15 +3693,15 @@ struct ModelUsageRow: View {
     }
 
     private var providerColor: Color {
-        switch item.provider {
-        case "OpenAI": return .blue
-        case "Anthropic": return .orange
-        case "Google": return .green
-        case "DeepSeek": return .purple
-        case "Alibaba": return .red
-        case "Meta": return .cyan
-        default: return .gray
-        }
+        let model = item.model.lowercased()
+        if model.contains("mimo") { return .orange }
+        if model.contains("gpt") || model.contains("codex") { return .green }
+        if model.contains("claude") { return .purple }
+        if model.contains("qwen") { return .blue }
+        if model.contains("glm") { return .cyan }
+        if model.contains("deepseek") { return .red }
+        if model.contains("gemini") { return .green }
+        return .gray
     }
 
     private var hasPriceData: Bool {
@@ -3722,7 +3730,14 @@ struct ModelUsageRow: View {
                     }
                 }
             }
-            .frame(minWidth: hasPriceData ? 90 : 70, alignment: .leading)
+            .frame(width: 160, alignment: .leading)
+
+            UsageProgressBar(
+                value: item.tokens,
+                maxValue: maxTokens,
+                color: providerColor
+            )
+            .frame(width: 120, height: 4)
 
             Spacer(minLength: 4)
 
@@ -3807,15 +3822,15 @@ struct ModelDetailView: View {
     }
 
     private var providerColor: Color {
-        switch item.provider {
-        case "OpenAI": return .blue
-        case "Anthropic": return .orange
-        case "Google": return .green
-        case "DeepSeek": return .purple
-        case "Alibaba": return .red
-        case "Meta": return .cyan
-        default: return .gray
-        }
+        let model = item.model.lowercased()
+        if model.contains("mimo") { return .orange }
+        if model.contains("gpt") || model.contains("codex") { return .green }
+        if model.contains("claude") { return .purple }
+        if model.contains("qwen") { return .blue }
+        if model.contains("glm") { return .cyan }
+        if model.contains("deepseek") { return .red }
+        if model.contains("gemini") { return .green }
+        return .gray
     }
 
     var body: some View {
@@ -5368,3 +5383,152 @@ struct FlowLayout: Layout {
         return (CGSize(width: maxWidth, height: totalHeight), positions)
     }
 }
+
+struct ModelConsumptionRow: View {
+    let stat: ModelConsumptionStat
+    let maxTokens: Int64
+    let language: WidgetLanguage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(stat.model)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(formatTokens(stat.totalTokens))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                Text("\(stat.requestCount)次")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
+            GeometryReader { geo in
+                let barWidth = maxTokens > 0 ? CGFloat(stat.totalTokens) / CGFloat(maxTokens) : 0
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(WidgetPalette.controlFill(.light))
+                    .frame(width: geo.size.width)
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(modelColor(for: stat.model))
+                            .frame(width: geo.size.width * barWidth)
+                    }
+            }
+            .frame(height: 6)
+        }
+    }
+
+    private func modelColor(for model: String) -> Color {
+        if model.contains("mimo") { return .orange }
+        if model.contains("gpt") { return .green }
+        if model.contains("qwen") { return .blue }
+        if model.contains("glm") { return .purple }
+        if model.contains("deepseek") { return .cyan }
+        return .gray
+    }
+}
+
+struct AnalyticsStatCard: View {
+    let title: String
+    let value: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(color)
+            Text(value)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .monospacedDigit()
+            Text(title)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(WidgetPalette.cardFill(.light))
+        )
+    }
+}
+
+struct ProjectActivityRow: View {
+    let stat: ProjectActivityStat
+    let maxSessions: Int
+    let language: WidgetLanguage
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(stat.name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text("\(stat.sessionCount)\(language.text(" 会话", " sessions"))")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    if stat.totalTokens > 0 {
+                        Text(formatTokens(stat.totalTokens))
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            Spacer(minLength: 8)
+            GeometryReader { geo in
+                let barWidth = maxSessions > 0 ? CGFloat(stat.sessionCount) / CGFloat(maxSessions) : 0
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(WidgetPalette.controlFill(.light))
+                    .frame(width: geo.size.width)
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(WidgetPalette.brandPrimary)
+                            .frame(width: geo.size.width * barWidth)
+                    }
+            }
+            .frame(width: 80, height: 6)
+        }
+    }
+}
+
+struct RequestStatLabel: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct UsageProgressBar: View {
+    let value: Int64
+    let maxValue: Int64
+    let color: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            let ratio = maxValue > 0 ? CGFloat(value) / CGFloat(maxValue) : 0
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.gray.opacity(0.15))
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(color)
+                    .frame(width: geo.size.width * min(ratio, 1))
+            }
+        }
+        .frame(height: 4)
+    }
+}
+
+

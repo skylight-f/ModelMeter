@@ -114,6 +114,11 @@ final class UsageStore: ObservableObject {
     @Published var selectedDiscoveredProvider: DiscoveredProvider?
     @Published var discoveryNotice: String?
 
+    @Published var modelConsumptions: [ModelConsumptionStat] = []
+    @Published var modelConsumptionDetails: [String: ModelConsumptionDetail] = [:]
+    @Published var projectActivities: [ProjectActivityStat] = []
+    @Published var requestStats: RequestStats = RequestStats(totalRequests: 0, totalTokens: 0, avgTokensPerRequest: 0, uniqueModels: 0, uniqueProjects: 0)
+
     private static let agentProfilesStorageKey = "AgentDesk.agentProfiles"
     private static let exportPathsStorageKey = "AgentDesk.exportPaths"
     private var fullTimer: Timer?
@@ -147,6 +152,7 @@ final class UsageStore: ObservableObject {
         if newProvider != provider {
             provider = newProvider
             refresh()
+            refreshAnalytics()
         }
     }
 
@@ -213,8 +219,10 @@ final class UsageStore: ObservableObject {
 
     func start() {
         refresh()
+        refreshAnalytics(period: .today)
         fullTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             self?.refresh()
+            self?.refreshAnalytics(period: .today)
         }
         taskBoardTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             self?.refreshTaskBoard()
@@ -285,10 +293,251 @@ final class UsageStore: ObservableObject {
 
         syncRefreshingState()
         refresh()
+        refreshAnalytics()
 
         // 同步更新 discoveredProviders 选择器
         if let discovered = discoveredProviders.first(where: { $0.id == provider.rawValue }) {
             selectedDiscoveredProvider = discovered
+        }
+    }
+
+    func refreshAnalytics(period: ModelUsagePeriod = .today) {
+        let currentProvider = provider
+        DispatchQueue.global(qos: .utility).async {
+            let (consumptions, details) = Self.fetchModelConsumptions(provider: currentProvider, period: period)
+            let requestStats = Self.fetchRequestStats(provider: currentProvider)
+
+            DispatchQueue.main.async {
+                self.modelConsumptions = consumptions
+                self.modelConsumptionDetails = details
+                self.requestStats = requestStats
+            }
+        }
+    }
+
+    private static func fetchModelConsumptions(provider: UsageProvider, period: ModelUsagePeriod) -> ([ModelConsumptionStat], [String: ModelConsumptionDetail]) {
+        var results: [String: (tokens: Int64, requests: Int, provider: String, lastUsed: Date)] = [:]
+        let now = Date()
+        let calendar = Calendar.current
+
+        let timeFilter: String
+        switch period {
+        case .today:
+            let dayStart = Int(calendar.startOfDay(for: now).timeIntervalSince1970)
+            timeFilter = "AND updated_at >= \(dayStart)"
+        case .twentyFourHour:
+            let cutoff = Int(now.addingTimeInterval(-24 * 60 * 60).timeIntervalSince1970)
+            timeFilter = "AND updated_at >= \(cutoff)"
+        case .sevenDay:
+            let cutoff = Int(now.addingTimeInterval(-7 * 24 * 60 * 60).timeIntervalSince1970)
+            timeFilter = "AND updated_at >= \(cutoff)"
+        case .thirtyDay:
+            let cutoff = Int(now.addingTimeInterval(-30 * 24 * 60 * 60).timeIntervalSince1970)
+            timeFilter = "AND updated_at >= \(cutoff)"
+        case .lifetime:
+            timeFilter = ""
+        }
+
+        if provider == .codex, let sqlitePath = sqlitePath(), let codexDb = codexDbPath() {
+            let query = """
+            SELECT model, SUM(tokens_used) as total, COUNT(*) as cnt, MAX(updated_at) as last_used
+            FROM threads WHERE archived = 0 AND model IS NOT NULL AND tokens_used > 0 \(timeFilter)
+            GROUP BY model ORDER BY total DESC
+            """
+            for row in runSQLite(sqlitePath: sqlitePath, dbPath: codexDb, query: query) {
+                let model = row["model"] ?? "unknown"
+                let tokens = int64Value(row["total"]) ?? 0
+                let count = int64Value(row["cnt"]) ?? 0
+                let lastUsedTs = doubleValue(row["last_used"]) ?? 0
+                let lastUsed = Date(timeIntervalSince1970: lastUsedTs)
+                results[model] = (tokens: tokens, requests: Int(count), provider: "Codex", lastUsed: lastUsed)
+            }
+        }
+
+        if provider == .mimocode, let sqlitePath = sqlitePath(), let mimoDb = mimoDbPath() {
+            let mimoTimeFilter: String
+            switch period {
+            case .today:
+                let dayStartMs = Int(calendar.startOfDay(for: now).timeIntervalSince1970 * 1000)
+                mimoTimeFilter = "AND m.time_created >= \(dayStartMs)"
+            case .twentyFourHour:
+                let cutoffMs = Int(now.addingTimeInterval(-24 * 60 * 60).timeIntervalSince1970 * 1000)
+                mimoTimeFilter = "AND m.time_created >= \(cutoffMs)"
+            case .sevenDay:
+                let cutoffMs = Int(now.addingTimeInterval(-7 * 24 * 60 * 60).timeIntervalSince1970 * 1000)
+                mimoTimeFilter = "AND m.time_created >= \(cutoffMs)"
+            case .thirtyDay:
+                let cutoffMs = Int(now.addingTimeInterval(-30 * 24 * 60 * 60).timeIntervalSince1970 * 1000)
+                mimoTimeFilter = "AND m.time_created >= \(cutoffMs)"
+            case .lifetime:
+                mimoTimeFilter = ""
+            }
+            let query = """
+            SELECT json_extract(m.data, '$.modelID') as model,
+                   SUM(json_extract(m.data, '$.tokens.total')) as total,
+                   COUNT(*) as cnt,
+                   MAX(m.time_created/1000) as last_used
+            FROM message m
+            WHERE json_extract(m.data, '$.tokens.total') IS NOT NULL \(mimoTimeFilter)
+            GROUP BY model ORDER BY total DESC
+            """
+            for row in runSQLite(sqlitePath: sqlitePath, dbPath: mimoDb, query: query) {
+                let model = row["model"] ?? "unknown"
+                let tokens = int64Value(row["total"]) ?? 0
+                let count = int64Value(row["cnt"]) ?? 0
+                let lastUsedTs = doubleValue(row["last_used"]) ?? 0
+                let lastUsed = Date(timeIntervalSince1970: lastUsedTs)
+                results[model] = (tokens: tokens, requests: Int(count), provider: "MimoCode", lastUsed: lastUsed)
+            }
+        }
+
+        var details: [String: ModelConsumptionDetail] = [:]
+        let stats = results.map { key, value in
+            details[key] = ModelConsumptionDetail(lastUsed: value.lastUsed)
+            return ModelConsumptionStat(
+                model: key,
+                provider: value.provider,
+                totalTokens: value.tokens,
+                requestCount: value.requests,
+                avgTokens: value.requests > 0 ? value.tokens / Int64(value.requests) : 0,
+                lastUsed: value.lastUsed
+            )
+        }
+        .sorted { $0.totalTokens > $1.totalTokens }
+
+        return (stats, details)
+    }
+
+    private static func fetchProjectActivities(provider: UsageProvider) -> [ProjectActivityStat] {
+        var results: [String: (sessions: Int, tokens: Int64)] = [:]
+
+        if provider == .codex, let sqlitePath = sqlitePath(), let codexDb = codexDbPath() {
+            let query = """
+            SELECT cwd, COUNT(*) as sessions, SUM(tokens_used) as tokens
+            FROM threads WHERE archived = 0 AND tokens_used > 0
+            GROUP BY cwd ORDER BY tokens DESC LIMIT 8
+            """
+            for row in runSQLite(sqlitePath: sqlitePath, dbPath: codexDb, query: query) {
+                let path = row["cwd"] ?? "unknown"
+                let name = URL(fileURLWithPath: path).lastPathComponent
+                let sessions = Int(int64Value(row["sessions"]) ?? 0)
+                let tokens = int64Value(row["tokens"]) ?? 0
+                let existing = results[name]
+                results[name] = (
+                    sessions: (existing?.sessions ?? 0) + sessions,
+                    tokens: (existing?.tokens ?? 0) + tokens
+                )
+            }
+        }
+
+        if provider == .mimocode, let sqlitePath = sqlitePath(), let mimoDb = mimoDbPath() {
+            let query = """
+            SELECT p.worktree, COUNT(DISTINCT s.id) as sessions
+            FROM session s
+            JOIN project p ON s.project_id = p.id
+            WHERE p.worktree IS NOT NULL AND p.worktree != '' AND p.worktree != '/'
+            GROUP BY p.worktree ORDER BY sessions DESC LIMIT 8
+            """
+            for row in runSQLite(sqlitePath: sqlitePath, dbPath: mimoDb, query: query) {
+                let path = row["worktree"] ?? "unknown"
+                let name = URL(fileURLWithPath: path).lastPathComponent
+                guard !name.isEmpty && name != "/" else { continue }
+                let sessions = Int(int64Value(row["sessions"]) ?? 0)
+                let existing = results[name]
+                results[name] = (
+                    sessions: (existing?.sessions ?? 0) + sessions,
+                    tokens: existing?.tokens ?? 0
+                )
+            }
+        }
+
+        return results.map { key, value in
+            ProjectActivityStat(name: key, path: key, sessionCount: value.sessions, totalTokens: value.tokens)
+        }
+        .sorted { $0.sessionCount > $1.sessionCount }
+    }
+
+    private static func fetchRequestStats(provider: UsageProvider) -> RequestStats {
+        var totalRequests = 0
+        var totalTokens: Int64 = 0
+        var models = Set<String>()
+        var projects = Set<String>()
+
+        if provider == .codex, let sqlitePath = sqlitePath(), let codexDb = codexDbPath() {
+            let query = "SELECT COUNT(*) as cnt, SUM(tokens_used) as total, model, cwd FROM threads WHERE archived = 0"
+            for row in runSQLite(sqlitePath: sqlitePath, dbPath: codexDb, query: query) {
+                totalRequests += 1
+                totalTokens += int64Value(row["total"]) ?? 0
+                if let m = row["model"], !m.isEmpty { models.insert(m) }
+                if let p = row["cwd"], !p.isEmpty { projects.insert(p) }
+            }
+        }
+
+        if provider == .mimocode, let sqlitePath = sqlitePath(), let mimoDb = mimoDbPath() {
+            let query = """
+            SELECT COUNT(*) as cnt,
+                   SUM(json_extract(data, '$.tokens.total')) as total,
+                   json_extract(data, '$.modelID') as model
+            FROM message WHERE json_extract(data, '$.tokens.total') IS NOT NULL
+            """
+            for row in runSQLite(sqlitePath: sqlitePath, dbPath: mimoDb, query: query) {
+                totalRequests += Int(int64Value(row["cnt"]) ?? 0)
+                totalTokens += int64Value(row["total"]) ?? 0
+                if let m = row["model"], !m.isEmpty { models.insert(m) }
+            }
+        }
+
+        return RequestStats(
+            totalRequests: totalRequests,
+            totalTokens: totalTokens,
+            avgTokensPerRequest: totalRequests > 0 ? totalTokens / Int64(totalRequests) : 0,
+            uniqueModels: models.count,
+            uniqueProjects: projects.count
+        )
+    }
+
+    private static func sqlitePath() -> String? {
+        let fm = FileManager.default
+        for path in ["/usr/bin/sqlite3", "/opt/homebrew/bin/sqlite3"] {
+            if fm.isExecutableFile(atPath: path) { return path }
+        }
+        return nil
+    }
+
+    private static func codexDbPath() -> String? {
+        let path = NSHomeDirectory() + "/.codex/state_5.sqlite"
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
+    private static func mimoDbPath() -> String? {
+        let path = NSHomeDirectory() + "/.local/share/mimocode/mimocode.db"
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
+    private static func runSQLite(sqlitePath: String, dbPath: String, query: String) -> [[String: String]] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: sqlitePath)
+        process.arguments = ["-readonly", "-json", dbPath, query]
+
+        let output = Pipe()
+        let error = Pipe()
+        process.standardOutput = output
+        process.standardError = error
+
+        do { try process.run() } catch { return [] }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [] }
+
+        return json.map { dict in
+            dict.compactMapValues { value in
+                if let s = value as? String { return s }
+                if let n = value as? NSNumber { return n.stringValue }
+                return nil
+            }
         }
     }
 
