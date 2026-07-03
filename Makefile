@@ -1,5 +1,5 @@
-APP_NAME := ModelMeter
-DISPLAY_NAME := ModelMeter
+APP_NAME := AgentDesk
+DISPLAY_NAME := AgentDesk
 VERSION := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist 2>/dev/null || echo 0.1.0)
 BUILD_DIR := build
 DIST_DIR := dist
@@ -7,7 +7,7 @@ APP_DIR := $(BUILD_DIR)/$(APP_NAME).app
 MACOS_DIR := $(APP_DIR)/Contents/MacOS
 RESOURCES_DIR := $(APP_DIR)/Contents/Resources
 SOURCES := $(wildcard Sources/CodexUsageWidget/*.swift)
-APP_ICON := Resources/ModelMeter.icns
+APP_ICON := Resources/AgentDesk.icns
 DEPLOYMENT_TARGET ?= 14.0
 HOST_ARCH := $(shell uname -m)
 APPLE_SILICON_TARGET_TRIPLE ?= arm64-apple-macos$(DEPLOYMENT_TARGET)
@@ -35,6 +35,7 @@ build:
 	cp "$(APP_ICON)" "$(RESOURCES_DIR)/"
 	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SOURCES) \
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
+		-lsqlite3 \
 		-framework Cocoa \
 		-framework Carbon \
 		-framework SwiftUI

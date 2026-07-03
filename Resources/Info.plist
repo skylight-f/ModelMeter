@@ -5,17 +5,17 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleExecutable</key>
-	<string>ModelMeter</string>
+	<string>AgentDesk</string>
 	<key>CFBundleDisplayName</key>
-	<string>ModelMeter</string>
+	<string>AgentDesk</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.guomeiqing.codexu</string>
+	<string>com.skylightf.agentdesk</string>
 	<key>CFBundleIconFile</key>
-	<string>ModelMeter</string>
+	<string>AgentDesk</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>ModelMeter</string>
+	<string>AgentDesk</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSApplicationCategoryType</key>

@@ -1,10 +1,10 @@
-# ModelMeter
+# AgentDesk
 
 [中文](README.md)
 
-ModelMeter is a macOS desktop widget for monitoring token usage, costs, and task status across multiple AI coding tools. Supports Codex, MimoCode, and more with automatic data source discovery and real-time usage analysis.
+AgentDesk is a macOS desktop widget for monitoring token usage, costs, and task status across multiple AI coding tools. Supports Codex, MimoCode, and more with automatic data source discovery and real-time usage analysis.
 
-![ModelMeter desktop widget screenshot](docs/screenshot-0.3.0.png)
+![AgentDesk desktop widget screenshot](docs/screenshot-0.3.0.png)
 
 ## Who Is This For
 
@@ -81,7 +81,7 @@ Average output speed calculated from database (tokens/second):
 - Top `中 | EN`: Switch Chinese/English interface
 - Top-right refresh button: Refresh all data immediately
 - Top-right toggle button: Switch front/desktop layer
-- Top-right close button: Quit ModelMeter
+- Top-right close button: Quit AgentDesk
 - Drag widget background: Move widget position
 - Click model row: View detailed statistics for that model
 
@@ -89,24 +89,24 @@ Average output speed calculated from database (tokens/second):
 
 ### Download from GitHub Release
 
-- Apple Silicon: `ModelMeter-<version>-mac-arm64.dmg`
-- Intel: `ModelMeter-<version>-mac-x86_64.dmg`
+- Apple Silicon: `AgentDesk-<version>-mac-arm64.dmg`
+- Intel: `AgentDesk-<version>-mac-x86_64.dmg`
 
 1. Open the DMG
-2. Drag `ModelMeter.app` to the `Applications` folder
-3. Open ModelMeter from `Applications`
+2. Drag `AgentDesk.app` to the `Applications` folder
+3. Open AgentDesk from `Applications`
 4. Follow the **First Install: Privacy & Security** steps below
 
 ### First Install: Privacy & Security
 
-ModelMeter is distributed via GitHub Release DMG packages, not through the Mac App Store. On first launch, macOS may block it and require manual approval:
+AgentDesk is distributed via GitHub Release DMG packages, not through the Mac App Store. On first launch, macOS may block it and require manual approval:
 
-1. Open `ModelMeter.app` once. If the system says it can't be opened, cancel the dialog
+1. Open `AgentDesk.app` once. If the system says it can't be opened, cancel the dialog
 2. Open **System Settings > Privacy & Security**
-3. In the **Security** section, find `ModelMeter.app` and click **Open Anyway**
+3. In the **Security** section, find `AgentDesk.app` and click **Open Anyway**
 4. Confirm with Touch ID or password, then click **Open**
 
-You can also right-click `ModelMeter.app` in Finder, choose **Open**, and confirm the security prompt.
+You can also right-click `AgentDesk.app` in Finder, choose **Open**, and confirm the security prompt.
 
 ## Requirements
 
@@ -156,10 +156,10 @@ make release-all
 Output goes to `dist/`, for example:
 
 ```text
-dist/ModelMeter-0.3.0-mac-arm64.dmg
-dist/ModelMeter-0.3.0-mac-arm64.dmg.sha256
-dist/ModelMeter-0.3.0-mac-x86_64.dmg
-dist/ModelMeter-0.3.0-mac-x86_64.dmg.sha256
+dist/AgentDesk-0.3.0-mac-arm64.dmg
+dist/AgentDesk-0.3.0-mac-arm64.dmg.sha256
+dist/AgentDesk-0.3.0-mac-x86_64.dmg
+dist/AgentDesk-0.3.0-mac-x86_64.dmg.sha256
 ```
 
 Developer ID signing and Apple notarization workflow: see [DISTRIBUTION.md](DISTRIBUTION.md).
@@ -196,13 +196,13 @@ Sources/CodexUsageWidget/
 
 ## FAQ
 
-### Is ModelMeter an official OpenAI product?
+### Is AgentDesk an official OpenAI product?
 
-No. ModelMeter is an unofficial local macOS utility for reading local data from multiple AI coding tools.
+No. AgentDesk is an unofficial local macOS utility for reading local data from multiple AI coding tools.
 
-### Does ModelMeter upload my data?
+### Does AgentDesk upload my data?
 
-No. ModelMeter reads data locally only. It does not upload any usage, thread, or account data to third-party services.
+No. AgentDesk reads data locally only. It does not upload any usage, thread, or account data to third-party services.
 
 ### Which AI coding tools are supported?
 
@@ -215,11 +215,11 @@ Currently supported:
 
 ### Why do some models show $0.00 cost?
 
-This is because the pricing information for that model hasn't been added yet. ModelMeter shows estimated costs, and models with actual pricing will display accurate amounts.
+This is because the pricing information for that model hasn't been added yet. AgentDesk shows estimated costs, and models with actual pricing will display accurate amounts.
 
 ### Does it support Intel Macs?
 
-Yes. Intel Macs should download `ModelMeter-<version>-mac-x86_64.dmg`. Build from source with `make release-intel`.
+Yes. Intel Macs should download `AgentDesk-<version>-mac-x86_64.dmg`. Build from source with `make release-intel`.
 
 ## License
 

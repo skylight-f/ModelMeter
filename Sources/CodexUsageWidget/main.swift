@@ -89,13 +89,35 @@ final class DesktopWidgetWindow: NSPanel {
     }
 }
 
+final class StudioWindow: NSWindow {
+    init(contentRect: NSRect) {
+        super.init(
+            contentRect: contentRect,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        title = "Prompt Studio"
+        isReleasedWhenClosed = false
+        minSize = CGSize(width: 980, height: 640)
+        center()
+    }
+}
+
 // MARK: - AppDelegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: AppDelegate?
+    private enum WindowStorageKey {
+        static let studioFrame = "AgentDesk.windowFrame.studio"
+        static let settingsFrame = "AgentDesk.windowFrame.settings"
+    }
     private let store = UsageStore()
     private var window: DesktopWidgetWindow?
+    private var studioWindow: StudioWindow?
+    private var settingsWindow: NSWindow?
     private var statusItem: NSStatusItem?
+    private var statusMenu: NSMenu?
     private var globalHotKeyRef: EventHotKeyRef?
     private var globalHotKeyHandler: EventHandlerRef?
     private var isFrontMode = false
@@ -145,8 +167,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    @objc private func statusItemClicked() {
+    @objc private func statusItemButtonPressed() {
+        guard let event = NSApp.currentEvent else {
+            toggleWindowLayer()
+            return
+        }
+
+        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            if let statusMenu {
+                statusItem?.menu = statusMenu
+                statusItem?.button?.performClick(nil)
+                statusItem?.menu = nil
+            }
+            return
+        }
+
         toggleWindowLayer()
+    }
+
+    func openPromptStudio() {
+        WidgetThemeMode.storedOrAutomatic().applyAppearance()
+
+        if studioWindow == nil {
+            let studio = StudioWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 760))
+            studio.delegate = self
+            studio.identifier = NSUserInterfaceItemIdentifier("AgentDeskPromptStudioWindow")
+            if !restoreFrame(for: studio, storageKey: WindowStorageKey.studioFrame) {
+                studio.center()
+            }
+            let hostingController = NSHostingController(rootView: PromptStudioView(store: store))
+            studio.contentViewController = hostingController
+            studioWindow = studio
+        }
+
+        studioWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func refreshStatusItemLocalization() {
+        statusMenu = makeStatusMenu()
+        let language = WidgetLanguage.storedOrAutomatic()
+        statusItem?.button?.toolTip = language.text(
+            "AgentDesk：左键切换前台/桌面层，右键打开菜单，快捷键 ⌘U",
+            "AgentDesk: left click toggles front/desktop layer, right click opens the menu, shortcut ⌘U"
+        )
+        settingsWindow?.title = language.text("设置", "Settings")
     }
 
     private func setupStatusItem() {
@@ -154,15 +219,116 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = item
 
         guard let button = item.button else { return }
-        if let image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "ModelMeter") {
+        if let image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "AgentDesk") {
             image.isTemplate = true
             button.image = image
         } else {
             button.title = "C"
         }
-        button.toolTip = "ModelMeter：点击切换前台/桌面层，快捷键 ⌘U"
         button.target = self
-        button.action = #selector(statusItemClicked)
+        button.action = #selector(statusItemButtonPressed)
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        refreshStatusItemLocalization()
+    }
+
+    private func makeStatusMenu() -> NSMenu {
+        let language = WidgetLanguage.storedOrAutomatic()
+        let menu = NSMenu()
+        menu.addItem(withTitle: language.text("打开 Prompt Studio", "Open Prompt Studio"), action: #selector(openPromptStudioFromMenu), keyEquivalent: "")
+        menu.addItem(withTitle: language.text("切换前台/桌面层", "Toggle Front/Desktop Layer"), action: #selector(toggleWindowLayerFromMenu), keyEquivalent: "")
+        menu.addItem(withTitle: language.text("刷新数据", "Refresh Data"), action: #selector(refreshDataFromMenu), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: language.text("设置", "Settings"), action: #selector(openSettingsFromMenu), keyEquivalent: ",")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: language.text("退出 AgentDesk", "Quit AgentDesk"), action: #selector(quitFromMenu), keyEquivalent: "q")
+        menu.items.forEach { $0.target = self }
+        return menu
+    }
+
+    @objc private func openPromptStudioFromMenu() {
+        openPromptStudio()
+    }
+
+    @objc private func toggleWindowLayerFromMenu() {
+        toggleWindowLayer()
+    }
+
+    @objc private func refreshDataFromMenu() {
+        store.refresh()
+    }
+
+    @objc private func openSettingsFromMenu() {
+        openSettings()
+    }
+
+    func openSettings() {
+        WidgetThemeMode.storedOrAutomatic().applyAppearance()
+
+        if settingsWindow == nil {
+            let settingsView = SettingsView(
+                store: store,
+                languageChanged: { [weak self] in
+                    self?.refreshStatusItemLocalization()
+                },
+                themeChanged: { [weak self] in
+                    self?.settingsWindow?.title = WidgetLanguage.storedOrAutomatic().text("设置", "Settings")
+                }
+            )
+            let panel = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 460),
+                styleMask: [.titled, .closable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            panel.title = WidgetLanguage.storedOrAutomatic().text("设置", "Settings")
+            panel.contentView = GlassHostingContainer(rootView: settingsView, cornerRadius: 18)
+            panel.isReleasedWhenClosed = false
+            panel.minSize = CGSize(width: 600, height: 440)
+            panel.delegate = self
+            panel.identifier = NSUserInterfaceItemIdentifier("AgentDeskSettingsWindow")
+            if !restoreFrame(for: panel, storageKey: WindowStorageKey.settingsFrame) {
+                panel.center()
+            }
+            settingsWindow = panel
+        }
+
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func quitFromMenu() {
+        NSApp.terminate(nil)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        persistWindowFrame(from: notification)
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        persistWindowFrame(from: notification)
+    }
+
+    private func persistWindowFrame(from notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        let storageKey: String?
+        switch window.identifier?.rawValue {
+        case "AgentDeskPromptStudioWindow":
+            storageKey = WindowStorageKey.studioFrame
+        case "AgentDeskSettingsWindow":
+            storageKey = WindowStorageKey.settingsFrame
+        default:
+            storageKey = nil
+        }
+        guard let storageKey else { return }
+        AgentDeskDatabase.shared.set(NSStringFromRect(window.frame), forKey: storageKey)
+    }
+
+    private func restoreFrame(for window: NSWindow, storageKey: String) -> Bool {
+        guard let frameString = AgentDeskDatabase.shared.string(forKey: storageKey) else { return false }
+        let rect = NSRectFromString(frameString)
+        guard rect.width > 0, rect.height > 0 else { return false }
+        window.setFrame(rect, display: false)
+        return true
     }
 
     private func registerGlobalHotKey() {
@@ -223,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 // MARK: - Entry Point
 
 @main
-struct ModelMeterMain {
+struct AgentDeskMain {
     static func main() {
         if CommandLine.arguments.contains("--dump-json") {
             let provider: UsageProvider

@@ -5,7 +5,7 @@ import Cocoa
 import Carbon.HIToolbox
 import SwiftUI
 
-struct RateWindow: Equatable {
+struct RateWindow: Equatable, Codable {
     let usedPercent: Double
     let windowDurationMins: Int?
     let resetsAt: Date?
@@ -15,20 +15,20 @@ struct RateWindow: Equatable {
     }
 }
 
-struct CreditsInfo: Equatable {
+struct CreditsInfo: Equatable, Codable {
     let hasCredits: Bool
     let unlimited: Bool
     let balance: String?
     let resetCredits: Int?
 }
 
-struct AccountInfo: Equatable {
+struct AccountInfo: Equatable, Codable {
     let type: String
     let planType: String?
     let emailPresent: Bool
 }
 
-struct LocalThread: Identifiable, Equatable {
+struct LocalThread: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let tokens: Int64
@@ -38,13 +38,13 @@ struct LocalThread: Identifiable, Equatable {
     let archived: Bool
 }
 
-struct DailyTokenBucket: Identifiable, Equatable {
+struct DailyTokenBucket: Identifiable, Equatable, Codable {
     let id: String
     let label: String
     let tokens: Int64
 }
 
-struct TokenBreakdown: Equatable {
+struct TokenBreakdown: Equatable, Codable {
     var inputTokens: Int64
     var cachedInputTokens: Int64
     var outputTokens: Int64
@@ -110,7 +110,7 @@ struct TokenBreakdown: Equatable {
     }
 }
 
-struct PricedTokenUsage: Equatable {
+struct PricedTokenUsage: Equatable, Codable {
     var tokens: TokenBreakdown
     var estimatedCostUSD: Double
 
@@ -122,8 +122,9 @@ struct PricedTokenUsage: Equatable {
     }
 }
 
-struct DetailedUsage: Equatable {
+struct DetailedUsage: Equatable, Codable {
     let today: PricedTokenUsage
+    let thirtyDay: PricedTokenUsage
     let sevenDay: PricedTokenUsage
     let month: PricedTokenUsage
     let lifetime: PricedTokenUsage
@@ -131,7 +132,7 @@ struct DetailedUsage: Equatable {
     let tokenEventCount: Int
 }
 
-struct ModelUsageItem: Identifiable, Equatable {
+struct ModelUsageItem: Identifiable, Equatable, Codable {
     let model: String
     let provider: String
     let tokens: Int64
@@ -174,6 +175,16 @@ func modelProvider(from model: String) -> String {
         return "DeepSeek"
     }
 
+    // MimoCode
+    if lower.hasPrefix("mimo") || lower.contains("mimocode") {
+        return "MimoCode"
+    }
+
+    // Zhipu
+    if lower.hasPrefix("glm") || lower.contains("zhipu") {
+        return "Zhipu AI"
+    }
+
     // Alibaba
     if lower.hasPrefix("qwen") || lower.contains("qwen") {
         return "Alibaba"
@@ -209,20 +220,29 @@ func modelProvider(from model: String) -> String {
         return "Moonshot"
     }
 
+    // MiniMax
+    if lower.hasPrefix("minimax") || lower.contains("minimax") {
+        return "MiniMax"
+    }
+
     // 检查是否包含已知提供商关键词
     if lower.contains("openai") { return "OpenAI" }
     if lower.contains("anthropic") { return "Anthropic" }
     if lower.contains("google") { return "Google" }
     if lower.contains("deepseek") { return "DeepSeek" }
+    if lower.contains("mimo") || lower.contains("mimocode") { return "MimoCode" }
+    if lower.contains("zhipu") || lower.contains("glm") { return "Zhipu AI" }
     if lower.contains("alibaba") || lower.contains("tongyi") { return "Alibaba" }
     if lower.contains("meta") || lower.contains("facebook") { return "Meta" }
+    if lower.contains("minimax") { return "MiniMax" }
 
     return "AI"
 }
 
-struct LocalUsage: Equatable {
+struct LocalUsage: Equatable, Codable {
     let lifetimeTokens: Int64
     let todayTokens: Int64
+    let thirtyDayTokens: Int64
     let sevenDayTokens: Int64
     let threadCount: Int
     let lastUpdatedAt: Date?
@@ -230,20 +250,26 @@ struct LocalUsage: Equatable {
     let sevenDayModelBuckets: [String: [DailyTokenBucket]]
     let recentThreads: [LocalThread]
     let todayModelUsage: [ModelUsageItem]
+    let twentyFourHourModelUsage: [ModelUsageItem]
     let sevenDayModelUsage: [ModelUsageItem]
+    let thirtyDayModelUsage: [ModelUsageItem]
     let lifetimeModelUsage: [ModelUsageItem]
     let detailedUsage: DetailedUsage?
 }
 
-enum ModelUsagePeriod: String, CaseIterable {
+enum ModelUsagePeriod: String, CaseIterable, Codable {
+    case twentyFourHour
     case today
     case sevenDay
+    case thirtyDay
     case lifetime
 
     var labelZh: String {
         switch self {
         case .today: return "今日"
-        case .sevenDay: return "近七天"
+        case .twentyFourHour: return "24小时"
+        case .sevenDay: return "7天"
+        case .thirtyDay: return "30天"
         case .lifetime: return "累计"
         }
     }
@@ -251,20 +277,22 @@ enum ModelUsagePeriod: String, CaseIterable {
     var labelEn: String {
         switch self {
         case .today: return "Today"
-        case .sevenDay: return "7 Days"
+        case .twentyFourHour: return "24h"
+        case .sevenDay: return "7d"
+        case .thirtyDay: return "30 Days"
         case .lifetime: return "All"
         }
     }
 }
 
-enum TaskColumnKind: String, Equatable {
+enum TaskColumnKind: String, Equatable, Codable {
     case active
     case pending
     case scheduled
     case done
 }
 
-struct TaskItem: Identifiable, Equatable {
+struct TaskItem: Identifiable, Equatable, Codable {
     let id: String
     let code: String
     let title: String
@@ -275,14 +303,14 @@ struct TaskItem: Identifiable, Equatable {
     let kind: TaskColumnKind
 }
 
-struct TaskColumn: Identifiable, Equatable {
+struct TaskColumn: Identifiable, Equatable, Codable {
     let id: TaskColumnKind
     let title: String
     let count: Int
     let items: [TaskItem]
 }
 
-struct TaskBoard: Equatable {
+struct TaskBoard: Equatable, Codable {
     let refreshedAt: Date
     let columns: [TaskColumn]
 
@@ -291,7 +319,7 @@ struct TaskBoard: Equatable {
     }
 }
 
-struct UsageSnapshot: Equatable {
+struct UsageSnapshot: Equatable, Codable {
     let provider: UsageProvider
     let refreshedAt: Date
     let account: AccountInfo?
@@ -340,6 +368,16 @@ struct UsageSnapshot: Equatable {
             messages: messages
         )
     }
+
+    var hasPersistableContent: Bool {
+        account != nil
+            || primary != nil
+            || secondary != nil
+            || credits != nil
+            || cloudLifetimeTokens != nil
+            || local != nil
+            || taskBoard != nil
+    }
 }
 
 struct DiscoveredProvider: Identifiable, Equatable {
@@ -364,11 +402,11 @@ enum ProviderType {
     case generic
 }
 
-enum UsageProvider: String, CaseIterable, Equatable {
+enum UsageProvider: String, CaseIterable, Equatable, Codable {
     case codex
     case mimocode
 
-    static let storageKey = "ModelMeter.usageProvider"
+    static let storageKey = "AgentDesk.usageProvider"
 
     var displayName: String {
         switch self {
@@ -388,15 +426,15 @@ enum UsageProvider: String, CaseIterable, Equatable {
         }
     }
 
-    static func stored(defaults: UserDefaults = .standard) -> UsageProvider {
-        guard let rawValue = defaults.string(forKey: storageKey),
+    static func stored() -> UsageProvider {
+        guard let rawValue = AgentDeskDatabase.shared.string(forKey: storageKey),
               let provider = UsageProvider(rawValue: rawValue)
         else { return .codex }
         return provider
     }
 
-    func persist(defaults: UserDefaults = .standard) {
-        defaults.set(rawValue, forKey: Self.storageKey)
+    func persist() {
+        AgentDeskDatabase.shared.set(rawValue, forKey: Self.storageKey)
     }
 }
 
@@ -406,4 +444,65 @@ struct DiagnosticItem: Identifiable {
     let detail: String
     let systemName: String
     let tint: Color
+}
+
+enum PromptAssetKind: String, CaseIterable, Equatable {
+    case skill
+    case prompt
+    case config
+}
+
+enum PromptAssetSource: String, CaseIterable, Equatable {
+    case codexSystem
+    case codexUser
+    case agents
+    case workspace
+}
+
+struct PromptAsset: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let kind: PromptAssetKind
+    let source: PromptAssetSource
+    let path: String
+    let summary: String
+    let content: String
+    let modifiedAt: Date?
+    let tags: [String]
+}
+
+struct PromptRegistry: Equatable {
+    let refreshedAt: Date
+    let assets: [PromptAsset]
+
+    static let empty = PromptRegistry(refreshedAt: Date(), assets: [])
+}
+
+enum AgentTargetTool: String, CaseIterable, Equatable, Codable {
+    case codex
+    case mimocode
+}
+
+struct AgentProfile: Identifiable, Equatable, Codable {
+    let id: String
+    var name: String
+    var summary: String
+    var persona: String
+    var workingStyle: String
+    var constraints: String
+    var selectedAssetIDs: [String]
+    var updatedAt: Date
+
+    static func starter(name: String = "Shared Builder") -> AgentProfile {
+        AgentProfile(
+            id: UUID().uuidString,
+            name: name,
+            summary: "Shared agent profile for multi-tool collaboration.",
+            persona: "",
+            workingStyle: "",
+            constraints: "",
+            selectedAssetIDs: [],
+            updatedAt: Date()
+        )
+    }
 }

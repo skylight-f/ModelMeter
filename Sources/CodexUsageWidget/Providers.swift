@@ -9,9 +9,30 @@ struct ModelTokenPrice {
     let outputPerMillion: Double
     let currency: Currency
 
-    enum Currency: String {
+    enum Currency: String, CaseIterable, Codable {
         case usd = "$"
         case cny = "¥"
+    }
+
+    var asDict: [String: Any] {
+        [
+            "model": model,
+            "inputPerMillion": inputPerMillion,
+            "cachedInputPerMillion": cachedInputPerMillion,
+            "outputPerMillion": outputPerMillion,
+            "currency": currency.rawValue
+        ]
+    }
+
+    static func fromDict(_ dict: [String: Any]) -> ModelTokenPrice? {
+        guard let model = dict["model"] as? String,
+              let input = dict["inputPerMillion"] as? Double,
+              let cached = dict["cachedInputPerMillion"] as? Double,
+              let output = dict["outputPerMillion"] as? Double,
+              let cur = dict["currency"] as? String,
+              let currency = Currency(rawValue: cur)
+        else { return nil }
+        return ModelTokenPrice(model: model, inputPerMillion: input, cachedInputPerMillion: cached, outputPerMillion: output, currency: currency)
     }
 }
 
@@ -35,6 +56,7 @@ struct SessionUsageCacheEntry {
 
 struct DetailedUsageAccumulator {
     var today = PricedTokenUsage.zero
+    var thirtyDay = PricedTokenUsage.zero
     var sevenDay = PricedTokenUsage.zero
     var month = PricedTokenUsage.zero
     var lifetime = PricedTokenUsage.zero
@@ -46,16 +68,21 @@ struct DetailedUsageAccumulator {
         at date: Date,
         price: ModelTokenPrice,
         dayStart: Date,
+        thirtyDayStart: Date,
         sevenDayStart: Date,
         monthStart: Date
     ) {
-        let cost = estimatedCostUSD(tokens: tokens, price: price)
+        let rawCost = estimatedCostUSD(tokens: tokens, price: price)
+        let cost = convertToDisplayCurrency(rawCost, from: price.currency)
         lifetime.add(tokens: tokens, costUSD: cost)
         if date >= monthStart {
             month.add(tokens: tokens, costUSD: cost)
         }
         if date >= sevenDayStart {
             sevenDay.add(tokens: tokens, costUSD: cost)
+        }
+        if date >= thirtyDayStart {
+            thirtyDay.add(tokens: tokens, costUSD: cost)
         }
         if date >= dayStart {
             today.add(tokens: tokens, costUSD: cost)
@@ -65,6 +92,7 @@ struct DetailedUsageAccumulator {
     func makeUsage() -> DetailedUsage {
         DetailedUsage(
             today: today,
+            thirtyDay: thirtyDay,
             sevenDay: sevenDay,
             month: month,
             lifetime: lifetime,
@@ -77,33 +105,91 @@ struct DetailedUsageAccumulator {
 final class UsageStore: ObservableObject {
     @Published var provider: UsageProvider
     @Published var snapshot: UsageSnapshot
+    @Published var promptRegistry: PromptRegistry
+    @Published var agentProfiles: [AgentProfile]
+    @Published var exportPaths: [String: String]
     @Published var isRefreshing = false
+    @Published var isRefreshingPromptRegistry = false
     @Published var discoveredProviders: [DiscoveredProvider] = []
     @Published var selectedDiscoveredProvider: DiscoveredProvider?
+    @Published var discoveryNotice: String?
 
+    private static let agentProfilesStorageKey = "AgentDesk.agentProfiles"
+    private static let exportPathsStorageKey = "AgentDesk.exportPaths"
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
     private var isRefreshingTaskBoard = false
+    private var snapshotCache: [UsageProvider: UsageSnapshot] = [:]
+    private var refreshingProviders = Set<UsageProvider>()
+    private var discoveryNoticeWorkItem: DispatchWorkItem?
 
     init(provider: UsageProvider = .stored()) {
         self.provider = provider
-        self.snapshot = .empty(provider: provider)
+        let cachedSnapshot = AgentDeskDatabase.shared.loadUsageSnapshot(provider: provider)
+        self.snapshot = cachedSnapshot ?? .empty(provider: provider)
+        self.promptRegistry = .empty
+        AgentDeskDatabase.shared.migrateLegacyAgentProfilesIfNeeded(storageKey: Self.agentProfilesStorageKey)
+        AgentDeskDatabase.shared.migrateLegacyExportPathsIfNeeded(storageKey: Self.exportPathsStorageKey)
+        self.agentProfiles = Self.loadAgentProfiles()
+        self.exportPaths = Self.loadExportPaths()
+        self.snapshotCache[provider] = self.snapshot
         discoverProviders()
     }
 
     func discoverProviders() {
-        discoveredProviders = CodexUsageReader.discoverProviders()
-        if let savedId = UserDefaults.standard.string(forKey: "ModelMeter.selectedProviderId"),
-           let found = discoveredProviders.first(where: { $0.id == savedId }) {
-            selectedDiscoveredProvider = found
+        applyDiscoveredProviders(CodexUsageReader.discoverProviders())
+    }
+
+    func rediscoverProvidersManually() {
+        let previousIds = Set(discoveredProviders.map(\.id))
+        let discovered = CodexUsageReader.discoverProviders()
+        let discoveredIds = Set(discovered.map(\.id))
+        let newCount = discoveredIds.subtracting(previousIds).count
+
+        applyDiscoveredProviders(discovered)
+
+        let notice: String
+        if discovered.isEmpty {
+            notice = "未发现数据源"
+        } else if newCount == 0 {
+            notice = "未发现新数据源"
         } else {
-            selectedDiscoveredProvider = discoveredProviders.first
+            notice = "发现\(newCount)个新增数据源"
         }
+        showDiscoveryNotice(notice)
+    }
+
+    private func applyDiscoveredProviders(_ discovered: [DiscoveredProvider]) {
+        discoveredProviders = discovered
+
+        if let current = discovered.first(where: { $0.id == provider.rawValue }) {
+            selectedDiscoveredProvider = current
+            return
+        }
+
+        if let savedId = AgentDeskDatabase.shared.string(forKey: "AgentDesk.selectedProviderId"),
+           let found = discovered.first(where: { $0.id == savedId }) {
+            selectedDiscoveredProvider = found
+            return
+        }
+
+        selectedDiscoveredProvider = discovered.first
+    }
+
+    private func showDiscoveryNotice(_ notice: String) {
+        discoveryNoticeWorkItem?.cancel()
+        discoveryNotice = notice
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.discoveryNotice = nil
+        }
+        discoveryNoticeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
     }
 
     func selectDiscoveredProvider(_ discoveredProvider: DiscoveredProvider) {
         selectedDiscoveredProvider = discoveredProvider
-        UserDefaults.standard.set(discoveredProvider.id, forKey: "ModelMeter.selectedProviderId")
+        AgentDeskDatabase.shared.set(discoveredProvider.id, forKey: "AgentDesk.selectedProviderId")
 
         // 同步更新 provider 属性
         if let usageProvider = UsageProvider(rawValue: discoveredProvider.id) {
@@ -127,15 +213,41 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh() {
-        guard !isRefreshing else { return }
-        isRefreshing = true
+        discoverProviders()
         let provider = provider
+        guard !refreshingProviders.contains(provider) else { return }
+        refreshingProviders.insert(provider)
+        syncRefreshingState()
 
         DispatchQueue.global(qos: .utility).async {
             let snapshot = CodexUsageReader(provider: provider).load()
+            let workspaceHints = snapshot.local?.recentThreads.map(\.cwd) ?? []
+            let promptRegistry = CodexUsageReader.loadPromptRegistry(workspaceHints: workspaceHints)
             DispatchQueue.main.async {
-                self.snapshot = snapshot
-                self.isRefreshing = false
+                if snapshot.hasPersistableContent {
+                    AgentDeskDatabase.shared.saveUsageSnapshot(snapshot)
+                }
+                self.snapshotCache[provider] = snapshot.hasPersistableContent
+                    ? snapshot
+                    : (self.snapshotCache[provider] ?? AgentDeskDatabase.shared.loadUsageSnapshot(provider: provider) ?? snapshot)
+                if self.provider == provider {
+                    self.snapshot = self.snapshotCache[provider] ?? snapshot
+                }
+                self.promptRegistry = promptRegistry
+                self.refreshingProviders.remove(provider)
+                self.syncRefreshingState()
+            }
+        }
+    }
+
+    func refreshPromptRegistry() {
+        let workspaceHints = snapshot.local?.recentThreads.map(\.cwd) ?? []
+        isRefreshingPromptRegistry = true
+        DispatchQueue.global(qos: .utility).async {
+            let promptRegistry = CodexUsageReader.loadPromptRegistry(workspaceHints: workspaceHints)
+            DispatchQueue.main.async {
+                self.promptRegistry = promptRegistry
+                self.isRefreshingPromptRegistry = false
             }
         }
     }
@@ -144,7 +256,19 @@ final class UsageStore: ObservableObject {
         guard self.provider != provider else { return }
         provider.persist()
         self.provider = provider
-        snapshot = .empty(provider: provider)
+
+        if let cached = snapshotCache[provider] {
+            snapshot = cached
+        } else if let persisted = AgentDeskDatabase.shared.loadUsageSnapshot(provider: provider) {
+            snapshot = persisted
+            snapshotCache[provider] = persisted
+        } else {
+            let empty = UsageSnapshot.empty(provider: provider)
+            snapshot = empty
+            snapshotCache[provider] = empty
+        }
+
+        syncRefreshingState()
         refresh()
 
         // 同步更新 discoveredProviders 选择器
@@ -153,20 +277,103 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    func createAgentProfile() -> AgentProfile {
+        let index = agentProfiles.count + 1
+        let profile = AgentProfile.starter(name: "Profile \(index)")
+        agentProfiles.insert(profile, at: 0)
+        persistAgentProfiles()
+        return profile
+    }
+
+    func duplicateAgentProfile(id: String) -> AgentProfile? {
+        guard var profile = agentProfiles.first(where: { $0.id == id }) else { return nil }
+        profile = AgentProfile(
+            id: UUID().uuidString,
+            name: "\(profile.name) Copy",
+            summary: profile.summary,
+            persona: profile.persona,
+            workingStyle: profile.workingStyle,
+            constraints: profile.constraints,
+            selectedAssetIDs: profile.selectedAssetIDs,
+            updatedAt: Date()
+        )
+        agentProfiles.insert(profile, at: 0)
+        persistAgentProfiles()
+        return profile
+    }
+
+    func saveAgentProfile(_ profile: AgentProfile) {
+        if let index = agentProfiles.firstIndex(where: { $0.id == profile.id }) {
+            agentProfiles[index] = profile
+        } else {
+            agentProfiles.insert(profile, at: 0)
+        }
+        persistAgentProfiles()
+    }
+
+    func deleteAgentProfile(id: String) {
+        agentProfiles.removeAll { $0.id == id }
+        persistAgentProfiles()
+    }
+
+    func exportPath(profileID: String, tool: AgentTargetTool) -> String {
+        exportPaths[exportPathKey(profileID: profileID, tool: tool)] ?? ""
+    }
+
+    func setExportPath(_ path: String, profileID: String, tool: AgentTargetTool) {
+        exportPaths[exportPathKey(profileID: profileID, tool: tool)] = path
+        persistExportPaths()
+    }
+
+    private func persistAgentProfiles() {
+        AgentDeskDatabase.shared.saveAgentProfiles(agentProfiles)
+    }
+
+    private static func loadAgentProfiles() -> [AgentProfile] {
+        let profiles = AgentDeskDatabase.shared.loadAgentProfiles()
+        guard !profiles.isEmpty else {
+            return [AgentProfile.starter()]
+        }
+        return profiles.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private func persistExportPaths() {
+        AgentDeskDatabase.shared.saveExportPaths(exportPaths)
+    }
+
+    private static func loadExportPaths() -> [String: String] {
+        AgentDeskDatabase.shared.loadExportPaths()
+    }
+
+    private func exportPathKey(profileID: String, tool: AgentTargetTool) -> String {
+        "\(profileID)::\(tool.rawValue)"
+    }
+
     private func refreshTaskBoard() {
-        guard !isRefreshing, !isRefreshingTaskBoard else { return }
+        guard !isRefreshingTaskBoard else { return }
         isRefreshingTaskBoard = true
         let provider = provider
 
         DispatchQueue.global(qos: .utility).async {
             let taskBoard = CodexUsageReader(provider: provider).loadTaskBoard()
             DispatchQueue.main.async {
+                if let cached = self.snapshotCache[provider] {
+                    let updated = cached.replacingTaskBoard(taskBoard)
+                    self.snapshotCache[provider] = updated
+                    if updated.hasPersistableContent {
+                        AgentDeskDatabase.shared.saveUsageSnapshot(updated)
+                    }
+                }
                 if self.provider == provider {
                     self.snapshot = self.snapshot.replacingTaskBoard(taskBoard)
                 }
                 self.isRefreshingTaskBoard = false
             }
         }
+    }
+
+    private func syncRefreshingState() {
+        isRefreshing = refreshingProviders.contains(provider)
     }
 }
 
@@ -260,6 +467,162 @@ final class CodexUsageReader {
         }
 
         return providers
+    }
+
+    static func loadPromptRegistry(workspaceHints: [String] = []) -> PromptRegistry {
+        let fileManager = FileManager.default
+        let roots = promptAssetRoots(workspaceHints: workspaceHints)
+        var assets: [PromptAsset] = []
+        var seenPaths = Set<String>()
+
+        for root in roots where fileManager.fileExists(atPath: root.path) {
+            guard let enumerator = fileManager.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+                options: [],
+                errorHandler: nil
+            ) else { continue }
+
+            for case let fileURL as URL in enumerator {
+                guard shouldIncludePromptAsset(fileURL: fileURL) else { continue }
+                let standardizedPath = fileURL.standardizedFileURL.path
+                guard seenPaths.insert(standardizedPath).inserted else { continue }
+                guard let asset = makePromptAsset(from: fileURL) else { continue }
+                assets.append(asset)
+            }
+        }
+
+        assets.sort { lhs, rhs in
+            if lhs.source == rhs.source {
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            return lhs.source.rawValue < rhs.source.rawValue
+        }
+
+        return PromptRegistry(refreshedAt: Date(), assets: assets)
+    }
+
+    private static func promptAssetRoots(workspaceHints: [String]) -> [URL] {
+        let home = NSHomeDirectory()
+        var roots: [URL] = [
+            URL(fileURLWithPath: home).appendingPathComponent(".codex/skills"),
+            URL(fileURLWithPath: home).appendingPathComponent(".agents/skills")
+        ]
+
+        let workspaceCandidates = Set(workspaceHints.filter { !$0.isEmpty })
+        for path in workspaceCandidates {
+            let workspace = URL(fileURLWithPath: path)
+            roots.append(workspace.appendingPathComponent("prompts"))
+            roots.append(workspace.appendingPathComponent("skills"))
+            roots.append(workspace.appendingPathComponent(".prompts"))
+            roots.append(workspace.appendingPathComponent(".codex/skills"))
+            roots.append(workspace.appendingPathComponent(".agents/skills"))
+        }
+
+        return roots
+    }
+
+    private static func shouldIncludePromptAsset(fileURL: URL) -> Bool {
+        guard
+            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+            values.isRegularFile == true
+        else { return false }
+
+        let name = fileURL.lastPathComponent.lowercased()
+        let parent = fileURL.deletingLastPathComponent().lastPathComponent.lowercased()
+        let ext = fileURL.pathExtension.lowercased()
+
+        if name == "skill.md" { return true }
+        if ext == "prompt" { return true }
+        if name.contains("prompt") { return true }
+        if ["yaml", "yml", "json", "toml"].contains(ext) && (parent.contains("prompt") || parent.contains("skill")) {
+            return true
+        }
+        if ext == "md" && (parent.contains("prompt") || parent.contains("skill")) {
+            return true
+        }
+        return false
+    }
+
+    private static func makePromptAsset(from fileURL: URL) -> PromptAsset? {
+        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let kind = promptAssetKind(for: fileURL)
+        let source = promptAssetSource(for: fileURL)
+        let name = promptAssetName(for: fileURL, content: trimmed)
+        let summary = promptAssetSummary(content: trimmed)
+        let preview = String(trimmed.prefix(4000))
+        let resourceValues = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
+        let modifiedAt = resourceValues?.contentModificationDate
+        let tags = promptAssetTags(for: fileURL)
+
+        return PromptAsset(
+            id: fileURL.standardizedFileURL.path,
+            name: name,
+            kind: kind,
+            source: source,
+            path: fileURL.standardizedFileURL.path,
+            summary: summary,
+            content: preview,
+            modifiedAt: modifiedAt,
+            tags: tags
+        )
+    }
+
+    private static func promptAssetKind(for fileURL: URL) -> PromptAssetKind {
+        let name = fileURL.lastPathComponent.lowercased()
+        let ext = fileURL.pathExtension.lowercased()
+        if name == "skill.md" { return .skill }
+        if ext == "prompt" || name.contains("prompt") { return .prompt }
+        return .config
+    }
+
+    private static func promptAssetSource(for fileURL: URL) -> PromptAssetSource {
+        let path = fileURL.standardizedFileURL.path
+        let home = NSHomeDirectory()
+        if path.hasPrefix(home + "/.codex/skills/.system/") { return .codexSystem }
+        if path.hasPrefix(home + "/.codex/skills/") { return .codexUser }
+        if path.hasPrefix(home + "/.agents/skills/") { return .agents }
+        return .workspace
+    }
+
+    private static func promptAssetName(for fileURL: URL, content: String) -> String {
+        for rawLine in content.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("#") {
+                let title = line.trimmingCharacters(in: CharacterSet(charactersIn: "# " ))
+                if !title.isEmpty { return title }
+            }
+        }
+        if fileURL.lastPathComponent == "SKILL.md" {
+            return fileURL.deletingLastPathComponent().lastPathComponent
+        }
+        return fileURL.deletingPathExtension().lastPathComponent
+    }
+
+    private static func promptAssetSummary(content: String) -> String {
+        for rawLine in content.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            if line.hasPrefix("#") { continue }
+            return String(line.prefix(140))
+        }
+        return ""
+    }
+
+    private static func promptAssetTags(for fileURL: URL) -> [String] {
+        let parts = fileURL.deletingLastPathComponent().pathComponents
+        let interesting = parts.filter { part in
+            !part.isEmpty
+                && part != "/"
+                && part != ".codex"
+                && part != ".agents"
+                && part != "skills"
+                && part != "prompts"
+        }
+        return Array(interesting.suffix(3))
     }
 
     func load() -> UsageSnapshot {
@@ -454,8 +817,8 @@ final class CodexUsageReader {
             "method": "initialize",
             "params": [
                 "clientInfo": [
-                    "name": "codexu",
-                    "title": "ModelMeter",
+                    "name": "agentdesk",
+                    "title": "AgentDesk",
                     "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.1"
                 ],
                 "capabilities": [
@@ -576,6 +939,8 @@ final class CodexUsageReader {
         let calendar = Calendar.current
         let now = Date()
         let dayStart = calendar.startOfDay(for: now)
+        let twentyFourHourStart = calendar.date(byAdding: .hour, value: -24, to: now) ?? dayStart
+        let thirtyDayStart = calendar.date(byAdding: .day, value: -29, to: dayStart) ?? dayStart
         let sevenDayStart = calendar.date(byAdding: .day, value: -6, to: dayStart) ?? dayStart
         let dayFormatter = DateFormatter()
         dayFormatter.calendar = calendar
@@ -590,6 +955,7 @@ final class CodexUsageReader {
         SELECT
           COALESCE(SUM(tokens_used), 0) AS lifetimeTokens,
           COALESCE(SUM(CASE WHEN updated_at >= \(Int(dayStart.timeIntervalSince1970)) THEN tokens_used ELSE 0 END), 0) AS todayTokens,
+          COALESCE(SUM(CASE WHEN updated_at >= \(Int(thirtyDayStart.timeIntervalSince1970)) THEN tokens_used ELSE 0 END), 0) AS thirtyDayTokens,
           COALESCE(SUM(CASE WHEN updated_at >= \(Int(sevenDayStart.timeIntervalSince1970)) THEN tokens_used ELSE 0 END), 0) AS sevenDayTokens,
           COUNT(*) AS threadCount,
           COALESCE(MAX(updated_at), 0) AS lastUpdatedAt
@@ -648,17 +1014,23 @@ final class CodexUsageReader {
         }
 
         var todayModelUsage: [ModelUsageItem] = []
+        var twentyFourHourModelUsage: [ModelUsageItem] = []
         var sevenDayModelUsage: [ModelUsageItem] = []
+        var thirtyDayModelUsage: [ModelUsageItem] = []
         var lifetimeModelUsage: [ModelUsageItem] = []
         var sevenDayModelBuckets: [String: [DailyTokenBucket]] = [:]
         let detailedUsage = readDetailedUsage(
             sqlitePath: sqlitePath,
             dbPath: dbPath,
             dayStart: dayStart,
+            twentyFourHourStart: twentyFourHourStart,
+            thirtyDayStart: thirtyDayStart,
             sevenDayStart: sevenDayStart,
             dailyBuckets: dailyBuckets,
             todayModelUsage: &todayModelUsage,
+            twentyFourHourModelUsage: &twentyFourHourModelUsage,
             sevenDayModelUsage: &sevenDayModelUsage,
+            thirtyDayModelUsage: &thirtyDayModelUsage,
             lifetimeModelUsage: &lifetimeModelUsage,
             sevenDayModelBuckets: &sevenDayModelBuckets,
             messages: &messages
@@ -667,6 +1039,7 @@ final class CodexUsageReader {
         return LocalUsage(
             lifetimeTokens: int64Value(totalsObject["lifetimeTokens"]) ?? 0,
             todayTokens: int64Value(totalsObject["todayTokens"]) ?? 0,
+            thirtyDayTokens: int64Value(totalsObject["thirtyDayTokens"]) ?? 0,
             sevenDayTokens: int64Value(totalsObject["sevenDayTokens"]) ?? 0,
             threadCount: intValue(totalsObject["threadCount"]) ?? 0,
             lastUpdatedAt: dateFromEpoch(totalsObject["lastUpdatedAt"]),
@@ -674,7 +1047,9 @@ final class CodexUsageReader {
             sevenDayModelBuckets: sevenDayModelBuckets,
             recentThreads: recent,
             todayModelUsage: todayModelUsage,
+            twentyFourHourModelUsage: twentyFourHourModelUsage,
             sevenDayModelUsage: sevenDayModelUsage,
+            thirtyDayModelUsage: thirtyDayModelUsage,
             lifetimeModelUsage: lifetimeModelUsage,
             detailedUsage: detailedUsage
         )
@@ -684,10 +1059,14 @@ final class CodexUsageReader {
         sqlitePath: String,
         dbPath: String,
         dayStart: Date,
+        twentyFourHourStart: Date,
+        thirtyDayStart: Date,
         sevenDayStart: Date,
         dailyBuckets: [DailyTokenBucket],
         todayModelUsage: inout [ModelUsageItem],
+        twentyFourHourModelUsage: inout [ModelUsageItem],
         sevenDayModelUsage: inout [ModelUsageItem],
+        thirtyDayModelUsage: inout [ModelUsageItem],
         lifetimeModelUsage: inout [ModelUsageItem],
         sevenDayModelBuckets: inout [String: [DailyTokenBucket]],
         messages: inout [String]
@@ -737,7 +1116,9 @@ final class CodexUsageReader {
 
         var accumulator = DetailedUsageAccumulator()
         var todayUsageByModel: [String: PricedTokenUsage] = [:]
+        var twentyFourHourUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
+        var thirtyDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayTokensByModelAndDay: [String: [String: Int64]] = [:]
         for source in sources {
@@ -760,26 +1141,37 @@ final class CodexUsageReader {
                     at: delta.date,
                     price: price,
                     dayStart: dayStart,
+                    thirtyDayStart: thirtyDayStart,
                     sevenDayStart: sevenDayStart,
                     monthStart: monthStart
                 )
-                let costUSD = estimatedCostUSD(tokens: delta.tokens, price: price)
+                let rawCost = estimatedCostUSD(tokens: delta.tokens, price: price)
                 if delta.date >= dayStart {
                     var usage = todayUsageByModel[modelName] ?? .zero
-                    usage.add(tokens: delta.tokens, costUSD: costUSD)
+                    usage.add(tokens: delta.tokens, costUSD: rawCost)
                     todayUsageByModel[modelName] = usage
+                }
+                if delta.date >= twentyFourHourStart {
+                    var usage = twentyFourHourUsageByModel[modelName] ?? .zero
+                    usage.add(tokens: delta.tokens, costUSD: rawCost)
+                    twentyFourHourUsageByModel[modelName] = usage
                 }
                 if delta.date >= sevenDayStart {
                     var usage = sevenDayUsageByModel[modelName] ?? .zero
-                    usage.add(tokens: delta.tokens, costUSD: costUSD)
+                    usage.add(tokens: delta.tokens, costUSD: rawCost)
                     sevenDayUsageByModel[modelName] = usage
                     let dayKey = dayFormatter.string(from: delta.date)
                     var byDay = sevenDayTokensByModelAndDay[modelName] ?? [:]
                     byDay[dayKey, default: 0] += delta.tokens.visibleTotalTokens
                     sevenDayTokensByModelAndDay[modelName] = byDay
                 }
+                if delta.date >= thirtyDayStart {
+                    var usage = thirtyDayUsageByModel[modelName] ?? .zero
+                    usage.add(tokens: delta.tokens, costUSD: rawCost)
+                    thirtyDayUsageByModel[modelName] = usage
+                }
                 var lifetimeUsage = lifetimeUsageByModel[modelName] ?? .zero
-                lifetimeUsage.add(tokens: delta.tokens, costUSD: costUSD)
+                lifetimeUsage.add(tokens: delta.tokens, costUSD: rawCost)
                 lifetimeUsageByModel[modelName] = lifetimeUsage
             }
         }
@@ -790,7 +1182,9 @@ final class CodexUsageReader {
         }
 
         todayModelUsage = sortedModelUsageItems(todayUsageByModel, providers: modelProviders)
+        twentyFourHourModelUsage = sortedModelUsageItems(twentyFourHourUsageByModel, providers: modelProviders)
         sevenDayModelUsage = sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders)
+        thirtyDayModelUsage = sortedModelUsageItems(thirtyDayUsageByModel, providers: modelProviders)
         lifetimeModelUsage = sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders)
         sevenDayModelBuckets = buildSevenDayModelBuckets(
             tokenUsageByModelAndDay: sevenDayTokensByModelAndDay,
@@ -1172,6 +1566,8 @@ final class CodexUsageReader {
         let calendar = Calendar.current
         let now = Date()
         let dayStart = calendar.startOfDay(for: now)
+        let twentyFourHourStart = calendar.date(byAdding: .hour, value: -24, to: now) ?? dayStart
+        let thirtyDayStart = calendar.date(byAdding: .day, value: -29, to: dayStart) ?? dayStart
         let sevenDayStart = calendar.date(byAdding: .day, value: -6, to: dayStart) ?? dayStart
         var monthComponents = calendar.dateComponents([.year, .month], from: now)
         monthComponents.day = 1
@@ -1204,11 +1600,13 @@ final class CodexUsageReader {
         }
 
         var accumulator = DetailedUsageAccumulator()
-        var previousBySession: [String: TokenBreakdown] = [:]
+        var lastCumulativeBySession: [String: TokenBreakdown] = [:]
         var tokensBySession: [String: Int64] = [:]
         var tokensByDay: [String: Int64] = [:]
         var todayUsageByModel: [String: PricedTokenUsage] = [:]
+        var twentyFourHourUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
+        var thirtyDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayTokensByModelAndDay: [String: [String: Int64]] = [:]
         var modelProviders: [String: String] = [:]
@@ -1248,27 +1646,24 @@ final class CodexUsageReader {
                 totalTokens: int64Value(object["totalTokens"]) ?? 0
             )
 
-            var delta = current.delta(from: previousBySession[sessionId] ?? .zero)
-            if delta.hasNegativeValue {
-                delta = current
-            }
-            previousBySession[sessionId] = current
-            guard !delta.isZero else { continue }
+            lastCumulativeBySession[sessionId] = current
+            guard !current.isZero else { continue }
 
             accumulator.parsedFileCount += 1
             accumulator.tokenEventCount += 1
             accumulator.add(
-                delta,
+                current,
                 at: date,
                 price: modelTokenPrice(for: object["model"] as? String),
                 dayStart: dayStart,
+                thirtyDayStart: thirtyDayStart,
                 sevenDayStart: sevenDayStart,
                 monthStart: monthStart
             )
             let price = modelTokenPrice(for: object["model"] as? String)
             let modelName = normalizedModelName(object["model"] as? String, fallback: price.model)
             let providerID = (object["provider"] as? String) ?? ""
-            let costUSD = estimatedCostUSD(tokens: delta, price: price)
+            let rawCost = estimatedCostUSD(tokens: current, price: price)
 
             // 存储 provider 信息
             if !providerID.isEmpty {
@@ -1277,22 +1672,32 @@ final class CodexUsageReader {
 
             if date >= dayStart {
                 var usage = todayUsageByModel[modelName] ?? .zero
-                usage.add(tokens: delta, costUSD: costUSD)
+                usage.add(tokens: current, costUSD: rawCost)
                 todayUsageByModel[modelName] = usage
+            }
+            if date >= twentyFourHourStart {
+                var usage = twentyFourHourUsageByModel[modelName] ?? .zero
+                usage.add(tokens: current, costUSD: rawCost)
+                twentyFourHourUsageByModel[modelName] = usage
             }
             if date >= sevenDayStart {
                 var usage = sevenDayUsageByModel[modelName] ?? .zero
-                usage.add(tokens: delta, costUSD: costUSD)
+                usage.add(tokens: current, costUSD: rawCost)
                 sevenDayUsageByModel[modelName] = usage
                 var byDay = sevenDayTokensByModelAndDay[modelName] ?? [:]
-                byDay[dayFormatter.string(from: date), default: 0] += delta.visibleTotalTokens
+                byDay[dayFormatter.string(from: date), default: 0] += current.visibleTotalTokens
                 sevenDayTokensByModelAndDay[modelName] = byDay
-                tokensByDay[dayFormatter.string(from: date), default: 0] += delta.visibleTotalTokens
+                tokensByDay[dayFormatter.string(from: date), default: 0] += current.visibleTotalTokens
+            }
+            if date >= thirtyDayStart {
+                var usage = thirtyDayUsageByModel[modelName] ?? .zero
+                usage.add(tokens: current, costUSD: rawCost)
+                thirtyDayUsageByModel[modelName] = usage
             }
             var lifetimeUsage = lifetimeUsageByModel[modelName] ?? .zero
-            lifetimeUsage.add(tokens: delta, costUSD: costUSD)
+            lifetimeUsage.add(tokens: current, costUSD: rawCost)
             lifetimeUsageByModel[modelName] = lifetimeUsage
-            tokensBySession[sessionId, default: 0] += delta.visibleTotalTokens
+            tokensBySession[sessionId, default: 0] += current.visibleTotalTokens
         }
 
         let totals = accumulator.makeUsage()
@@ -1336,6 +1741,7 @@ final class CodexUsageReader {
         return LocalUsage(
             lifetimeTokens: totals.lifetime.tokens.visibleTotalTokens,
             todayTokens: totals.today.tokens.visibleTotalTokens,
+            thirtyDayTokens: totals.thirtyDay.tokens.visibleTotalTokens,
             sevenDayTokens: totals.sevenDay.tokens.visibleTotalTokens,
             threadCount: intValue(sessionCount["threadCount"]) ?? 0,
             lastUpdatedAt: dateFromEpoch(sessionCount["lastUpdatedAt"]),
@@ -1346,7 +1752,9 @@ final class CodexUsageReader {
             ),
             recentThreads: recent,
             todayModelUsage: sortedModelUsageItems(todayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
+            twentyFourHourModelUsage: sortedModelUsageItems(twentyFourHourUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
             sevenDayModelUsage: sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
+            thirtyDayModelUsage: sortedModelUsageItems(thirtyDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
             lifetimeModelUsage: sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
             detailedUsage: totals
         )
