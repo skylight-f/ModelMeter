@@ -328,16 +328,11 @@ struct UsageWidgetView: View {
     }
 
     private var usageTrendSection: some View {
-        guard let todayUsage = snapshot.local?.todayModelUsage, !todayUsage.isEmpty,
-              let buckets = snapshot.local?.dailyBuckets, !buckets.isEmpty else {
+        guard let modelBuckets = snapshot.local?.sevenDayModelBuckets, !modelBuckets.isEmpty else {
             return AnyView(EmptyView())
         }
 
-        // 使用七天的数据构建图例
-        let sevenDayUsage = snapshot.local?.sevenDayModelUsage ?? []
-        let allModels = Set(todayUsage.map(\.model)).union(sevenDayUsage.map(\.model))
-        let modelBuckets = buildModelBuckets(from: todayUsage)
-        let modelColors = buildModelColorsForModels(Array(allModels))
+        let modelColors = buildModelColorsForModels(Array(modelBuckets.keys))
 
         return AnyView(
             VStack(alignment: .leading, spacing: 20) {
@@ -371,26 +366,6 @@ struct UsageWidgetView: View {
             .padding(12)
             .sectionBackground()
         )
-    }
-
-    private func buildModelBuckets(from models: [ModelUsageItem]) -> [String: [DailyTokenBucket]] {
-        // 简化实现：使用今日总量按比例分配到各模型
-        guard let dailyBuckets = snapshot.local?.dailyBuckets, !dailyBuckets.isEmpty else { return [:] }
-        let totalToday = models.reduce(Int64(0)) { $0 + $1.tokens }
-        guard totalToday > 0 else { return [:] }
-
-        var result: [String: [DailyTokenBucket]] = [:]
-        for model in models.prefix(5) {
-            let ratio = Double(model.tokens) / Double(totalToday)
-            result[model.model] = dailyBuckets.map { bucket in
-                DailyTokenBucket(
-                    id: bucket.id,
-                    label: bucket.label,
-                    tokens: Int64(Double(bucket.tokens) * ratio)
-                )
-            }
-        }
-        return result
     }
 
     private func buildModelColors(from models: [ModelUsageItem]) -> [String: Color] {
@@ -2406,4 +2381,3 @@ struct FlowLayout: Layout {
         return (CGSize(width: maxWidth, height: totalHeight), positions)
     }
 }
-

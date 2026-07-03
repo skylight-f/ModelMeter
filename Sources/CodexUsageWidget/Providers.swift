@@ -650,14 +650,17 @@ final class CodexUsageReader {
         var todayModelUsage: [ModelUsageItem] = []
         var sevenDayModelUsage: [ModelUsageItem] = []
         var lifetimeModelUsage: [ModelUsageItem] = []
+        var sevenDayModelBuckets: [String: [DailyTokenBucket]] = [:]
         let detailedUsage = readDetailedUsage(
             sqlitePath: sqlitePath,
             dbPath: dbPath,
             dayStart: dayStart,
             sevenDayStart: sevenDayStart,
+            dailyBuckets: dailyBuckets,
             todayModelUsage: &todayModelUsage,
             sevenDayModelUsage: &sevenDayModelUsage,
             lifetimeModelUsage: &lifetimeModelUsage,
+            sevenDayModelBuckets: &sevenDayModelBuckets,
             messages: &messages
         )
 
@@ -668,6 +671,7 @@ final class CodexUsageReader {
             threadCount: intValue(totalsObject["threadCount"]) ?? 0,
             lastUpdatedAt: dateFromEpoch(totalsObject["lastUpdatedAt"]),
             dailyBuckets: dailyBuckets,
+            sevenDayModelBuckets: sevenDayModelBuckets,
             recentThreads: recent,
             todayModelUsage: todayModelUsage,
             sevenDayModelUsage: sevenDayModelUsage,
@@ -681,9 +685,11 @@ final class CodexUsageReader {
         dbPath: String,
         dayStart: Date,
         sevenDayStart: Date,
+        dailyBuckets: [DailyTokenBucket],
         todayModelUsage: inout [ModelUsageItem],
         sevenDayModelUsage: inout [ModelUsageItem],
         lifetimeModelUsage: inout [ModelUsageItem],
+        sevenDayModelBuckets: inout [String: [DailyTokenBucket]],
         messages: inout [String]
     ) -> DetailedUsage? {
         let sourceQuery = """
@@ -724,11 +730,16 @@ final class CodexUsageReader {
         fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let plainFormatter = ISO8601DateFormatter()
         plainFormatter.formatOptions = [.withInternetDateTime]
+        let dayFormatter = DateFormatter()
+        dayFormatter.calendar = calendar
+        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dayFormatter.dateFormat = "yyyy-MM-dd"
 
         var accumulator = DetailedUsageAccumulator()
         var todayUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
+        var sevenDayTokensByModelAndDay: [String: [String: Int64]] = [:]
         for source in sources {
             guard let entry = cachedSessionUsage(
                 source: source,
@@ -762,6 +773,10 @@ final class CodexUsageReader {
                     var usage = sevenDayUsageByModel[modelName] ?? .zero
                     usage.add(tokens: delta.tokens, costUSD: costUSD)
                     sevenDayUsageByModel[modelName] = usage
+                    let dayKey = dayFormatter.string(from: delta.date)
+                    var byDay = sevenDayTokensByModelAndDay[modelName] ?? [:]
+                    byDay[dayKey, default: 0] += delta.tokens.visibleTotalTokens
+                    sevenDayTokensByModelAndDay[modelName] = byDay
                 }
                 var lifetimeUsage = lifetimeUsageByModel[modelName] ?? .zero
                 lifetimeUsage.add(tokens: delta.tokens, costUSD: costUSD)
@@ -777,6 +792,10 @@ final class CodexUsageReader {
         todayModelUsage = sortedModelUsageItems(todayUsageByModel, providers: modelProviders)
         sevenDayModelUsage = sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders)
         lifetimeModelUsage = sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders)
+        sevenDayModelBuckets = buildSevenDayModelBuckets(
+            tokenUsageByModelAndDay: sevenDayTokensByModelAndDay,
+            templateBuckets: dailyBuckets
+        )
         return accumulator.makeUsage()
     }
 
@@ -1191,6 +1210,7 @@ final class CodexUsageReader {
         var todayUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
+        var sevenDayTokensByModelAndDay: [String: [String: Int64]] = [:]
         var modelProviders: [String: String] = [:]
         var modelTotalTokens: [String: Int64] = [:]
         var modelTotalTimeMs: [String: Double] = [:]
@@ -1264,6 +1284,9 @@ final class CodexUsageReader {
                 var usage = sevenDayUsageByModel[modelName] ?? .zero
                 usage.add(tokens: delta, costUSD: costUSD)
                 sevenDayUsageByModel[modelName] = usage
+                var byDay = sevenDayTokensByModelAndDay[modelName] ?? [:]
+                byDay[dayFormatter.string(from: date), default: 0] += delta.visibleTotalTokens
+                sevenDayTokensByModelAndDay[modelName] = byDay
                 tokensByDay[dayFormatter.string(from: date), default: 0] += delta.visibleTotalTokens
             }
             var lifetimeUsage = lifetimeUsageByModel[modelName] ?? .zero
@@ -1317,6 +1340,10 @@ final class CodexUsageReader {
             threadCount: intValue(sessionCount["threadCount"]) ?? 0,
             lastUpdatedAt: dateFromEpoch(sessionCount["lastUpdatedAt"]),
             dailyBuckets: dailyBuckets,
+            sevenDayModelBuckets: buildSevenDayModelBuckets(
+                tokenUsageByModelAndDay: sevenDayTokensByModelAndDay,
+                templateBuckets: dailyBuckets
+            ),
             recentThreads: recent,
             todayModelUsage: sortedModelUsageItems(todayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
             sevenDayModelUsage: sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
@@ -1332,6 +1359,28 @@ final class CodexUsageReader {
                 result[model] = Double(tokens) * 1000.0 / timeMs
             }
         }
+        return result
+    }
+
+    private func buildSevenDayModelBuckets(
+        tokenUsageByModelAndDay: [String: [String: Int64]],
+        templateBuckets: [DailyTokenBucket]
+    ) -> [String: [DailyTokenBucket]] {
+        var result: [String: [DailyTokenBucket]] = [:]
+
+        for (model, usageByDay) in tokenUsageByModelAndDay {
+            let buckets = templateBuckets.map { bucket in
+                DailyTokenBucket(
+                    id: bucket.id,
+                    label: bucket.label,
+                    tokens: usageByDay[bucket.id] ?? 0
+                )
+            }
+            if buckets.contains(where: { $0.tokens > 0 }) {
+                result[model] = buckets
+            }
+        }
+
         return result
     }
 
@@ -1470,4 +1519,3 @@ final class CodexUsageReader {
         paths.first { fileManager.isExecutableFile(atPath: $0) || fileManager.fileExists(atPath: $0) }
     }
 }
-

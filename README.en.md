@@ -1,65 +1,127 @@
 # ModelMeter
 
-ModelMeter is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex quota, token usage, and today's task status. It keeps the information you check most on the desktop, so you can quickly see remaining quota, reset times, and daily work progress.
+[中文](README.md)
 
-![ModelMeter desktop widget screenshot](docs/screenshot-0.2.0.png)
+ModelMeter is a macOS desktop widget for monitoring token usage, costs, and task status across multiple AI coding tools. Supports Codex, MimoCode, and more with automatic data source discovery and real-time usage analysis.
 
-## Who It Is For
+![ModelMeter desktop widget screenshot](docs/screenshot-0.3.0.png)
 
-- Developers who use OpenAI Codex, Codex CLI, or the Codex desktop app every day.
-- ChatGPT Pro / Team users who want a quick view of Codex 5-hour quota, 7-day quota, token usage, and reset times.
-- macOS users who want to check Codex status without repeatedly opening a browser or terminal.
+## Who Is This For
 
-## Features
+- Developers using AI coding tools like OpenAI Codex, MimoCode, Claude Code
+- Teams tracking AI tool usage costs and efficiency
+- Anyone who wants AI usage status visible on their desktop
 
-- Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times.
-- Summarizes token usage for today, the last 7 days, and lifetime totals with uncached input, cached input, and output splits.
-- Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value.
-- Builds a daily task board from local Codex threads and enabled Codex automations.
-- Groups work into active, pending, scheduled, and done columns.
-- Stays on the desktop layer by default, with `Command + U` foreground toggle.
-- Supports Chinese and English UI text. The default language follows the system time zone, and the top `中 | EN` switch can override it.
-- Supports system, light, and dark appearance modes. The default follows macOS, and the top appearance switch can override it.
-- Reads data locally and does not upload usage, threads, or account data to a third-party service.
+## Core Features
 
-## Keyboard Shortcuts
+### Usage Overview
+- **Quota Ring Chart**: Shows 5-hour and 7-day quota remaining percentage and reset time
+- **Token Statistics**: Today, 7-day, and lifetime token usage, split by uncached, cached, and output
+- **Value Progress**: Estimates monthly usage value based on API pricing
 
-- `Command + U`: toggle the widget between desktop layer and foreground layer.
-- Menu bar gauge icon: same toggle as `Command + U`.
-- Top appearance switch: switch between system, light, and dark modes. System mode follows macOS.
-- Top `中 | EN` switch: switch between Chinese and English. Manual selection is kept for the next launch.
-- Refresh button: immediately refresh quota, token usage, trend, and task board.
-- Close button: quit the widget.
-- Drag anywhere on the widget background to reposition it.
+### Model Usage Analysis
+- **Detailed Table**: Token usage, cache hit rate, cost, and output speed per model
+- **Price Info**: Supports USD/CNY dual currency, auto-detects domestic/international models
+- **Search & Filter**: Quick search by model name or provider
+- **Click Details**: Click any model to view detailed statistics
 
-## First Install: Privacy & Security
+### Usage Trend Chart
+- **7-Day Trend**: Stacked bar chart showing daily usage by model
+- **Color Coding**: Different colors for different models
+- **Hover Interaction**: Mouse hover shows model name and token count
 
-ModelMeter is distributed outside the Mac App Store. On first launch, macOS may block it until you manually allow it:
+### Task Board
+- **4-Column Layout**: Active, Pending, Scheduled, Done
+- **Auto-Classification**: Automatically categorizes tasks by activity time
+- **Status Labels**: High/Active/Medium/Idle/Cron/Done
 
-1. Open `ModelMeter.app` once. If macOS says it cannot be opened, cancel the dialog.
-2. Open **System Settings > Privacy & Security**.
-3. In the **Security** section, click **Open Anyway** for `ModelMeter.app`.
-4. Confirm with Touch ID or your password, then click **Open**.
+### Auto Data Source Discovery
+- **Smart Detection**: Automatically scans local databases for available sources
+- **Multi-Source Support**: Codex, MimoCode, Claude Code, Cursor, Windsurf
+- **One-Click Switch**: Dropdown menu to quickly switch data sources
 
-You can also right-click `ModelMeter.app` in Finder and choose **Open**, then confirm the same security prompt.
+### Desktop Integration
+- **Always Visible**: Stays on desktop layer for quick viewing
+- **Keyboard Shortcut**: `Command + U` to toggle front/desktop layer
+- **Menu Bar Icon**: Click to quickly toggle display state
 
-ModelMeter needs access to local Codex data under `~/.codex/`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
+### Internationalization & Themes
+- **Bilingual**: Chinese/English interface, manual switch
+- **Appearance Mode**: Auto/Light/Dark, follows system or manual setting
+
+## Feature Details
+
+### Model Price Support
+
+| Provider | Model Examples | Currency | Input Price | Cache Price | Output Price |
+|----------|----------------|----------|-------------|-------------|--------------|
+| OpenAI | gpt-5.4, gpt-5.4-mini | USD | $2.50 | $0.25 | $15.00 |
+| MimoCode | mimo-auto, mimo-v2.5 | CNY | ¥2.00 | ¥0.50 | ¥8.00 |
+| DeepSeek | deepseek-v4-pro | CNY | ¥4.00 | ¥1.00 | ¥16.00 |
+| Qwen | qwen3.7-plus, qwen3.7-max | CNY | ¥0.80 | ¥0.20 | ¥4.00 |
+| GLM | glm-5.2 | CNY | ¥2.00 | ¥0.50 | ¥8.00 |
+
+### Output Speed Statistics
+
+Average output speed calculated from database (tokens/second):
+
+| Model | Average Speed |
+|-------|---------------|
+| qwen3.7-max | ~40 tokens/s |
+| deepseek-v4-pro | ~35 tokens/s |
+| qwen3.7-plus | ~28 tokens/s |
+| mimo-v2.5 | ~25 tokens/s |
+| gpt-5.4 | ~13 tokens/s |
+
+## Keyboard Shortcuts & Operations
+
+- `Command + U`: Toggle between desktop and front layer
+- Menu bar icon: Same as `Command + U`
+- Top appearance toggle: Switch between auto/light/dark modes
+- Top `中 | EN`: Switch Chinese/English interface
+- Top-right refresh button: Refresh all data immediately
+- Top-right toggle button: Switch front/desktop layer
+- Top-right close button: Quit ModelMeter
+- Drag widget background: Move widget position
+- Click model row: View detailed statistics for that model
+
+## Installation
+
+### Download from GitHub Release
+
+- Apple Silicon: `ModelMeter-<version>-mac-arm64.dmg`
+- Intel: `ModelMeter-<version>-mac-x86_64.dmg`
+
+1. Open the DMG
+2. Drag `ModelMeter.app` to the `Applications` folder
+3. Open ModelMeter from `Applications`
+4. Follow the **First Install: Privacy & Security** steps below
+
+### First Install: Privacy & Security
+
+ModelMeter is distributed via GitHub Release DMG packages, not through the Mac App Store. On first launch, macOS may block it and require manual approval:
+
+1. Open `ModelMeter.app` once. If the system says it can't be opened, cancel the dialog
+2. Open **System Settings > Privacy & Security**
+3. In the **Security** section, find `ModelMeter.app` and click **Open Anyway**
+4. Confirm with Touch ID or password, then click **Open**
+
+You can also right-click `ModelMeter.app` in Finder, choose **Open**, and confirm the security prompt.
 
 ## Requirements
 
-- macOS 14 or later.
-- A local Codex installation.
-- A signed-in Codex account for quota data.
-- Codex must have been used at least once so `~/.codex/state_5.sqlite` exists.
-- Xcode Command Line Tools for building from source.
+- macOS 14 or later
+- At least one supported AI coding tool installed (Codex, MimoCode, etc.)
+- Logged in to the relevant account for quota information to display
+- Xcode Command Line Tools required for building from source
 
-## Build From Source
+## Building from Source
 
 ```sh
 make build
 ```
 
-Run the app:
+Run:
 
 ```sh
 make run
@@ -71,19 +133,19 @@ Install to `/Applications`:
 make install
 ```
 
-Inspect the data source output:
+Check local data source output:
 
 ```sh
 make probe
 ```
 
-## Package A DMG
+## Packaging DMG
 
 ```sh
 make release
 ```
 
-`make release` builds a DMG for the current build machine architecture. You can also build explicit Mac architectures:
+`make release` outputs an installer for the current build machine's architecture. You can also explicitly package for a specific architecture:
 
 ```sh
 make release-arm64
@@ -91,44 +153,73 @@ make release-intel
 make release-all
 ```
 
-Release artifacts are written to `dist/`, for example:
+Output goes to `dist/`, for example:
 
 ```text
-dist/ModelMeter-0.2.0-mac-arm64.dmg
-dist/ModelMeter-0.2.0-mac-arm64.dmg.sha256
-dist/ModelMeter-0.2.0-mac-x86_64.dmg
-dist/ModelMeter-0.2.0-mac-x86_64.dmg.sha256
+dist/ModelMeter-0.3.0-mac-arm64.dmg
+dist/ModelMeter-0.3.0-mac-arm64.dmg.sha256
+dist/ModelMeter-0.3.0-mac-x86_64.dmg
+dist/ModelMeter-0.3.0-mac-x86_64.dmg.sha256
 ```
 
-For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).
+Developer ID signing and Apple notarization workflow: see [DISTRIBUTION.md](DISTRIBUTION.md).
 
 ## Data Sources
 
-- Account and quota: `codex app-server` JSON-RPC methods `account/read`, `account/rateLimits/read`, and `account/usage/read`.
-- Local token totals: `~/.codex/state_5.sqlite`.
-- Detailed token splits: `token_count` events in `~/.codex/sessions/**/rollout-*.jsonl` and `~/.codex/archived_sessions/*.jsonl`.
-- Today's board: unarchived and archived Codex threads in the local SQLite database.
-- Scheduled tasks: enabled automation metadata under `~/.codex/automations/**/automation.toml`.
+### Codex
+- Account & quota: `codex app-server` endpoints (`account/read`, `account/rateLimits/read`, `account/usage/read`)
+- Local token totals: `~/.codex/state_5.sqlite`
+- Detailed token breakdown: `~/.codex/sessions/**/rollout-*.jsonl`
+- Task board: Unarchived and today-archived Codex threads from local SQLite
+- Scheduled tasks: `~/.codex/automations/**/automation.toml`
 
-Current Codex quota APIs expose rolling-window percentages and reset times, not absolute account quota sizes. See [RESEARCH.md](RESEARCH.md) for the data model and fallback behavior.
+### MimoCode
+- Usage data: `~/.local/share/mimocode/mimocode.db`
+- Models and providers: Extracted from `message` table's `data` JSON
+- Throughput calculation: Based on `time.created` and `time.completed` fields
+
+### Other Data Sources
+- Claude Code: `~/.claude/state.db`
+- Cursor: `~/.cursor/state.vscsqlite`
+- Windsurf: `~/.codeium/windsurf/state.vscsqlite`
+
+## Project Structure
+
+```
+Sources/CodexUsageWidget/
+├── main.swift          # Entry point, AppDelegate, AppKit containers
+├── Models.swift        # Data model definitions
+├── Providers.swift     # Data source reading, UsageStore
+├── Views.swift         # All SwiftUI view components
+└── Utils.swift         # Utility functions, formatting, JSON handling
+```
 
 ## FAQ
 
 ### Is ModelMeter an official OpenAI product?
 
-No. ModelMeter is an unofficial local macOS utility for reading local Codex app-server responses and local `~/.codex/` data.
+No. ModelMeter is an unofficial local macOS utility for reading local data from multiple AI coding tools.
 
-### Does ModelMeter upload my Codex threads or usage data?
+### Does ModelMeter upload my data?
 
-No. ModelMeter reads Codex quota, local SQLite usage, and automation metadata locally. It does not upload that data to a third-party service.
+No. ModelMeter reads data locally only. It does not upload any usage, thread, or account data to third-party services.
 
-### Why does ModelMeter show remaining percentage instead of absolute quota?
+### Which AI coding tools are supported?
 
-The current local Codex API exposes rolling-window usage percentages and reset times, not absolute quota sizes. ModelMeter therefore shows remaining percentages for the 5-hour and 7-day windows.
+Currently supported:
+- OpenAI Codex
+- MimoCode
+- Claude Code (coming soon)
+- Cursor (coming soon)
+- Windsurf (coming soon)
 
-### Does ModelMeter support Intel Macs?
+### Why do some models show $0.00 cost?
 
-Yes. Intel Macs should use `ModelMeter-<version>-mac-x86_64.dmg`. From source, package it with `make release-intel`, or override `TARGET_TRIPLE="x86_64-apple-macos14.0"` from a compatible toolchain.
+This is because the pricing information for that model hasn't been added yet. ModelMeter shows estimated costs, and models with actual pricing will display accurate amounts.
+
+### Does it support Intel Macs?
+
+Yes. Intel Macs should download `ModelMeter-<version>-mac-x86_64.dmg`. Build from source with `make release-intel`.
 
 ## License
 

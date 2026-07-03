@@ -227,6 +227,7 @@ struct LocalUsage: Equatable {
     let threadCount: Int
     let lastUpdatedAt: Date?
     let dailyBuckets: [DailyTokenBucket]
+    let sevenDayModelBuckets: [String: [DailyTokenBucket]]
     let recentThreads: [LocalThread]
     let todayModelUsage: [ModelUsageItem]
     let sevenDayModelUsage: [ModelUsageItem]
