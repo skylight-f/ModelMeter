@@ -294,6 +294,7 @@ enum TaskColumnKind: String, Equatable, Codable {
 
 struct TaskItem: Identifiable, Equatable, Codable {
     let id: String
+    let rawThreadId: String
     let code: String
     let title: String
     let detail: String
@@ -366,6 +367,23 @@ struct UsageSnapshot: Equatable, Codable {
             local: local,
             taskBoard: taskBoard,
             messages: messages
+        )
+    }
+
+    func merging(with fallback: UsageSnapshot) -> UsageSnapshot {
+        UsageSnapshot(
+            provider: provider,
+            refreshedAt: refreshedAt,
+            account: account ?? fallback.account,
+            limitId: limitId ?? fallback.limitId,
+            limitName: limitName ?? fallback.limitName,
+            primary: primary ?? fallback.primary,
+            secondary: secondary ?? fallback.secondary,
+            credits: credits ?? fallback.credits,
+            cloudLifetimeTokens: cloudLifetimeTokens ?? fallback.cloudLifetimeTokens,
+            local: local ?? fallback.local,
+            taskBoard: taskBoard ?? fallback.taskBoard,
+            messages: messages.isEmpty ? fallback.messages : messages
         )
     }
 

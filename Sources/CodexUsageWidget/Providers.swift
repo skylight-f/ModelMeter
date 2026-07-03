@@ -134,6 +134,20 @@ final class UsageStore: ObservableObject {
         self.exportPaths = Self.loadExportPaths()
         self.snapshotCache[provider] = self.snapshot
         discoverProviders()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePreferencesDidChange),
+            name: .modelMeterPreferencesDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func handlePreferencesDidChange() {
+        let newProvider = UsageProvider.stored()
+        if newProvider != provider {
+            provider = newProvider
+            refresh()
+        }
     }
 
     func discoverProviders() {
@@ -224,12 +238,13 @@ final class UsageStore: ObservableObject {
             let workspaceHints = snapshot.local?.recentThreads.map(\.cwd) ?? []
             let promptRegistry = CodexUsageReader.loadPromptRegistry(workspaceHints: workspaceHints)
             DispatchQueue.main.async {
-                if snapshot.hasPersistableContent {
-                    AgentDeskDatabase.shared.saveUsageSnapshot(snapshot)
+                let cached = self.snapshotCache[provider]
+                    ?? AgentDeskDatabase.shared.loadUsageSnapshot(provider: provider)
+                let merged = cached.map { snapshot.merging(with: $0) } ?? snapshot
+                if merged.hasPersistableContent {
+                    AgentDeskDatabase.shared.saveUsageSnapshot(merged)
                 }
-                self.snapshotCache[provider] = snapshot.hasPersistableContent
-                    ? snapshot
-                    : (self.snapshotCache[provider] ?? AgentDeskDatabase.shared.loadUsageSnapshot(provider: provider) ?? snapshot)
+                self.snapshotCache[provider] = snapshot.hasPersistableContent ? merged : (cached ?? snapshot)
                 if self.provider == provider {
                     self.snapshot = self.snapshotCache[provider] ?? snapshot
                 }
@@ -1403,7 +1418,6 @@ final class CodexUsageReader {
 
         var activeItems: [TaskItem] = []
         var pendingItems: [TaskItem] = []
-        var doneItems: [TaskItem] = []
 
         if let dbPath = firstExistingPath([
             NSHomeDirectory() + "/.codex/state_5.sqlite",
@@ -1427,15 +1441,6 @@ final class CodexUsageReader {
             LIMIT 24;
             """
 
-            let archivedTodayQuery = """
-            SELECT id, title, preview, cwd, tokens_used AS tokens, COALESCE(archived_at, updated_at) AS updatedAt, model
-            FROM threads
-            WHERE archived = 1
-              AND COALESCE(archived_at, updated_at) >= \(Int(dayStart.timeIntervalSince1970))
-            ORDER BY COALESCE(archived_at, updated_at) DESC
-            LIMIT 12;
-            """
-
             let todayThreads = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: todayThreadsQuery)
             for object in todayThreads {
                 let updatedAt = dateFromEpoch(object["recencyAt"]) ?? dateFromEpoch(object["updatedAt"])
@@ -1447,10 +1452,6 @@ final class CodexUsageReader {
                     pendingItems.append(item)
                 }
             }
-
-            doneItems = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: archivedTodayQuery).map { object in
-                makeThreadTaskItem(object: object, updatedAt: dateFromEpoch(object["updatedAt"]), kind: .done)
-            }
         } else {
             messages.append("任务看板未找到 SQLite 数据源")
         }
@@ -1458,10 +1459,8 @@ final class CodexUsageReader {
         let scheduledItems = readAutomationTasks()
 
         return TaskBoard(refreshedAt: Date(), columns: [
-            TaskColumn(id: .active, title: "进行中", count: activeItems.count, items: Array(activeItems.prefix(3))),
-            TaskColumn(id: .pending, title: "待处理", count: pendingItems.count, items: Array(pendingItems.prefix(3))),
-            TaskColumn(id: .scheduled, title: "定时", count: scheduledItems.count, items: Array(scheduledItems.prefix(3))),
-            TaskColumn(id: .done, title: "完成", count: doneItems.count, items: Array(doneItems.prefix(3)))
+            TaskColumn(id: .active, title: "进行中", count: activeItems.count, items: Array(activeItems.prefix(5))),
+            TaskColumn(id: .scheduled, title: "定时", count: scheduledItems.count, items: Array(scheduledItems.prefix(3)))
         ])
     }
 
@@ -1492,6 +1491,7 @@ final class CodexUsageReader {
 
         return TaskItem(
             id: rawId + kind.rawValue,
+            rawThreadId: rawId,
             code: String(code),
             title: title,
             detail: detailParts.joined(separator: " · "),
@@ -1522,6 +1522,7 @@ final class CodexUsageReader {
 
             items.append(TaskItem(
                 id: "automation-" + id,
+                rawThreadId: id,
                 code: "AUTO-" + id.prefix(4).uppercased(),
                 title: name,
                 detail: detail,
@@ -1818,15 +1819,6 @@ final class CodexUsageReader {
         LIMIT 24;
         """
 
-        let archivedQuery = """
-        SELECT id, title, directory, COALESCE(time_archived, time_updated) AS updatedAt, time_archived AS archivedAt
-        FROM session
-        WHERE time_archived IS NOT NULL
-          AND time_archived >= \(dayStartMs)
-        ORDER BY time_archived DESC
-        LIMIT 12;
-        """
-
         var activeItems: [TaskItem] = []
         var pendingItems: [TaskItem] = []
 
@@ -1841,15 +1833,9 @@ final class CodexUsageReader {
             }
         }
 
-        let doneItems = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: archivedQuery).map { object in
-            makeMimoSessionTaskItem(object: object, updatedAt: dateFromEpoch(object["updatedAt"]), kind: .done)
-        }
-
         return TaskBoard(refreshedAt: Date(), columns: [
-            TaskColumn(id: .active, title: "进行中", count: activeItems.count, items: Array(activeItems.prefix(3))),
-            TaskColumn(id: .pending, title: "待处理", count: pendingItems.count, items: Array(pendingItems.prefix(3))),
-            TaskColumn(id: .scheduled, title: "定时", count: 0, items: []),
-            TaskColumn(id: .done, title: "完成", count: doneItems.count, items: Array(doneItems.prefix(3)))
+            TaskColumn(id: .active, title: "进行中", count: activeItems.count, items: Array(activeItems.prefix(5))),
+            TaskColumn(id: .scheduled, title: "定时", count: 0, items: [])
         ])
     }
 
@@ -1872,6 +1858,7 @@ final class CodexUsageReader {
 
         return TaskItem(
             id: rawId + kind.rawValue,
+            rawThreadId: rawId,
             code: String(code),
             title: normalizedTitle(object["title"] as? String, fallback: nil),
             detail: shortWorkspaceName(object["directory"] as? String ?? ""),

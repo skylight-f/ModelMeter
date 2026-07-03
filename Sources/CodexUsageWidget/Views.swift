@@ -103,6 +103,7 @@ struct UsageWidgetView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var language = WidgetLanguage.storedOrAutomatic()
     @State private var themeMode = WidgetThemeMode.storedOrAutomatic()
+    @State private var displayCurrency = loadDisplayCurrency()
     @State private var selectedModelUsagePeriod: ModelUsagePeriod = .today
     @State private var trendSelectedModels: Set<String>? = nil
     @State private var trendFilterOpen = false
@@ -156,7 +157,6 @@ struct UsageWidgetView: View {
                     }
                     usageOverviewSection
                     modelUsageCardSection
-                    taskBoardSection
                     usageTrendSection
                 }
                 .padding(.bottom, 2)
@@ -173,6 +173,7 @@ struct UsageWidgetView: View {
     private func reloadPresentationPreferences() {
         language = WidgetLanguage.storedOrAutomatic()
         themeMode = WidgetThemeMode.storedOrAutomatic()
+        displayCurrency = loadDisplayCurrency()
     }
 
     private var header: some View {
@@ -329,7 +330,6 @@ struct UsageWidgetView: View {
             }
 
             VStack(alignment: .leading, spacing: 13) {
-                let dominantCurrency = loadDisplayCurrency()
                 HStack(spacing: 10) {
                     DetailedTokenMetricCard(
                         title: language.text("今日", "Today"),
@@ -337,7 +337,7 @@ struct UsageWidgetView: View {
                         usage: snapshot.local?.detailedUsage?.today,
                         fallbackTokens: snapshot.local?.todayTokens,
                         language: language,
-                        currency: dominantCurrency
+                        currency: displayCurrency
                     )
                     DetailedTokenMetricCard(
                         title: language.text("近 7 天", "Last 7 days"),
@@ -345,7 +345,7 @@ struct UsageWidgetView: View {
                         usage: snapshot.local?.detailedUsage?.sevenDay,
                         fallbackTokens: snapshot.local?.sevenDayTokens,
                         language: language,
-                        currency: dominantCurrency
+                        currency: displayCurrency
                     )
                     DetailedTokenMetricCard(
                         title: language.text("30天", "30 days"),
@@ -353,7 +353,7 @@ struct UsageWidgetView: View {
                         usage: snapshot.local?.detailedUsage?.thirtyDay,
                         fallbackTokens: snapshot.local?.thirtyDayTokens,
                         language: language,
-                        currency: dominantCurrency
+                        currency: displayCurrency
                     )
                     DetailedTokenMetricCard(
                         title: language.text("累计", "Lifetime"),
@@ -361,11 +361,11 @@ struct UsageWidgetView: View {
                         usage: snapshot.local?.detailedUsage?.lifetime,
                         fallbackTokens: snapshot.local?.lifetimeTokens,
                         language: language,
-                        currency: dominantCurrency
+                        currency: displayCurrency
                     )
                 }
 
-                WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language, currency: dominantCurrency)
+                WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language, currency: displayCurrency)
             }
             .frame(maxWidth: .infinity)
         }
@@ -374,19 +374,7 @@ struct UsageWidgetView: View {
         .sectionBackground()
     }
 
-    private var taskBoardSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: language.text("今日任务看板", "Today's task board"), detail: taskBoardSummary)
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(taskBoardColumns) { column in
-                    TaskBoardColumnView(column: column, language: language)
-                        .frame(maxWidth: .infinity, alignment: .top)
-                }
-            }
-        }
-        .padding(12)
-        .sectionBackground()
-    }
+
 
     private var modelUsageCardSection: some View {
         guard !(snapshot.local?.todayModelUsage.isEmpty ?? true) else { return AnyView(EmptyView()) }
@@ -551,22 +539,7 @@ struct UsageWidgetView: View {
         snapshot.account?.planType?.uppercased() ?? snapshot.provider.displayName.uppercased()
     }
 
-    private var taskBoardSummary: String {
-        guard let board = snapshot.taskBoard else { return language.text("读取中", "Loading") }
-        return language.text(
-            "\(board.totalCount) 事项 · \(timeOnly(board.refreshedAt, language: language))",
-            "\(board.totalCount) items · \(timeOnly(board.refreshedAt, language: language))"
-        )
-    }
 
-    private var taskBoardColumns: [TaskColumn] {
-        snapshot.taskBoard?.columns ?? [
-            TaskColumn(id: .active, title: localizedTaskColumnTitle(.active, language: language), count: 0, items: []),
-            TaskColumn(id: .pending, title: localizedTaskColumnTitle(.pending, language: language), count: 0, items: []),
-            TaskColumn(id: .scheduled, title: localizedTaskColumnTitle(.scheduled, language: language), count: 0, items: []),
-            TaskColumn(id: .done, title: localizedTaskColumnTitle(.done, language: language), count: 0, items: [])
-        ]
-    }
 
     private var currentModelUsage: [ModelUsageItem] {
         switch selectedModelUsagePeriod {
@@ -4631,9 +4604,6 @@ struct SettingsView: View {
         .preferredColorScheme(themeMode.preferredColorScheme)
         .onAppear {
             themeMode.applyAppearance()
-            reloadSettingsPreferences()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .modelMeterPreferencesDidChange)) { _ in
             reloadSettingsPreferences()
         }
         .frame(minWidth: 600, idealWidth: 720, minHeight: 440)

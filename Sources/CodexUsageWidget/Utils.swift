@@ -647,7 +647,7 @@ final class AgentDeskDatabase {
 
         let sql = """
         INSERT INTO app_settings (key, value_type, string_value, real_value, integer_value, updated_at)
-        VALUES (?, ?, NULL, NULL, NULL, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET
             value_type = excluded.value_type,
             string_value = excluded.string_value,
@@ -661,6 +661,9 @@ final class AgentDeskDatabase {
 
         sqlite3_bind_text(statement, 1, key, -1, SQLITE_TRANSIENT)
         sqlite3_bind_text(statement, 2, type, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_null(statement, 3)
+        sqlite3_bind_null(statement, 4)
+        sqlite3_bind_null(statement, 5)
         bindValue(statement)
         sqlite3_bind_double(statement, 6, Date().timeIntervalSince1970)
         _ = sqlite3_step(statement)

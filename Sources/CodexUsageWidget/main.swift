@@ -10,17 +10,28 @@ final class DraggableHostingView<Content: View>: NSHostingView<Content> {
 
 final class GlassHostingContainer<Content: View>: NSView {
     private let cornerRadius: CGFloat
+    private let draggable: Bool
 
-    init(rootView: Content, cornerRadius: CGFloat) {
+    init(rootView: Content, cornerRadius: CGFloat, draggable: Bool = true) {
         self.cornerRadius = cornerRadius
+        self.draggable = draggable
         super.init(frame: .zero)
 
         wantsLayer = true
         layer?.cornerRadius = cornerRadius
 
-        let host = DraggableHostingView(rootView: rootView)
-        host.frame = bounds
-        host.autoresizingMask = [.width, .height]
+        let host: NSView
+        if draggable {
+            let d = DraggableHostingView(rootView: rootView)
+            d.frame = bounds
+            d.autoresizingMask = [.width, .height]
+            host = d
+        } else {
+            let h = NSHostingView(rootView: rootView)
+            h.frame = bounds
+            h.autoresizingMask = [.width, .height]
+            host = h
+        }
 
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
@@ -48,7 +59,7 @@ final class GlassHostingContainer<Content: View>: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override var mouseDownCanMoveWindow: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { draggable }
 }
 
 final class DesktopWidgetWindow: NSPanel {
@@ -264,33 +275,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func openSettings() {
         WidgetThemeMode.storedOrAutomatic().applyAppearance()
 
-        if settingsWindow == nil {
-            let settingsView = SettingsView(
-                store: store,
-                languageChanged: { [weak self] in
-                    self?.refreshStatusItemLocalization()
-                },
-                themeChanged: { [weak self] in
-                    self?.settingsWindow?.title = WidgetLanguage.storedOrAutomatic().text("设置", "Settings")
-                }
-            )
-            let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 720, height: 460),
-                styleMask: [.titled, .closable, .resizable],
-                backing: .buffered,
-                defer: false
-            )
-            panel.title = WidgetLanguage.storedOrAutomatic().text("设置", "Settings")
-            panel.contentView = GlassHostingContainer(rootView: settingsView, cornerRadius: 18)
-            panel.isReleasedWhenClosed = false
-            panel.minSize = CGSize(width: 600, height: 440)
-            panel.delegate = self
-            panel.identifier = NSUserInterfaceItemIdentifier("AgentDeskSettingsWindow")
-            if !restoreFrame(for: panel, storageKey: WindowStorageKey.settingsFrame) {
-                panel.center()
+        settingsWindow?.close()
+        let settingsView = SettingsView(
+            store: store,
+            languageChanged: { [weak self] in
+                self?.refreshStatusItemLocalization()
+            },
+            themeChanged: { [weak self] in
+                self?.settingsWindow?.title = WidgetLanguage.storedOrAutomatic().text("设置", "Settings")
             }
-            settingsWindow = panel
+        )
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 460),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = WidgetLanguage.storedOrAutomatic().text("设置", "Settings")
+        panel.contentView = GlassHostingContainer(rootView: settingsView, cornerRadius: 18, draggable: false)
+        panel.isReleasedWhenClosed = false
+        panel.minSize = CGSize(width: 600, height: 440)
+        panel.delegate = self
+        panel.identifier = NSUserInterfaceItemIdentifier("AgentDeskSettingsWindow")
+        if !restoreFrame(for: panel, storageKey: WindowStorageKey.settingsFrame) {
+            panel.center()
         }
+        settingsWindow = panel
 
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
