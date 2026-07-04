@@ -589,7 +589,7 @@ final class UsageStore: ObservableObject {
         persistExportPaths()
     }
 
-    private func persistAgentProfiles() {
+    func persistAgentProfiles() {
         AgentDeskDatabase.shared.saveAgentProfiles(agentProfiles)
     }
 

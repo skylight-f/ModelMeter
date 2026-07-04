@@ -967,7 +967,7 @@ struct PromptStudioView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Model Studio")
                         .font(.system(size: 22, weight: .semibold, design: .rounded))
-                    Text(language.text("统一管理多工具 Agent 的提示词资产、同步配置与发布出口。", "Manage shared prompt assets, sync profiles, and publish flows for multi-tool agents."))
+                    Text(language.text("管理提示词资产、配置 Agent、导出到目标工具。", "Manage prompts, configure agents, export to target tools."))
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
@@ -994,141 +994,506 @@ struct PromptStudioView: View {
                 .iconButtonStyle()
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help(language.text("刷新 Prompt 资产", "Refresh prompt assets"))
+                .help(language.text("刷新", "Refresh"))
             }
 
             HStack(alignment: .top, spacing: 12) {
-                studioSidebar
-                Group {
-                    switch selectedSection {
-                    case .overview:
-                        overviewContent
-                    case .promptLibrary:
-                        libraryContent
-                    case .syncProfiles:
-                        profileContent
-                    case .publish:
-                        publishContent
-                    case .settings:
-                        settingsContent
-                    }
-                }
+                studioLeftPanel
+                    .frame(width: 240)
+                studioRightPanel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .padding(16)
         .frame(minWidth: 980, minHeight: 640, alignment: .topLeading)
     }
 
-    private var studioSidebar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            StudioPanelHeader(
-                title: language.text("导航", "Navigation"),
-                detail: language.text("Model Studio", "Model Studio")
-            )
+    @State private var leftPanelTab: LeftPanelTab = .assets
 
-            StudioSidebarButton(
-                title: language.text("总览", "Overview"),
-                detail: language.text("Studio 结构与状态", "Studio structure and status"),
-                systemName: "square.grid.2x2",
-                isSelected: selectedSection == .overview
-            ) {
-                selectedSection = .overview
+    enum LeftPanelTab: String, CaseIterable {
+        case assets
+        case profiles
+    }
+
+    private var studioLeftPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                ForEach(LeftPanelTab.allCases, id: \.self) { tab in
+                    Button {
+                        leftPanelTab = tab
+                    } label: {
+                        Text(tab == .assets ? language.text("资产", "Assets") : language.text("Profile", "Profiles"))
+                            .font(.system(size: 11, weight: leftPanelTab == tab ? .semibold : .medium))
+                            .foregroundStyle(leftPanelTab == tab ? .primary : .secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(
+                                leftPanelTab == tab ? WidgetPalette.brandPrimary.opacity(0.1) : Color.clear
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .background(WidgetPalette.surfaceTrack)
 
-            StudioSidebarButton(
-                title: language.text("Prompt 资产", "Prompt Assets"),
-                detail: language.text("浏览 Prompt / Skill / Config", "Browse prompt, skill, and config assets"),
-                systemName: "text.document",
-                isSelected: selectedSection == .promptLibrary
-            ) {
-                selectedSection = .promptLibrary
+            if leftPanelTab == .assets {
+                assetListPanel
+            } else {
+                profileListPanel
             }
-
-            StudioSidebarButton(
-                title: language.text("同步配置", "Sync Profiles"),
-                detail: language.text("为不同工具编排共享 Agent", "Compose shared agents for different tools"),
-                systemName: "person.crop.rectangle.stack",
-                isSelected: selectedSection == .syncProfiles
-            ) {
-                selectedSection = .syncProfiles
-            }
-
-            StudioSidebarButton(
-                title: language.text("发布与同步", "Publish & Sync"),
-                detail: language.text("导出到目标工具", "Export to target tools"),
-                systemName: "arrow.triangle.branch",
-                isSelected: selectedSection == .publish
-            ) {
-                selectedSection = .publish
-            }
-
-            StudioSidebarButton(
-                title: language.text("Studio 设置", "Studio Settings"),
-                detail: language.text("目录、模板与策略", "Destinations, templates, and policies"),
-                systemName: "slider.horizontal.3",
-                isSelected: selectedSection == .settings
-            ) {
-                selectedSection = .settings
-            }
-
-            Spacer(minLength: 0)
         }
-        .padding(12)
-        .frame(width: 220)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .sectionBackground()
     }
 
-    private var overviewContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                PromptSummaryStatRow(
-                    title: language.text("Prompt 资产", "Prompt assets"),
-                    value: "\(store.promptRegistry.assets.count)",
-                    detail: language.text("包含 Skill / Prompt / Config", "Including skills, prompts, and config")
+    private var assetListPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            compactSearchField(
+                placeholderZh: "搜索资产",
+                placeholderEn: "Search assets",
+                text: $promptSearchText,
+                width: 216
+            )
+
+            HStack(spacing: 4) {
+                CompactFilterPicker(
+                    title: language.text("类型", "Type"),
+                    selection: $selectedPromptKind,
+                    options: PromptAssetKind.allCases,
+                    label: { kind in localizedPromptKind(kind, language: language) }
                 )
-                PromptSummaryStatRow(
-                    title: language.text("同步 Profile", "Sync profiles"),
-                    value: "\(store.agentProfiles.count)",
-                    detail: language.text("可为 Codex / MimoCode 输出", "Ready for Codex and MimoCode")
-                )
-                PromptSummaryStatRow(
-                    title: language.text("来源数", "Sources"),
-                    value: "\(Set(store.promptRegistry.assets.map(\.source)).count)",
-                    detail: language.text("聚合本地与工作区内容", "Aggregated from local and workspace sources")
+                CompactFilterPicker(
+                    title: language.text("排序", "Sort"),
+                    selection: Binding(
+                        get: { sortMode },
+                        set: { sortMode = $0 ?? .recent }
+                    ),
+                    options: PromptAssetSortMode.allCases,
+                    label: { mode in
+                        language.text(mode == .recent ? "最近" : mode == .name ? "名称" : "路径",
+                                     mode == .recent ? "Recent" : mode == .name ? "Name" : "Path")
+                    }
                 )
             }
 
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(language.text("当前能力", "Current capabilities"))
-                        .font(.system(size: 12, weight: .semibold))
-                    OverviewChecklistRow(text: language.text("浏览和编辑本地 Prompt / Skill", "Browse and edit local prompts and skills"))
-                    OverviewChecklistRow(text: language.text("将多个资产编组成共享 Agent Profile", "Compose multiple assets into shared agent profiles"))
-                    OverviewChecklistRow(text: language.text("生成 Codex / MimoCode 版本预览", "Generate Codex and MimoCode prompt previews"))
-                    OverviewChecklistRow(text: language.text("为后续发布同步预留统一出口", "Reserve a unified entry for future publish and sync flows"))
-                    Spacer(minLength: 0)
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 2) {
+                    ForEach(filteredPromptAssets) { asset in
+                        Button {
+                            selectedPromptAssetID = asset.id
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: asset.kind == .skill ? "wrench" : asset.kind == .prompt ? "text.document" : "gearshape")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 12)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(asset.name)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .lineLimit(1)
+                                        .foregroundStyle(.primary)
+                                    Text(localizedPromptSource(asset.source, language: language))
+                                        .font(.system(size: 8, weight: .medium))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer(minLength: 2)
+                                if asset.id == selectedPromptAssetID {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 8, weight: .bold))
+                                        .foregroundStyle(WidgetPalette.brandPrimary)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(
+                                asset.id == selectedPromptAssetID ? WidgetPalette.brandPrimary.opacity(0.08) : Color.clear
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .sectionBackground()
+            }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(language.text("建议工作流", "Suggested workflow"))
-                        .font(.system(size: 12, weight: .semibold))
-                    OverviewStepRow(index: "1", text: language.text("先在 Prompt 资产里整理可复用的 Skill 与规则块", "Start by organizing reusable skills and rule blocks in Prompt Assets"))
-                    OverviewStepRow(index: "2", text: language.text("在同步配置里建立不同角色的 Agent Profile", "Create role-specific agent profiles in Sync Profiles"))
-                    OverviewStepRow(index: "3", text: language.text("检查 Codex / MimoCode 的导出预览差异", "Review the export differences between Codex and MimoCode"))
-                    OverviewStepRow(index: "4", text: language.text("后续在发布与同步里写入真实目标目录", "Later publish them into real tool destinations from Publish & Sync"))
-                    Spacer(minLength: 0)
+            Text("\(filteredPromptAssets.count) \(language.text("个资产", "assets"))")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+        }
+        .padding(8)
+    }
+
+    private var profileListPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(language.text("Agent Profiles", "Agent Profiles"))
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer(minLength: 4)
+                Button {
+                    let profile = AgentProfile.starter(name: "Profile \(store.agentProfiles.count + 1)")
+                    store.agentProfiles.insert(profile, at: 0)
+                    store.persistAgentProfiles()
+                    selectedProfileID = profile.id
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(WidgetPalette.brandPrimary)
                 }
-                .padding(12)
-                .frame(width: 320)
-                .frame(maxHeight: .infinity, alignment: .topLeading)
-                .sectionBackground()
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 2) {
+                    ForEach(store.agentProfiles) { profile in
+                        Button {
+                            selectedProfileID = profile.id
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "person.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(WidgetPalette.brandSecondary)
+                                    .frame(width: 16)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(profile.name)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .lineLimit(1)
+                                        .foregroundStyle(.primary)
+                                    Text("\(profile.selectedAssetIDs.count) \(language.text("个资产", "assets"))")
+                                        .font(.system(size: 8, weight: .medium))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer(minLength: 2)
+                                if profile.id == selectedProfileID {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 8, weight: .bold))
+                                        .foregroundStyle(WidgetPalette.brandPrimary)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(
+                                profile.id == selectedProfileID ? WidgetPalette.brandPrimary.opacity(0.08) : Color.clear
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            Text("\(store.agentProfiles.count) \(language.text("个 Profile", "profiles"))")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+        }
+        .padding(.bottom, 8)
+    }
+
+    private var studioRightPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if leftPanelTab == .assets, let asset = effectiveSelectedPromptAsset {
+                assetDetailSection(asset: asset)
+            } else if leftPanelTab == .profiles, let profile = effectiveSelectedProfile {
+                profileDetailSection(profile: profile)
+                publishPreviewSection(profile: profile)
+            } else {
+                emptyStateView
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sectionBackground()
+    }
+
+    private func assetDetailSection(asset: PromptAsset) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(asset.name)
+                        .font(.system(size: 14, weight: .semibold))
+                    HStack(spacing: 6) {
+                        Text(localizedPromptSource(asset.source, language: language))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                        Text(localizedPromptKind(asset.kind, language: language))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        if let modified = asset.modifiedAt {
+                            Text("·")
+                                .foregroundStyle(.tertiary)
+                            Text(relativeTimeText(modified, language: language))
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 6) {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(asset.content, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help(language.text("复制内容", "Copy content"))
+
+                    Button {
+                        NSWorkspace.shared.selectFile(asset.path, inFileViewerRootedAtPath: "")
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help(language.text("在 Finder 中显示", "Reveal in Finder"))
+                }
+            }
+
+            if !asset.summary.isEmpty {
+                Text(asset.summary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            ScrollView(.vertical, showsIndicators: false) {
+                Text(asset.content)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(WidgetPalette.controlFill(.light))
+                    )
+            }
+        }
+    }
+
+    private func profileDetailSection(profile: AgentProfile) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(profile.name)
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer(minLength: 8)
+                HStack(spacing: 6) {
+                    Button {
+                        let dup = AgentProfile.starter(name: "\(profile.name) Copy")
+                        store.agentProfiles.insert(dup, at: 0)
+                        store.persistAgentProfiles()
+                        selectedProfileID = dup.id
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help(language.text("复制", "Duplicate"))
+
+                    Button {
+                        store.agentProfiles.removeAll { $0.id == profile.id }
+                        store.persistAgentProfiles()
+                        selectedProfileID = store.agentProfiles.first?.id
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red.opacity(0.6))
+                    .help(language.text("删除", "Delete"))
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                CompactTextFieldRow(
+                    label: language.text("名称", "Name"),
+                    text: Binding(
+                        get: { profile.name },
+                        set: { newVal in
+                            if let idx = store.agentProfiles.firstIndex(where: { $0.id == profile.id }) {
+                                store.agentProfiles[idx].name = newVal
+                                store.persistAgentProfiles()
+                            }
+                        }
+                    )
+                )
+                CompactTextFieldRow(
+                    label: language.text("摘要", "Summary"),
+                    text: Binding(
+                        get: { profile.summary },
+                        set: { newVal in
+                            if let idx = store.agentProfiles.firstIndex(where: { $0.id == profile.id }) {
+                                store.agentProfiles[idx].summary = newVal
+                                store.persistAgentProfiles()
+                            }
+                        }
+                    )
+                )
+                CompactTextFieldRow(
+                    label: language.text("Persona", "Persona"),
+                    text: Binding(
+                        get: { profile.persona },
+                        set: { newVal in
+                            if let idx = store.agentProfiles.firstIndex(where: { $0.id == profile.id }) {
+                                store.agentProfiles[idx].persona = newVal
+                                store.persistAgentProfiles()
+                            }
+                        }
+                    ),
+                    isMultiline: true
+                )
+                CompactTextFieldRow(
+                    label: language.text("工作风格", "Working Style"),
+                    text: Binding(
+                        get: { profile.workingStyle },
+                        set: { newVal in
+                            if let idx = store.agentProfiles.firstIndex(where: { $0.id == profile.id }) {
+                                store.agentProfiles[idx].workingStyle = newVal
+                                store.persistAgentProfiles()
+                            }
+                        }
+                    ),
+                    isMultiline: true
+                )
+            }
+        }
+    }
+
+    @State private var selectedPublishTool: AgentTargetTool = .codex
+
+    private func publishPreviewSection(profile: AgentProfile) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(language.text("发布预览", "Publish Preview"))
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer(minLength: 8)
+
+                Picker("", selection: $selectedPublishTool) {
+                    Text("Codex").tag(AgentTargetTool.codex)
+                    Text("MimoCode").tag(AgentTargetTool.mimocode)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 140)
+
+                Button {
+                    let content = renderAgentProfilePrompt(profile: profile, assets: store.promptRegistry.assets, tool: selectedPublishTool)
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(content, forType: .string)
+                } label: {
+                    Label(language.text("复制", "Copy"), systemImage: "doc.on.doc")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(WidgetPalette.brandPrimary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(WidgetPalette.brandPrimary.opacity(0.1))
+                )
+
+                Button {
+                    exportProfile(profile: profile, tool: selectedPublishTool)
+                } label: {
+                    Label(language.text("一键发布", "Publish"), systemImage: "arrow.down.doc")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(WidgetPalette.statusSuccess)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(WidgetPalette.statusSuccess.opacity(0.1))
+                )
+            }
+
+            if let msg = exportSuccessMessage {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(WidgetPalette.statusSuccess)
+                    Text(msg)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(WidgetPalette.statusSuccess.opacity(0.08))
+                )
+            }
+
+            HStack(spacing: 4) {
+                Text(language.text("导出到:", "Export to:"))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                Text(suggestedExportPath(profile: profile, tool: selectedPublishTool))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            ScrollView(.vertical, showsIndicators: false) {
+                Text(renderAgentProfilePrompt(profile: profile, assets: store.promptRegistry.assets, tool: selectedPublishTool))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(WidgetPalette.controlFill(.light))
+                    )
+            }
+            .frame(height: 150)
+        }
+    }
+
+    @State private var exportSuccessMessage: String?
+
+    private func exportProfile(profile: AgentProfile, tool: AgentTargetTool) {
+        let content = renderAgentProfilePrompt(profile: profile, assets: store.promptRegistry.assets, tool: tool)
+        let exportPath = suggestedExportPath(profile: profile, tool: tool)
+        let url = URL(fileURLWithPath: exportPath)
+
+        do {
+            let dir = url.deletingLastPathComponent().path
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            exportSuccessMessage = language.text("已保存到 \(exportPath)", "Saved to \(exportPath)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                exportSuccessMessage = nil
+            }
+        } catch {
+            exportSuccessMessage = language.text("导出失败: \(error.localizedDescription)", "Export failed: \(error.localizedDescription)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                exportSuccessMessage = nil
+            }
+        }
+    }
+
+    private var emptyStateView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 28))
+                .foregroundStyle(.tertiary)
+            Text(language.text("选择左侧资产或 Profile 查看详情", "Select an asset or profile from the left to view details"))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sectionBackground()
     }
 
     private var libraryContent: some View {
@@ -2530,6 +2895,41 @@ struct CompactFilterPicker<Option: Hashable>: View {
             )
         }
         .menuStyle(.borderlessButton)
+    }
+}
+
+struct CompactTextFieldRow: View {
+    let label: String
+    @Binding var text: String
+    var isMultiline: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+            if isMultiline {
+                TextEditor(text: $text)
+                    .font(.system(size: 10))
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 40, maxHeight: 80)
+                    .padding(4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(WidgetPalette.controlFill(.light))
+                    )
+            } else {
+                TextField("", text: $text)
+                    .font(.system(size: 10))
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(WidgetPalette.controlFill(.light))
+                    )
+            }
+        }
     }
 }
 

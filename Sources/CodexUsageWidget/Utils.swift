@@ -1165,7 +1165,12 @@ func suggestedExportPath(profile: AgentProfile, tool: AgentTargetTool) -> String
         .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     let baseName = safeName.isEmpty ? "agent-profile" : safeName
     let home = NSHomeDirectory()
-    return "\(home)/Documents/ModelStudio/\(baseName)-\(tool.rawValue).md"
+    switch tool {
+    case .codex:
+        return "\(home)/.codex/skills/\(baseName).md"
+    case .mimocode:
+        return "\(home)/.agents/skills/\(baseName).md"
+    }
 }
 
 func localizedDayLabel(_ label: String, language: WidgetLanguage) -> String {
