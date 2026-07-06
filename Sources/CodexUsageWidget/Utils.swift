@@ -863,13 +863,38 @@ func normalizedModelName(_ model: String?, fallback: String) -> String {
     return String(candidate.prefix(25)) + "..."
 }
 
+private let modelUsageKeySeparator = "||provider||"
+
+func modelUsageBucketKey(model: String, provider: String?) -> String {
+    let trimmedProvider = (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedProvider.isEmpty else { return model }
+    return "\(model)\(modelUsageKeySeparator)\(trimmedProvider)"
+}
+
+func modelUsageModelName(from key: String) -> String {
+    key.components(separatedBy: modelUsageKeySeparator).first ?? key
+}
+
+func modelUsageProviderName(from key: String) -> String? {
+    let parts = key.components(separatedBy: modelUsageKeySeparator)
+    guard parts.count > 1, !parts[1].isEmpty else { return nil }
+    return parts[1]
+}
+
+func modelUsageDisplayLabel(from key: String) -> String {
+    let model = modelUsageModelName(from: key)
+    guard let provider = modelUsageProviderName(from: key) else { return model }
+    return "\(model) · \(provider)"
+}
+
 func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage], providers: [String: String] = [:], throughput: [String: Double] = [:]) -> [ModelUsageItem] {
     usageByModel.map { key, value in
-        let provider = providers[key] ?? modelProvider(from: key)
-        let price = modelTokenPrice(for: key)
+        let model = modelUsageModelName(from: key)
+        let provider = providers[key] ?? modelUsageProviderName(from: key) ?? modelProvider(from: model)
+        let price = modelTokenPrice(for: model)
         let tps = throughput[key] ?? 0
         return ModelUsageItem(
-            model: key,
+            model: model,
             provider: provider,
             tokens: value.tokens.visibleTotalTokens,
             uncachedInputTokens: value.tokens.uncachedInputTokens,

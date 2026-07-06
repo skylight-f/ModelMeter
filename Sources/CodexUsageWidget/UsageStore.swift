@@ -5,6 +5,7 @@ import Combine
 struct SessionUsageSource {
     let rolloutPath: String
     let model: String?
+    let modelProvider: String?
 }
 
 struct SessionUsageDelta {
@@ -88,8 +89,6 @@ final class UsageStore: ObservableObject {
     private static let agentProfilesStorageKey = "AgentDesk.agentProfiles"
     private static let exportPathsStorageKey = "AgentDesk.exportPaths"
     private var fullTimer: Timer?
-    private var taskBoardTimer: Timer?
-    private var isRefreshingTaskBoard = false
     private var snapshotCache: [UsageProvider: UsageSnapshot] = [:]
     private var refreshingProviders = Set<UsageProvider>()
     private var discoveryNoticeWorkItem: DispatchWorkItem?
@@ -189,14 +188,10 @@ final class UsageStore: ObservableObject {
             self?.refresh()
             self?.refreshAnalytics(period: .today)
         }
-        taskBoardTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            self?.refreshTaskBoard()
-        }
     }
 
     func stop() {
         fullTimer?.invalidate()
-        taskBoardTimer?.invalidate()
     }
 
     func refresh() {
@@ -557,29 +552,6 @@ final class UsageStore: ObservableObject {
 
     private func exportPathKey(profileID: String, tool: AgentTargetTool) -> String {
         "\(profileID)::\(tool.rawValue)"
-    }
-
-    private func refreshTaskBoard() {
-        guard !isRefreshingTaskBoard else { return }
-        isRefreshingTaskBoard = true
-        let provider = provider
-
-        DispatchQueue.global(qos: .utility).async {
-            let taskBoard = CodexUsageReader(provider: provider).loadTaskBoard()
-            DispatchQueue.main.async {
-                if let cached = self.snapshotCache[provider] {
-                    let updated = cached.replacingTaskBoard(taskBoard)
-                    self.snapshotCache[provider] = updated
-                    if updated.hasPersistableContent {
-                        AgentDeskDatabase.shared.saveUsageSnapshot(updated)
-                    }
-                }
-                if self.provider == provider {
-                    self.snapshot = self.snapshot.replacingTaskBoard(taskBoard)
-                }
-                self.isRefreshingTaskBoard = false
-            }
-        }
     }
 
     private func syncRefreshingState() {

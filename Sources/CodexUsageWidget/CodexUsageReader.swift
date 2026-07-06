@@ -259,7 +259,6 @@ final class CodexUsageReader {
         if provider == .mimocode {
             let account = readMimoAccount()
             let local = readMimoLocalUsage(messages: &messages)
-            let taskBoard = readMimoTaskBoard(messages: &messages)
 
             return UsageSnapshot(
                 provider: provider,
@@ -272,14 +271,13 @@ final class CodexUsageReader {
                 credits: nil,
                 cloudLifetimeTokens: nil,
                 local: local,
-                taskBoard: taskBoard,
+                taskBoard: nil,
                 messages: messages
             )
         }
 
         let appServer = readAppServer(messages: &messages)
         let local = readLocalUsage(messages: &messages)
-        let taskBoard = readTaskBoard(messages: &messages)
 
         return UsageSnapshot(
             provider: provider,
@@ -292,7 +290,7 @@ final class CodexUsageReader {
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
             local: local,
-            taskBoard: taskBoard,
+            taskBoard: nil,
             messages: messages
         )
     }
@@ -715,10 +713,16 @@ final class CodexUsageReader {
             guard let path = object["rolloutPath"] as? String, !path.isEmpty, seenPaths.insert(path).inserted else {
                 return nil
             }
-            if let model = object["model"] as? String, let provider = object["modelProvider"] as? String {
-                modelProviders[model] = provider
+            let model = object["model"] as? String
+            let provider = object["modelProvider"] as? String
+            if let model {
+                let modelName = normalizedModelName(model, fallback: modelTokenPrice(for: model).model)
+                let bucketKey = modelUsageBucketKey(model: modelName, provider: provider)
+                if let provider {
+                    modelProviders[bucketKey] = provider
+                }
             }
-            return SessionUsageSource(rolloutPath: path, model: object["model"] as? String)
+            return SessionUsageSource(rolloutPath: path, model: model, modelProvider: provider)
         }
 
         guard !sources.isEmpty else {
@@ -764,6 +768,7 @@ final class CodexUsageReader {
 
             let price = modelTokenPrice(for: source.model)
             let modelName = normalizedModelName(source.model, fallback: price.model)
+            let bucketKey = modelUsageBucketKey(model: modelName, provider: source.modelProvider)
             for delta in entry.deltas {
                 accumulator.add(
                     delta.tokens,
@@ -776,32 +781,32 @@ final class CodexUsageReader {
                 )
                 let rawCost = estimatedCostUSD(tokens: delta.tokens, price: price)
                 if delta.date >= dayStart {
-                    var usage = todayUsageByModel[modelName] ?? .zero
+                    var usage = todayUsageByModel[bucketKey] ?? .zero
                     usage.add(tokens: delta.tokens, costUSD: rawCost)
-                    todayUsageByModel[modelName] = usage
+                    todayUsageByModel[bucketKey] = usage
                 }
                 if delta.date >= twentyFourHourStart {
-                    var usage = twentyFourHourUsageByModel[modelName] ?? .zero
+                    var usage = twentyFourHourUsageByModel[bucketKey] ?? .zero
                     usage.add(tokens: delta.tokens, costUSD: rawCost)
-                    twentyFourHourUsageByModel[modelName] = usage
+                    twentyFourHourUsageByModel[bucketKey] = usage
                 }
                 if delta.date >= sevenDayStart {
-                    var usage = sevenDayUsageByModel[modelName] ?? .zero
+                    var usage = sevenDayUsageByModel[bucketKey] ?? .zero
                     usage.add(tokens: delta.tokens, costUSD: rawCost)
-                    sevenDayUsageByModel[modelName] = usage
+                    sevenDayUsageByModel[bucketKey] = usage
                     let dayKey = dayFormatter.string(from: delta.date)
-                    var byDay = sevenDayTokensByModelAndDay[modelName] ?? [:]
+                    var byDay = sevenDayTokensByModelAndDay[bucketKey] ?? [:]
                     byDay[dayKey, default: 0] += delta.tokens.visibleTotalTokens
-                    sevenDayTokensByModelAndDay[modelName] = byDay
+                    sevenDayTokensByModelAndDay[bucketKey] = byDay
                 }
                 if delta.date >= thirtyDayStart {
-                    var usage = thirtyDayUsageByModel[modelName] ?? .zero
+                    var usage = thirtyDayUsageByModel[bucketKey] ?? .zero
                     usage.add(tokens: delta.tokens, costUSD: rawCost)
-                    thirtyDayUsageByModel[modelName] = usage
+                    thirtyDayUsageByModel[bucketKey] = usage
                 }
-                var lifetimeUsage = lifetimeUsageByModel[modelName] ?? .zero
+                var lifetimeUsage = lifetimeUsageByModel[bucketKey] ?? .zero
                 lifetimeUsage.add(tokens: delta.tokens, costUSD: rawCost)
-                lifetimeUsageByModel[modelName] = lifetimeUsage
+                lifetimeUsageByModel[bucketKey] = lifetimeUsage
             }
         }
 
@@ -1244,9 +1249,11 @@ final class CodexUsageReader {
             if timeCompleted > timeCreated, outputTokens > 0 {
                 let durationMs = timeCompleted - timeCreated
                 let modelName = normalizedModelName(object["model"] as? String, fallback: "")
+                let providerID = object["provider"] as? String
+                let bucketKey = modelUsageBucketKey(model: modelName, provider: providerID)
                 if !modelName.isEmpty {
-                    modelTotalTokens[modelName, default: 0] += outputTokens
-                    modelTotalTimeMs[modelName, default: 0] += durationMs
+                    modelTotalTokens[bucketKey, default: 0] += outputTokens
+                    modelTotalTimeMs[bucketKey, default: 0] += durationMs
                 }
             }
 
@@ -1277,39 +1284,40 @@ final class CodexUsageReader {
             let price = modelTokenPrice(for: object["model"] as? String)
             let modelName = normalizedModelName(object["model"] as? String, fallback: price.model)
             let providerID = (object["provider"] as? String) ?? ""
+            let bucketKey = modelUsageBucketKey(model: modelName, provider: providerID)
             let rawCost = estimatedCostUSD(tokens: current, price: price)
 
             if !providerID.isEmpty {
-                modelProviders[modelName] = providerID
+                modelProviders[bucketKey] = providerID
             }
 
             if date >= dayStart {
-                var usage = todayUsageByModel[modelName] ?? .zero
+                var usage = todayUsageByModel[bucketKey] ?? .zero
                 usage.add(tokens: current, costUSD: rawCost)
-                todayUsageByModel[modelName] = usage
+                todayUsageByModel[bucketKey] = usage
             }
             if date >= twentyFourHourStart {
-                var usage = twentyFourHourUsageByModel[modelName] ?? .zero
+                var usage = twentyFourHourUsageByModel[bucketKey] ?? .zero
                 usage.add(tokens: current, costUSD: rawCost)
-                twentyFourHourUsageByModel[modelName] = usage
+                twentyFourHourUsageByModel[bucketKey] = usage
             }
             if date >= sevenDayStart {
-                var usage = sevenDayUsageByModel[modelName] ?? .zero
+                var usage = sevenDayUsageByModel[bucketKey] ?? .zero
                 usage.add(tokens: current, costUSD: rawCost)
-                sevenDayUsageByModel[modelName] = usage
-                var byDay = sevenDayTokensByModelAndDay[modelName] ?? [:]
+                sevenDayUsageByModel[bucketKey] = usage
+                var byDay = sevenDayTokensByModelAndDay[bucketKey] ?? [:]
                 byDay[dayFormatter.string(from: date), default: 0] += current.visibleTotalTokens
-                sevenDayTokensByModelAndDay[modelName] = byDay
+                sevenDayTokensByModelAndDay[bucketKey] = byDay
                 tokensByDay[dayFormatter.string(from: date), default: 0] += current.visibleTotalTokens
             }
             if date >= thirtyDayStart {
-                var usage = thirtyDayUsageByModel[modelName] ?? .zero
+                var usage = thirtyDayUsageByModel[bucketKey] ?? .zero
                 usage.add(tokens: current, costUSD: rawCost)
-                thirtyDayUsageByModel[modelName] = usage
+                thirtyDayUsageByModel[bucketKey] = usage
             }
-            var lifetimeUsage = lifetimeUsageByModel[modelName] ?? .zero
+            var lifetimeUsage = lifetimeUsageByModel[bucketKey] ?? .zero
             lifetimeUsage.add(tokens: current, costUSD: rawCost)
-            lifetimeUsageByModel[modelName] = lifetimeUsage
+            lifetimeUsageByModel[bucketKey] = lifetimeUsage
             tokensBySession[sessionId, default: 0] += current.visibleTotalTokens
         }
 
@@ -1398,7 +1406,7 @@ final class CodexUsageReader {
                 )
             }
             if buckets.contains(where: { $0.tokens > 0 }) {
-                result[model] = buckets
+                result[modelUsageDisplayLabel(from: model)] = buckets
             }
         }
 

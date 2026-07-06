@@ -288,12 +288,6 @@ struct UsageWidgetView: View {
         )
     }
 
-
-
-
-
-
-
     private var usageTrendSection: some View {
         guard let modelBuckets = snapshot.local?.sevenDayModelBuckets, !modelBuckets.isEmpty else {
             return AnyView(EmptyView())
@@ -714,7 +708,7 @@ struct UsageWidgetView: View {
                 items.append(DiagnosticItem(
                     id: "local-usage",
                     title: language.text("本机统计暂不可用", "Local stats unavailable"),
-                    detail: language.text("本机 token 和任务看板依赖 ~/.codex 的本地状态文件。", "Local tokens and the task board depend on Codex state files under ~/.codex."),
+                    detail: language.text("本机 token 统计依赖 ~/.codex 的本地状态文件。", "Local token stats depend on Codex state files under ~/.codex."),
                     systemName: "chart.bar.doc.horizontal",
                     tint: WidgetPalette.statusInfo
                 ))
@@ -778,6 +772,3 @@ struct ProjectActivityRow: View {
         }
     }
 }
-
-
-

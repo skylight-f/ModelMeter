@@ -2,7 +2,7 @@
 
 [中文](README.md)
 
-AgentDesk is a macOS desktop widget for monitoring token usage, costs, and task status across multiple AI coding tools. Supports Codex, MimoCode, and more with automatic data source discovery and real-time usage analysis.
+AgentDesk is a macOS desktop widget for monitoring token usage and costs across multiple AI coding tools. Supports Codex, MimoCode, and more with automatic data source discovery and real-time usage analysis.
 
 ![AgentDesk desktop widget screenshot](docs/screenshot-0.3.0.png)
 
@@ -29,11 +29,6 @@ AgentDesk is a macOS desktop widget for monitoring token usage, costs, and task 
 - **7-Day Trend**: Stacked bar chart showing daily usage by model
 - **Color Coding**: Different colors for different models
 - **Hover Interaction**: Mouse hover shows model name and token count
-
-### Task Board
-- **4-Column Layout**: Active, Pending, Scheduled, Done
-- **Auto-Classification**: Automatically categorizes tasks by activity time
-- **Status Labels**: High/Active/Medium/Idle/Cron/Done
 
 ### Auto Data Source Discovery
 - **Smart Detection**: Automatically scans local databases for available sources
@@ -170,8 +165,6 @@ Developer ID signing and Apple notarization workflow: see [DISTRIBUTION.md](DIST
 - Account & quota: `codex app-server` endpoints (`account/read`, `account/rateLimits/read`, `account/usage/read`)
 - Local token totals: `~/.codex/state_5.sqlite`
 - Detailed token breakdown: `~/.codex/sessions/**/rollout-*.jsonl`
-- Task board: Unarchived and today-archived Codex threads from local SQLite
-- Scheduled tasks: `~/.codex/automations/**/automation.toml`
 
 ### MimoCode
 - Usage data: `~/.local/share/mimocode/mimocode.db`

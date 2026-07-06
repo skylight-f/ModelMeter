@@ -142,7 +142,7 @@ struct ModelUsageItem: Identifiable, Equatable, Codable {
     let currency: ModelTokenPrice.Currency
     let avgTokensPerSecond: Double
 
-    var id: String { model }
+    var id: String { "\(model)|\(provider)" }
 }
 
 func modelProvider(from model: String) -> String {
@@ -378,7 +378,7 @@ struct UsageSnapshot: Equatable, Codable {
             credits: credits ?? fallback.credits,
             cloudLifetimeTokens: cloudLifetimeTokens ?? fallback.cloudLifetimeTokens,
             local: local ?? fallback.local,
-            taskBoard: taskBoard ?? fallback.taskBoard,
+            taskBoard: taskBoard,
             messages: messages.isEmpty ? fallback.messages : messages
         )
     }
@@ -390,7 +390,6 @@ struct UsageSnapshot: Equatable, Codable {
             || credits != nil
             || cloudLifetimeTokens != nil
             || local != nil
-            || taskBoard != nil
     }
 }
 
@@ -558,5 +557,3 @@ struct RequestStats {
     let uniqueModels: Int
     let uniqueProjects: Int
 }
-
-

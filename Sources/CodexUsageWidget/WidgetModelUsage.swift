@@ -142,6 +142,41 @@ struct ModelDetailView: View {
         return Double(item.cachedInputTokens) / Double(totalInput) * 100
     }
 
+    private var totalInputTokens: Int64 {
+        item.uncachedInputTokens + item.cachedInputTokens
+    }
+
+    private var outputShare: Double {
+        guard item.tokens > 0 else { return 0 }
+        return Double(max(item.outputTokens, 0)) / Double(item.tokens) * 100
+    }
+
+    private var effectiveCostPerMillion: Double {
+        guard item.tokens > 0 else { return 0 }
+        return item.estimatedCostUSD / Double(item.tokens) * 1_000_000
+    }
+
+    private var hasPriceData: Bool {
+        item.inputPricePerMillion > 0
+            || item.cachedInputPricePerMillion > 0
+            || item.outputPricePerMillion > 0
+    }
+
+    private var speedText: String {
+        guard item.avgTokensPerSecond > 0 else {
+            return language.text("无速度数据", "No speed data")
+        }
+        return String(format: "%.1f tokens/s", item.avgTokensPerSecond)
+    }
+
+    private var priceSummaryText: String {
+        guard hasPriceData else {
+            return language.text("未收录价格", "No price data")
+        }
+        let symbol = item.currency.rawValue
+        return "\(symbol)\(String(format: "%.2f", item.inputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.cachedInputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.outputPricePerMillion))"
+    }
+
     private var providerColor: Color {
         let model = item.model.lowercased()
         if model.contains("mimo") { return .orange }
@@ -155,94 +190,189 @@ struct ModelDetailView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.model)
-                        .font(.title2.bold())
-                    HStack(spacing: 8) {
-                        Text(item.provider)
-                            .font(.subheadline)
-                            .foregroundStyle(providerColor)
-                        if item.inputPricePerMillion > 0 {
-                            let symbol = item.currency.rawValue
-                            Text("\(symbol)\(String(format: "%.2f", item.inputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.cachedInputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.outputPricePerMillion))")
-                                .font(.caption)
-                                .foregroundStyle(currencyColor(item.currency))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(item.model)
+                            .font(.title2.bold())
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                        HStack(spacing: 8) {
+                            Text(item.provider)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(providerColor)
+                                .textSelection(.enabled)
+                            Text(priceSummaryText)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(hasPriceData ? currencyColor(item.currency) : .secondary)
                         }
                     }
-                }
-                Spacer()
-                Button(action: { dismiss() }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-
-            Divider()
-
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 12) {
-                DetailMetricCard(
-                    title: language.text("总消耗", "Total"),
-                    value: formatTokens(item.tokens),
-                    color: .primary
-                )
-                DetailMetricCard(
-                    title: language.text("费用", "Cost"),
-                    value: formatUSD(item.estimatedCostUSD, currency: item.currency),
-                    color: currencyColor(item.currency)
-                )
-                DetailMetricCard(
-                    title: language.text("未缓存", "Uncached"),
-                    value: formatTokens(item.uncachedInputTokens),
-                    color: uncachedInputColor
-                )
-                DetailMetricCard(
-                    title: language.text("缓存", "Cached"),
-                    value: formatTokens(item.cachedInputTokens),
-                    color: cachedInputColor
-                )
-                DetailMetricCard(
-                    title: language.text("输出", "Output"),
-                    value: formatTokens(item.outputTokens),
-                    color: WidgetPalette.statusSuccess
-                )
-                DetailMetricCard(
-                    title: language.text("缓存率", "Cache Hit"),
-                    value: "\(Int(cacheHitRate))%",
-                    color: cacheHitRate >= 50 ? WidgetPalette.brandSecondary : .secondary
-                )
-            }
-
-            if item.tokens > 0 {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(language.text("Token 分布", "Token Distribution"))
-                        .font(.subheadline.bold())
-                    TokenSplitBar(tokens: TokenBreakdown(
-                        inputTokens: item.uncachedInputTokens + item.cachedInputTokens,
-                        cachedInputTokens: item.cachedInputTokens,
-                        outputTokens: item.outputTokens,
-                        reasoningOutputTokens: 0,
-                        totalTokens: item.tokens
-                    ))
-                    .frame(height: 12)
-
-                    HStack(spacing: 16) {
-                        LegendItem(color: uncachedInputColor, text: language.text("未缓存", "Uncached"))
-                        LegendItem(color: cachedInputColor, text: language.text("缓存", "Cached"))
-                        LegendItem(color: WidgetPalette.statusSuccess, text: language.text("输出", "Output"))
+                    Spacer()
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
                     }
-                    .font(.caption)
+                    .buttonStyle(.plain)
+                }
+
+                Divider()
+
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ], spacing: 10) {
+                    DetailMetricCard(
+                        title: language.text("总消耗", "Total"),
+                        value: formatTokens(item.tokens),
+                        color: .primary
+                    )
+                    DetailMetricCard(
+                        title: language.text("费用", "Cost"),
+                        value: formatUSD(item.estimatedCostUSD, currency: item.currency),
+                        color: currencyColor(item.currency)
+                    )
+                    DetailMetricCard(
+                        title: language.text("速度", "Speed"),
+                        value: speedText,
+                        color: item.avgTokensPerSecond > 0 ? speedColor(item.avgTokensPerSecond) : .secondary
+                    )
+                    DetailMetricCard(
+                        title: language.text("总输入", "Input"),
+                        value: formatTokens(totalInputTokens),
+                        color: .primary
+                    )
+                    DetailMetricCard(
+                        title: language.text("缓存率", "Cache Hit"),
+                        value: totalInputTokens > 0 ? "\(Int(cacheHitRate))%" : "-",
+                        color: cacheHitRate >= 50 ? WidgetPalette.brandSecondary : .secondary
+                    )
+                    DetailMetricCard(
+                        title: language.text("输出占比", "Output Share"),
+                        value: item.tokens > 0 ? "\(Int(outputShare))%" : "-",
+                        color: WidgetPalette.statusSuccess
+                    )
+                }
+
+                if item.tokens > 0 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(language.text("Token 分布", "Token Distribution"))
+                            .font(.subheadline.bold())
+                        TokenSplitBar(tokens: TokenBreakdown(
+                            inputTokens: totalInputTokens,
+                            cachedInputTokens: item.cachedInputTokens,
+                            outputTokens: item.outputTokens,
+                            reasoningOutputTokens: 0,
+                            totalTokens: item.tokens
+                        ))
+                        .frame(height: 12)
+
+                        HStack(spacing: 16) {
+                            LegendItem(color: uncachedInputColor, text: language.text("未缓存输入", "Uncached input"))
+                            LegendItem(color: cachedInputColor, text: language.text("缓存输入", "Cached input"))
+                            LegendItem(color: WidgetPalette.statusSuccess, text: language.text("输出", "Output"))
+                        }
+                        .font(.caption)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(language.text("列表字段", "List Fields"))
+                        .font(.subheadline.bold())
+                    ModelDetailInfoRow(
+                        title: language.text("未缓存输入", "Uncached Input"),
+                        value: formatTokens(item.uncachedInputTokens),
+                        color: uncachedInputColor
+                    )
+                    ModelDetailInfoRow(
+                        title: language.text("缓存输入", "Cached Input"),
+                        value: formatTokens(item.cachedInputTokens),
+                        color: cachedInputColor
+                    )
+                    ModelDetailInfoRow(
+                        title: language.text("输出", "Output"),
+                        value: formatTokens(item.outputTokens),
+                        color: WidgetPalette.statusSuccess
+                    )
+                    ModelDetailInfoRow(
+                        title: language.text("总消耗", "Total Tokens"),
+                        value: formatTokens(item.tokens),
+                        color: .primary
+                    )
+                    ModelDetailInfoRow(
+                        title: language.text("缓存命中率", "Cache Hit Rate"),
+                        value: totalInputTokens > 0 ? String(format: "%.1f%%", cacheHitRate) : "-",
+                        color: cacheHitRate >= 50 ? WidgetPalette.brandSecondary : .secondary
+                    )
+                    ModelDetailInfoRow(
+                        title: language.text("估算费用", "Estimated Cost"),
+                        value: formatUSD(item.estimatedCostUSD, currency: item.currency),
+                        color: currencyColor(item.currency)
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(language.text("价格与效率", "Pricing and Efficiency"))
+                        .font(.subheadline.bold())
+                    ModelDetailInfoRow(
+                        title: language.text("输入价格 / 百万", "Input / 1M"),
+                        value: formatUSDPerMillion(item.inputPricePerMillion, currency: item.currency),
+                        color: currencyColor(item.currency)
+                    )
+                    ModelDetailInfoRow(
+                        title: language.text("缓存输入价格 / 百万", "Cached Input / 1M"),
+                        value: formatUSDPerMillion(item.cachedInputPricePerMillion, currency: item.currency),
+                        color: currencyColor(item.currency)
+                    )
+                    ModelDetailInfoRow(
+                        title: language.text("输出价格 / 百万", "Output / 1M"),
+                        value: formatUSDPerMillion(item.outputPricePerMillion, currency: item.currency),
+                        color: currencyColor(item.currency)
+                    )
+                    ModelDetailInfoRow(
+                        title: language.text("实际均价 / 百万 token", "Effective / 1M tokens"),
+                        value: item.tokens > 0 ? formatUSD(effectiveCostPerMillion, currency: item.currency) : "-",
+                        color: currencyColor(item.currency)
+                    )
+                    ModelDetailInfoRow(
+                        title: language.text("平均输出速度", "Average Output Speed"),
+                        value: speedText,
+                        color: item.avgTokensPerSecond > 0 ? speedColor(item.avgTokensPerSecond) : .secondary
+                    )
                 }
             }
+            .padding(20)
         }
-        .padding(20)
-        .frame(width: 320)
+        .frame(width: 480, height: 560)
+    }
+}
+
+struct ModelDetailInfoRow: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(color)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack)
+        )
     }
 }
 
