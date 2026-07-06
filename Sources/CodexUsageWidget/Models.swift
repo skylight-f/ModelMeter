@@ -1,10 +1,6 @@
 import Foundation
 import SwiftUI
 
-import Cocoa
-import Carbon.HIToolbox
-import SwiftUI
-
 struct RateWindow: Equatable, Codable {
     let usedPercent: Double
     let windowDurationMins: Int?
