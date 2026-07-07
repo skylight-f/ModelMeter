@@ -9,6 +9,7 @@ struct UsageWidgetView: View {
     @State private var themeMode = WidgetThemeMode.storedOrAutomatic()
     @State private var displayCurrency = loadDisplayCurrency()
     @State private var selectedModelUsagePeriod: ModelUsagePeriod = .today
+    @State private var selectedSourceUsagePeriod: ModelUsagePeriod = .today
     @State private var trendSelectedModels: Set<String>? = nil
     @State private var trendFilterOpen = false
 
@@ -60,6 +61,7 @@ struct UsageWidgetView: View {
                         environmentChecklistSection
                     }
                     usageOverviewSection
+                    sourceComparisonSection
                     modelUsageCardSection
                     usageTrendSection
                 }
@@ -117,20 +119,18 @@ struct UsageWidgetView: View {
                 postPreferencesDidChange()
             }
             planPill
+            iconButton(systemName: "xmark") {
+                NSApp.terminate(nil)
+            }
+            .help(language.text("退出 AgentDesk", "Quit AgentDesk"))
             iconButton(systemName: store.isRefreshing ? "hourglass" : "arrow.clockwise") {
                 store.refresh()
             }
-            iconButton(systemName: "text.document") {
-                AppDelegate.shared?.openPromptStudio()
-            }
-            .help(language.text("打开 Prompt Studio", "Open Prompt Studio"))
+            .help(language.text("刷新数据", "Refresh data"))
             iconButton(systemName: "rectangle.on.rectangle") {
                 AppDelegate.shared?.toggleWindowLayer()
             }
             .help(language.text("切换前台/桌面层 (⌘U)", "Toggle front/desktop layer (⌘U)"))
-            iconButton(systemName: "xmark") {
-                NSApp.terminate(nil)
-            }
         }
     }
 
@@ -288,6 +288,117 @@ struct UsageWidgetView: View {
         )
     }
 
+    private var sourceComparisonSection: some View {
+        guard snapshot.provider == .all, !store.sourceUsageSummaries.isEmpty else {
+            return AnyView(EmptyView())
+        }
+
+        let displaySummaries = store.sourceUsageSummaries
+            .map { summary in (summary: summary, usage: summary.usage(for: selectedSourceUsagePeriod)) }
+            .sorted { $0.usage.tokens > $1.usage.tokens }
+        let totalTokens = displaySummaries.reduce(Int64(0)) { $0 + $1.usage.tokens }
+        return AnyView(
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(language.text("来源占比", "Source split"))
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    HStack(spacing: 1) {
+                        ForEach(sourceUsagePeriods, id: \.self) { period in
+                            Button {
+                                selectedSourceUsagePeriod = period
+                            } label: {
+                                Text(language.text(period.labelZh, period.labelEn))
+                                    .font(.system(size: 9, weight: selectedSourceUsagePeriod == period ? .semibold : .regular))
+                                    .foregroundStyle(selectedSourceUsagePeriod == period ? .primary : .secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            .fill(selectedSourceUsagePeriod == period ? WidgetPalette.surfaceTrack : Color.clear)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    ForEach(displaySummaries, id: \.summary.id) { item in
+                        let summary = item.summary
+                        let usage = item.usage
+                        let share = totalTokens > 0 ? Double(usage.tokens) / Double(totalTokens) : 0
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack {
+                                Text(localizedSourceSummaryName(summary))
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .lineLimit(1)
+                                Spacer(minLength: 6)
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text(formatTokens(usage.tokens))
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .monospacedDigit()
+                                        .foregroundStyle(sourceColor(summary.id))
+                                    Text(totalTokens > 0 ? formatUsagePercent(share * 100) : "--")
+                                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            GeometryReader { geo in
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(WidgetPalette.surfaceTrack)
+                                    .overlay(alignment: .leading) {
+                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            .fill(sourceColor(summary.id))
+                                            .frame(width: usage.tokens > 0 ? max(4, geo.size.width * CGFloat(share)) : 0)
+                                    }
+                            }
+                            .frame(height: 7)
+                            HStack(spacing: 8) {
+                                Text(formatUSD(usage.estimatedCost, currency: displayCurrency))
+                                Text(usage.cacheHitRate.map { "\(Int(($0 * 100).rounded()))%" } ?? "--")
+                            }
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(WidgetPalette.surfaceTrack.opacity(0.72))
+                        )
+                    }
+                }
+            }
+            .padding(12)
+            .sectionBackground()
+        )
+    }
+
+    private var sourceUsagePeriods: [ModelUsagePeriod] {
+        [.twentyFourHour, .today, .sevenDay, .thirtyDay]
+    }
+
+    private func sourceColor(_ id: String) -> Color {
+        switch id {
+        case UsageProvider.codex.rawValue:
+            return WidgetPalette.brandPrimary
+        case UsageProvider.mimocode.rawValue:
+            return WidgetPalette.brandSecondary
+        default:
+            return .secondary
+        }
+    }
+
+    private func localizedSourceSummaryName(_ summary: SourceUsageSummary) -> String {
+        if let provider = UsageProvider(rawValue: summary.id) {
+            return provider.shortLabel(language: language)
+        }
+        return summary.shortName
+    }
+
     private var usageTrendSection: some View {
         guard let modelBuckets = snapshot.local?.sevenDayModelBuckets, !modelBuckets.isEmpty else {
             return AnyView(EmptyView())
@@ -439,7 +550,7 @@ struct UsageWidgetView: View {
     }
 
     private var planLabel: String {
-        snapshot.account?.planType?.uppercased() ?? snapshot.provider.displayName.uppercased()
+        snapshot.account?.planType?.uppercased() ?? snapshot.provider.displayName(language: language).uppercased()
     }
 
 
@@ -631,12 +742,11 @@ struct UsageWidgetView: View {
         if snapshot.messages.contains("正在读取 \(snapshot.provider.displayName) 数据") { return false }
         if snapshot.hasPersistableContent { return false }
         if snapshot.provider == .mimocode {
-            return snapshot.local == nil && snapshot.taskBoard == nil
+            return snapshot.local == nil
         }
         return snapshot.primary == nil
             && snapshot.account == nil
             && snapshot.local == nil
-            && snapshot.taskBoard == nil
     }
 
     private var environmentDiagnostics: [DiagnosticItem] {

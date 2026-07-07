@@ -82,9 +82,6 @@ final class AgentDeskStorage {
             ("AgentDesk.customModelPrices", "ModelMeter.customModelPrices"),
             ("AgentDesk.selectedProviderId", "ModelMeter.selectedProviderId"),
             ("AgentDesk.usageProvider", "ModelMeter.usageProvider"),
-            ("AgentDesk.agentProfiles", "ModelMeter.agentProfiles"),
-            ("AgentDesk.exportPaths", "ModelMeter.exportPaths"),
-            ("AgentDesk.windowFrame.studio", "ModelMeter.windowFrame.studio"),
             ("AgentDesk.windowFrame.settings", "ModelMeter.windowFrame.settings")
         ]
 
@@ -116,8 +113,6 @@ private let displayCurrencyKey = "AgentDesk.displayCurrency"
 final class AgentDeskDatabase {
     static let shared = AgentDeskDatabase()
 
-    private static let migratedProfilesFlagKey = "AgentDesk.sqliteMigrated.agentProfiles"
-    private static let migratedExportPathsFlagKey = "AgentDesk.sqliteMigrated.exportPaths"
     private static let migratedAppSettingsFlagKey = "AgentDesk.sqliteMigrated.appSettings"
     private let fileManager = FileManager.default
     private let databaseURL: URL
@@ -199,133 +194,6 @@ final class AgentDeskDatabase {
             sqlite3_bind_double(statement, 3, price.cachedInputPerMillion)
             sqlite3_bind_double(statement, 4, price.outputPerMillion)
             sqlite3_bind_text(statement, 5, price.currency.rawValue, -1, SQLITE_TRANSIENT)
-
-            guard sqlite3_step(statement) == SQLITE_DONE else {
-                _ = execute(sql: "ROLLBACK", db: db)
-                return
-            }
-        }
-
-        _ = execute(sql: "COMMIT", db: db)
-    }
-
-    func loadAgentProfiles() -> [AgentProfile] {
-        guard let db = openDatabase() else { return [] }
-        defer { sqlite3_close(db) }
-
-        let sql = """
-        SELECT payload
-        FROM agent_profiles
-        ORDER BY updated_at DESC
-        """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
-        defer { sqlite3_finalize(statement) }
-
-        var profiles: [AgentProfile] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            let bytes = sqlite3_column_blob(statement, 0)
-            let length = Int(sqlite3_column_bytes(statement, 0))
-            guard let bytes, length > 0 else { continue }
-            let data = Data(bytes: bytes, count: length)
-            if let profile = try? JSONDecoder().decode(AgentProfile.self, from: data) {
-                profiles.append(profile)
-            }
-        }
-        return profiles
-    }
-
-    func saveAgentProfiles(_ profiles: [AgentProfile]) {
-        guard let db = openDatabase() else { return }
-        defer { sqlite3_close(db) }
-
-        _ = execute(sql: "BEGIN IMMEDIATE TRANSACTION", db: db)
-        _ = execute(sql: "DELETE FROM agent_profiles", db: db)
-
-        let insertSQL = """
-        INSERT INTO agent_profiles (id, name, updated_at, payload)
-        VALUES (?, ?, ?, ?)
-        """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, insertSQL, -1, &statement, nil) == SQLITE_OK else {
-            _ = execute(sql: "ROLLBACK", db: db)
-            return
-        }
-        defer { sqlite3_finalize(statement) }
-
-        let encoder = JSONEncoder()
-        for profile in profiles {
-            guard let data = try? encoder.encode(profile) else { continue }
-
-            sqlite3_reset(statement)
-            sqlite3_clear_bindings(statement)
-            sqlite3_bind_text(statement, 1, profile.id, -1, SQLITE_TRANSIENT)
-            sqlite3_bind_text(statement, 2, profile.name, -1, SQLITE_TRANSIENT)
-            sqlite3_bind_double(statement, 3, profile.updatedAt.timeIntervalSince1970)
-            _ = data.withUnsafeBytes { rawBuffer in
-                sqlite3_bind_blob(statement, 4, rawBuffer.baseAddress, Int32(data.count), SQLITE_TRANSIENT)
-            }
-
-            guard sqlite3_step(statement) == SQLITE_DONE else {
-                _ = execute(sql: "ROLLBACK", db: db)
-                return
-            }
-        }
-
-        _ = execute(sql: "COMMIT", db: db)
-    }
-
-    func loadExportPaths() -> [String: String] {
-        guard let db = openDatabase() else { return [:] }
-        defer { sqlite3_close(db) }
-
-        let sql = "SELECT profile_id, tool, path FROM export_paths"
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [:] }
-        defer { sqlite3_finalize(statement) }
-
-        var result: [String: String] = [:]
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard
-                let profileCString = sqlite3_column_text(statement, 0),
-                let toolCString = sqlite3_column_text(statement, 1),
-                let pathCString = sqlite3_column_text(statement, 2)
-            else { continue }
-
-            result["\(String(cString: profileCString))::\(String(cString: toolCString))"] = String(cString: pathCString)
-        }
-        return result
-    }
-
-    func saveExportPaths(_ paths: [String: String]) {
-        guard let db = openDatabase() else { return }
-        defer { sqlite3_close(db) }
-
-        _ = execute(sql: "BEGIN IMMEDIATE TRANSACTION", db: db)
-        _ = execute(sql: "DELETE FROM export_paths", db: db)
-
-        let insertSQL = """
-        INSERT INTO export_paths (profile_id, tool, path, updated_at)
-        VALUES (?, ?, ?, ?)
-        """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, insertSQL, -1, &statement, nil) == SQLITE_OK else {
-            _ = execute(sql: "ROLLBACK", db: db)
-            return
-        }
-        defer { sqlite3_finalize(statement) }
-
-        let now = Date().timeIntervalSince1970
-        for (key, path) in paths.sorted(by: { $0.key < $1.key }) {
-            let parts = key.components(separatedBy: "::")
-            guard parts.count == 2 else { continue }
-
-            sqlite3_reset(statement)
-            sqlite3_clear_bindings(statement)
-            sqlite3_bind_text(statement, 1, parts[0], -1, SQLITE_TRANSIENT)
-            sqlite3_bind_text(statement, 2, parts[1], -1, SQLITE_TRANSIENT)
-            sqlite3_bind_text(statement, 3, path, -1, SQLITE_TRANSIENT)
-            sqlite3_bind_double(statement, 4, now)
 
             guard sqlite3_step(statement) == SQLITE_DONE else {
                 _ = execute(sql: "ROLLBACK", db: db)
@@ -482,23 +350,6 @@ final class AgentDeskDatabase {
         """
         _ = execute(sql: createSQL, db: db)
         _ = execute(sql: """
-        CREATE TABLE IF NOT EXISTS agent_profiles (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            updated_at REAL NOT NULL,
-            payload BLOB NOT NULL
-        )
-        """, db: db)
-        _ = execute(sql: """
-        CREATE TABLE IF NOT EXISTS export_paths (
-            profile_id TEXT NOT NULL,
-            tool TEXT NOT NULL,
-            path TEXT NOT NULL,
-            updated_at REAL NOT NULL,
-            PRIMARY KEY (profile_id, tool)
-        )
-        """, db: db)
-        _ = execute(sql: """
         CREATE TABLE IF NOT EXISTS usage_snapshots (
             provider TEXT PRIMARY KEY,
             updated_at REAL NOT NULL,
@@ -528,7 +379,6 @@ final class AgentDeskDatabase {
             ("AgentDesk.exchangeRate", "ModelMeter.exchangeRate", .double),
             ("AgentDesk.selectedProviderId", "ModelMeter.selectedProviderId", .string),
             ("AgentDesk.usageProvider", "ModelMeter.usageProvider", .string),
-            ("AgentDesk.windowFrame.studio", "ModelMeter.windowFrame.studio", .string),
             ("AgentDesk.windowFrame.settings", "ModelMeter.windowFrame.settings", .string)
         ]
 
@@ -579,37 +429,6 @@ final class AgentDeskDatabase {
         }
         guard !migrated.isEmpty else { return }
         saveModelPrices(migrated)
-    }
-
-    func migrateLegacyAgentProfilesIfNeeded(storageKey: String) {
-        guard !bool(forKey: Self.migratedProfilesFlagKey) else { return }
-        if !loadAgentProfiles().isEmpty {
-            set(true, forKey: Self.migratedProfilesFlagKey)
-            return
-        }
-        guard let data = AgentDeskStorage.shared.data(forKey: storageKey),
-              let profiles = try? JSONDecoder().decode([AgentProfile].self, from: data),
-              !profiles.isEmpty else {
-            set(true, forKey: Self.migratedProfilesFlagKey)
-            return
-        }
-        saveAgentProfiles(profiles)
-        set(true, forKey: Self.migratedProfilesFlagKey)
-    }
-
-    func migrateLegacyExportPathsIfNeeded(storageKey: String) {
-        guard !bool(forKey: Self.migratedExportPathsFlagKey) else { return }
-        if !loadExportPaths().isEmpty {
-            set(true, forKey: Self.migratedExportPathsFlagKey)
-            return
-        }
-        guard let paths = AgentDeskStorage.shared.dictionary(forKey: storageKey) as? [String: String],
-              !paths.isEmpty else {
-            set(true, forKey: Self.migratedExportPathsFlagKey)
-            return
-        }
-        saveExportPaths(paths)
-        set(true, forKey: Self.migratedExportPathsFlagKey)
     }
 
     private func openDatabase() -> OpaquePointer? {
@@ -817,31 +636,6 @@ func estimatedCostUSD(tokens: TokenBreakdown, price: ModelTokenPrice) -> Double 
     return uncachedInputCost + cachedInputCost + outputCost
 }
 
-func parseSimpleTOML(_ text: String) -> [String: String] {
-    var fields: [String: String] = [:]
-
-    for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !line.isEmpty, !line.hasPrefix("#"), let separator = line.firstIndex(of: "=") else {
-            continue
-        }
-
-        let key = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
-        var value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
-            value.removeFirst()
-            value.removeLast()
-        }
-
-        fields[key] = value
-            .replacingOccurrences(of: "\\n", with: "\n")
-            .replacingOccurrences(of: "\\\"", with: "\"")
-    }
-
-    return fields
-}
-
 func normalizedTitle(_ title: String?, fallback: String?) -> String {
     let raw = [title, fallback]
         .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -934,30 +728,6 @@ func relativeTimeText(_ date: Date, language: WidgetLanguage) -> String {
     return language.text("\(hours / 24) 天前", "\(hours / 24)d ago")
 }
 
-func scheduleSummary(_ rrule: String?) -> String {
-    guard let rrule, !rrule.isEmpty else { return "" }
-
-    var timeText = ""
-    if let range = rrule.range(of: #"T(\d{2})(\d{2})(\d{2})"#, options: .regularExpression) {
-        let match = String(rrule[range])
-        let start = match.index(after: match.startIndex)
-        let hourEnd = match.index(start, offsetBy: 2)
-        let minuteEnd = match.index(hourEnd, offsetBy: 2)
-        timeText = "\(match[start..<hourEnd]):\(match[hourEnd..<minuteEnd])"
-    }
-
-    if rrule.contains("FREQ=DAILY") {
-        return timeText.isEmpty ? "每天" : "每天 \(timeText)"
-    }
-    if rrule.contains("FREQ=WEEKLY") {
-        return timeText.isEmpty ? "每周" : "每周 \(timeText)"
-    }
-    if rrule.contains("FREQ=HOURLY") {
-        return "每小时"
-    }
-    return timeText
-}
-
 func intValue(_ value: Any?) -> Int? {
     if let int = value as? Int { return int }
     if let int64 = value as? Int64 { return Int(int64) }
@@ -994,6 +764,14 @@ func dateFromEpoch(_ value: Any?) -> Date? {
         seconds /= 1000
     }
     return Date(timeIntervalSince1970: seconds)
+}
+
+func epochMilliseconds(_ value: Any?) -> Double? {
+    guard let rawValue = doubleValue(value), rawValue > 0 else { return nil }
+    if rawValue > 10_000_000_000 {
+        return rawValue
+    }
+    return rawValue * 1000
 }
 
 
@@ -1064,140 +842,6 @@ func formatUsagePercent(_ value: Double) -> String {
     return "\(Int(value.rounded()))%"
 }
 
-func taskAccentColor(_ kind: TaskColumnKind) -> Color {
-    switch kind {
-    case .active:
-        return WidgetPalette.statusWarning
-    case .pending:
-        return WidgetPalette.statusNeutral
-    case .scheduled:
-        return WidgetPalette.brandSecondary
-    case .done:
-        return WidgetPalette.statusSuccess
-    }
-}
-
-func taskColumnFill(_ kind: TaskColumnKind) -> Color {
-    taskAccentColor(kind).opacity(0.065)
-}
-
-func taskColumnIcon(_ kind: TaskColumnKind) -> String {
-    switch kind {
-    case .active:
-        return "record.circle"
-    case .pending:
-        return "circle"
-    case .scheduled:
-        return "clock"
-    case .done:
-        return "checkmark.circle.fill"
-    }
-}
-
-func localizedTaskColumnTitle(_ kind: TaskColumnKind, language: WidgetLanguage) -> String {
-    switch kind {
-    case .active:
-        return language.text("进行中", "Active")
-    case .pending:
-        return language.text("待处理", "Pending")
-    case .scheduled:
-        return language.text("定时", "Scheduled")
-    case .done:
-        return language.text("完成", "Done")
-    }
-}
-
-func localizedPromptSource(_ source: PromptAssetSource, language: WidgetLanguage) -> String {
-    switch source {
-    case .codexSystem:
-        return language.text("Codex 系统", "Codex System")
-    case .codexUser:
-        return language.text("Codex 用户", "Codex User")
-    case .agents:
-        return language.text("Agents", "Agents")
-    case .workspace:
-        return language.text("工作区", "Workspace")
-    }
-}
-
-func localizedPromptKind(_ kind: PromptAssetKind, language: WidgetLanguage) -> String {
-    switch kind {
-    case .skill:
-        return "Skill"
-    case .prompt:
-        return "Prompt"
-    case .config:
-        return language.text("配置", "Config")
-    }
-}
-
-func localizedTargetTool(_ tool: AgentTargetTool, language: WidgetLanguage) -> String {
-    switch tool {
-    case .codex:
-        return "Codex"
-    case .mimocode:
-        return "MimoCode"
-    }
-}
-
-func renderAgentProfilePrompt(
-    profile: AgentProfile,
-    assets: [PromptAsset],
-    tool: AgentTargetTool
-) -> String {
-    let includedAssets = assets.filter { profile.selectedAssetIDs.contains($0.id) }
-    let bulletPrefix: String = tool == .codex ? "- " : "* "
-
-    var sections: [String] = []
-    sections.append("Agent Profile: \(profile.name)")
-
-    if !profile.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        sections.append("Mission\n\(profile.summary)")
-    }
-    if !profile.persona.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        sections.append("Persona\n\(profile.persona)")
-    }
-    if !profile.workingStyle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        sections.append("Working Style\n\(profile.workingStyle)")
-    }
-    if !profile.constraints.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        sections.append("Constraints\n\(profile.constraints)")
-    }
-
-    if !includedAssets.isEmpty {
-        let assetSummaries = includedAssets.map { asset in
-            let header = "\(bulletPrefix)\(asset.name) [\(asset.kind.rawValue)]"
-            let content = String(asset.content.prefix(700)).trimmingCharacters(in: .whitespacesAndNewlines)
-            return "\(header)\n\(content)"
-        }.joined(separator: "\n\n")
-        sections.append("Shared Assets\n\(assetSummaries)")
-    }
-
-    switch tool {
-    case .codex:
-        sections.append("Tool Notes\n- Prefer repository conventions.\n- Keep edits scoped and verified.\n- When constraints conflict, state the tradeoff clearly.")
-    case .mimocode:
-        sections.append("Tool Notes\n* Keep execution concise and action-oriented.\n* Preserve the same role, constraints, and selected shared assets.\n* Prefer short operational outputs unless more detail is requested.")
-    }
-
-    return sections.joined(separator: "\n\n")
-}
-
-func suggestedExportPath(profile: AgentProfile, tool: AgentTargetTool) -> String {
-    let safeName = profile.name
-        .lowercased()
-        .replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
-        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-    let baseName = safeName.isEmpty ? "agent-profile" : safeName
-    let home = NSHomeDirectory()
-    switch tool {
-    case .codex:
-        return "\(home)/.codex/skills/\(baseName).md"
-    case .mimocode:
-        return "\(home)/.agents/skills/\(baseName).md"
-    }
-}
-
 func localizedDayLabel(_ label: String, language: WidgetLanguage) -> String {
     if label == "今天" {
         return language.text("今天", "Today")
@@ -1228,18 +872,8 @@ func localizedReaderMessage(_ message: String, language: WidgetLanguage) -> Stri
     if message.contains("SQLite 查询失败") { return "SQLite query failed" }
     if message.contains("未找到 Codex session 日志") { return "Codex session logs not found" }
     if message.contains("未找到 Codex token_count 事件") { return "Codex token_count events not found" }
-    if message.contains("任务看板未找到 SQLite 数据源") { return "Task board SQLite data source not found" }
     if message.contains("app-server") { return message.replacingOccurrences(of: "未知错误", with: "Unknown error") }
     return message
-}
-
-func taskAvatarText(_ item: TaskItem) -> String {
-    if item.code.hasPrefix("AUTO") { return "B" }
-    let source = item.detail.split(separator: "·").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if let first = source.first {
-        return String(first).uppercased()
-    }
-    return "C"
 }
 
 func timeOnly(_ date: Date, language: WidgetLanguage = .zh) -> String {
@@ -1424,28 +1058,6 @@ func dumpJSON(_ snapshot: UsageSnapshot) {
         }
 
         object["local"] = localObject
-    }
-
-    if let taskBoard = snapshot.taskBoard {
-        object["taskBoard"] = [
-            "refreshedAt": isoString(taskBoard.refreshedAt) ?? "",
-            "totalCount": taskBoard.totalCount,
-            "columns": taskBoard.columns.map { column in
-                [
-                    "id": column.id.rawValue,
-                    "title": column.title,
-                    "count": column.count,
-                    "items": column.items.map { item in
-                        [
-                            "id": item.id, "code": item.code, "title": item.title,
-                            "detail": item.detail, "chip": item.chip,
-                            "updatedAt": jsonValue(isoString(item.updatedAt)),
-                            "tokens": jsonValue(item.tokens)
-                        ] as [String: Any]
-                    }
-                ] as [String: Any]
-            }
-        ] as [String: Any]
     }
 
     if let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),

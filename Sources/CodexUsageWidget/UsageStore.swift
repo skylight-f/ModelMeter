@@ -11,6 +11,8 @@ struct SessionUsageSource {
 struct SessionUsageDelta {
     let date: Date
     let tokens: TokenBreakdown
+    let model: String?
+    let modelProvider: String?
 }
 
 struct SessionUsageCacheEntry {
@@ -72,22 +74,17 @@ struct DetailedUsageAccumulator {
 final class UsageStore: ObservableObject {
     @Published var provider: UsageProvider
     @Published var snapshot: UsageSnapshot
-    @Published var promptRegistry: PromptRegistry
-    @Published var agentProfiles: [AgentProfile]
-    @Published var exportPaths: [String: String]
     @Published var isRefreshing = false
-    @Published var isRefreshingPromptRegistry = false
     @Published var discoveredProviders: [DiscoveredProvider] = []
     @Published var selectedDiscoveredProvider: DiscoveredProvider?
     @Published var discoveryNotice: String?
+    @Published var sourceUsageSummaries: [SourceUsageSummary] = []
 
     @Published var modelConsumptions: [ModelConsumptionStat] = []
     @Published var modelConsumptionDetails: [String: ModelConsumptionDetail] = [:]
     @Published var projectActivities: [ProjectActivityStat] = []
     @Published var requestStats: RequestStats = RequestStats(totalRequests: 0, totalTokens: 0, avgTokensPerRequest: 0, uniqueModels: 0, uniqueProjects: 0)
 
-    private static let agentProfilesStorageKey = "AgentDesk.agentProfiles"
-    private static let exportPathsStorageKey = "AgentDesk.exportPaths"
     private var fullTimer: Timer?
     private var snapshotCache: [UsageProvider: UsageSnapshot] = [:]
     private var refreshingProviders = Set<UsageProvider>()
@@ -97,11 +94,6 @@ final class UsageStore: ObservableObject {
         self.provider = provider
         let cachedSnapshot = AgentDeskDatabase.shared.loadUsageSnapshot(provider: provider)
         self.snapshot = cachedSnapshot ?? .empty(provider: provider)
-        self.promptRegistry = .empty
-        AgentDeskDatabase.shared.migrateLegacyAgentProfilesIfNeeded(storageKey: Self.agentProfilesStorageKey)
-        AgentDeskDatabase.shared.migrateLegacyExportPathsIfNeeded(storageKey: Self.exportPathsStorageKey)
-        self.agentProfiles = Self.loadAgentProfiles()
-        self.exportPaths = Self.loadExportPaths()
         self.snapshotCache[provider] = self.snapshot
         discoverProviders()
         NotificationCenter.default.addObserver(
@@ -201,10 +193,13 @@ final class UsageStore: ObservableObject {
         refreshingProviders.insert(provider)
         syncRefreshingState()
 
+        if provider == .all {
+            refreshAllSources()
+            return
+        }
+
         DispatchQueue.global(qos: .utility).async {
             let snapshot = CodexUsageReader(provider: provider).load()
-            let workspaceHints = snapshot.local?.recentThreads.map(\.cwd) ?? []
-            let promptRegistry = CodexUsageReader.loadPromptRegistry(workspaceHints: workspaceHints)
             DispatchQueue.main.async {
                 let cached = self.snapshotCache[provider]
                     ?? AgentDeskDatabase.shared.loadUsageSnapshot(provider: provider)
@@ -215,22 +210,70 @@ final class UsageStore: ObservableObject {
                 self.snapshotCache[provider] = snapshot.hasPersistableContent ? merged : (cached ?? snapshot)
                 if self.provider == provider {
                     self.snapshot = self.snapshotCache[provider] ?? snapshot
+                    self.sourceUsageSummaries = []
                 }
-                self.promptRegistry = promptRegistry
                 self.refreshingProviders.remove(provider)
                 self.syncRefreshingState()
             }
         }
     }
 
-    func refreshPromptRegistry() {
-        let workspaceHints = snapshot.local?.recentThreads.map(\.cwd) ?? []
-        isRefreshingPromptRegistry = true
+    private func refreshAllSources() {
+        let provider = UsageProvider.all
+        let sourceProviders = supportedDiscoveredUsageProviders()
+
         DispatchQueue.global(qos: .utility).async {
-            let promptRegistry = CodexUsageReader.loadPromptRegistry(workspaceHints: workspaceHints)
+            var snapshots: [UsageSnapshot] = []
+            for sourceProvider in sourceProviders {
+                let snapshot = CodexUsageReader(provider: sourceProvider).load()
+                snapshots.append(snapshot)
+            }
+
+            let aggregate = UsageStore.aggregateSnapshot(from: snapshots)
+
             DispatchQueue.main.async {
-                self.promptRegistry = promptRegistry
-                self.isRefreshingPromptRegistry = false
+                for snapshot in snapshots {
+                    if snapshot.hasPersistableContent {
+                        AgentDeskDatabase.shared.saveUsageSnapshot(snapshot)
+                    }
+                    self.snapshotCache[snapshot.provider] = snapshot
+                }
+                if aggregate.snapshot.hasPersistableContent {
+                    AgentDeskDatabase.shared.saveUsageSnapshot(aggregate.snapshot)
+                }
+                self.snapshotCache[provider] = aggregate.snapshot
+                if self.provider == provider {
+                    self.snapshot = aggregate.snapshot
+                    self.sourceUsageSummaries = aggregate.sourceSummaries
+                }
+                self.refreshingProviders.remove(provider)
+                self.syncRefreshingState()
+            }
+        }
+    }
+
+    func refreshSourceUsageSummaries(completion: (([SourceUsageSummary]) -> Void)? = nil) {
+        discoverProviders()
+        let sourceProviders = supportedDiscoveredUsageProviders()
+        guard !sourceProviders.isEmpty else {
+            sourceUsageSummaries = []
+            completion?([])
+            return
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            let snapshots = sourceProviders.map { CodexUsageReader(provider: $0).load() }
+            let aggregate = UsageStore.aggregateSnapshot(from: snapshots)
+
+            DispatchQueue.main.async {
+                for snapshot in snapshots {
+                    if snapshot.hasPersistableContent {
+                        AgentDeskDatabase.shared.saveUsageSnapshot(snapshot)
+                    }
+                    self.snapshotCache[snapshot.provider] = snapshot
+                }
+                self.sourceUsageSummaries = aggregate.sourceSummaries
+                completion?(aggregate.sourceSummaries)
             }
         }
     }
@@ -254,6 +297,9 @@ final class UsageStore: ObservableObject {
         syncRefreshingState()
         refresh()
         refreshAnalytics()
+        if provider != .all {
+            sourceUsageSummaries = []
+        }
 
         if let discovered = discoveredProviders.first(where: { $0.id == provider.rawValue }) {
             selectedDiscoveredProvider = discovered
@@ -271,6 +317,189 @@ final class UsageStore: ObservableObject {
                 self.modelConsumptionDetails = details
                 self.requestStats = requestStats
             }
+        }
+    }
+
+    private func supportedDiscoveredUsageProviders() -> [UsageProvider] {
+        let discovered = discoveredProviders.compactMap { UsageProvider(rawValue: $0.id) }
+            .filter { $0 != .all }
+        if !discovered.isEmpty {
+            var seen = Set<String>()
+            return discovered.filter { seen.insert($0.rawValue).inserted }
+                .sorted { $0.rawValue < $1.rawValue }
+        }
+        return UsageProvider.allCases.filter { $0 != .all }
+    }
+
+    static func aggregateSnapshot(from snapshots: [UsageSnapshot]) -> (snapshot: UsageSnapshot, sourceSummaries: [SourceUsageSummary]) {
+        let usableSnapshots = snapshots.filter { $0.local != nil }
+        let locals = usableSnapshots.compactMap(\.local)
+        let local = aggregateLocalUsage(from: usableSnapshots)
+        let summaries = usableSnapshots.compactMap { snapshot -> SourceUsageSummary? in
+            guard let local = snapshot.local else { return nil }
+            return SourceUsageSummary(
+                id: snapshot.provider.rawValue,
+                name: snapshot.provider.displayName,
+                shortName: snapshot.provider.shortLabel,
+                twentyFourHour: sourceUsagePeriodSummary(from: local.twentyFourHourModelUsage),
+                today: sourceUsagePeriodSummary(from: local.todayModelUsage),
+                sevenDay: sourceUsagePeriodSummary(from: local.sevenDayModelUsage),
+                thirtyDay: sourceUsagePeriodSummary(from: local.thirtyDayModelUsage)
+            )
+        }
+        .sorted { $0.tokens > $1.tokens }
+
+        let messages = snapshots.flatMap(\.messages).filter { !$0.isEmpty }
+        return (
+            UsageSnapshot(
+                provider: .all,
+                refreshedAt: Date(),
+                account: nil,
+                limitId: nil,
+                limitName: nil,
+                primary: nil,
+                secondary: nil,
+                credits: nil,
+                cloudLifetimeTokens: nil,
+                local: local,
+                messages: messages.isEmpty && locals.isEmpty ? ["正在读取 All Sources 数据"] : messages
+            ),
+            summaries
+        )
+    }
+
+    private static func aggregateLocalUsage(from snapshots: [UsageSnapshot]) -> LocalUsage? {
+        let localPairs = snapshots.compactMap { snapshot -> (UsageProvider, LocalUsage)? in
+            guard let local = snapshot.local else { return nil }
+            return (snapshot.provider, local)
+        }
+        guard !localPairs.isEmpty else { return nil }
+
+        let detailed = aggregateDetailedUsage(localPairs.compactMap { $0.1.detailedUsage })
+        let dailyBuckets = aggregateDailyBuckets(localPairs.map { $0.1.dailyBuckets })
+        let sevenDayModelBuckets = aggregateSevenDayModelBuckets(localPairs)
+        let recentThreads = localPairs.flatMap { provider, local in
+            local.recentThreads.map { thread in
+                LocalThread(
+                    id: "\(provider.rawValue)-\(thread.id)",
+                    title: thread.title,
+                    tokens: thread.tokens,
+                    updatedAt: thread.updatedAt,
+                    model: thread.model,
+                    cwd: thread.cwd,
+                    archived: thread.archived
+                )
+            }
+        }
+        .sorted { lhs, rhs in
+            (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
+        }
+        .prefix(8)
+
+        return LocalUsage(
+            lifetimeTokens: localPairs.reduce(Int64(0)) { $0 + $1.1.lifetimeTokens },
+            todayTokens: localPairs.reduce(Int64(0)) { $0 + $1.1.todayTokens },
+            thirtyDayTokens: localPairs.reduce(Int64(0)) { $0 + $1.1.thirtyDayTokens },
+            sevenDayTokens: localPairs.reduce(Int64(0)) { $0 + $1.1.sevenDayTokens },
+            threadCount: localPairs.reduce(0) { $0 + $1.1.threadCount },
+            lastUpdatedAt: localPairs.compactMap { $0.1.lastUpdatedAt }.max(),
+            dailyBuckets: dailyBuckets,
+            sevenDayModelBuckets: sevenDayModelBuckets,
+            recentThreads: Array(recentThreads),
+            todayModelUsage: aggregateModelUsage(localPairs, keyPath: \.todayModelUsage),
+            twentyFourHourModelUsage: aggregateModelUsage(localPairs, keyPath: \.twentyFourHourModelUsage),
+            sevenDayModelUsage: aggregateModelUsage(localPairs, keyPath: \.sevenDayModelUsage),
+            thirtyDayModelUsage: aggregateModelUsage(localPairs, keyPath: \.thirtyDayModelUsage),
+            lifetimeModelUsage: aggregateModelUsage(localPairs, keyPath: \.lifetimeModelUsage),
+            detailedUsage: detailed
+        )
+    }
+
+    private static func sourceUsagePeriodSummary(from items: [ModelUsageItem]) -> SourceUsagePeriodSummary {
+        let tokens = items.reduce(Int64(0)) { $0 + $1.tokens }
+        let estimatedCost = items.reduce(0.0) { $0 + $1.estimatedCostUSD }
+        let inputTokens = items.reduce(Int64(0)) { $0 + $1.uncachedInputTokens + $1.cachedInputTokens }
+        let cachedInputTokens = items.reduce(Int64(0)) { $0 + $1.cachedInputTokens }
+        let cacheHitRate = inputTokens > 0 ? Double(cachedInputTokens) / Double(inputTokens) : nil
+        return SourceUsagePeriodSummary(
+            tokens: tokens,
+            estimatedCost: estimatedCost,
+            cacheHitRate: cacheHitRate
+        )
+    }
+
+    private static func aggregateDetailedUsage(_ usages: [DetailedUsage]) -> DetailedUsage? {
+        guard !usages.isEmpty else { return nil }
+        return DetailedUsage(
+            today: aggregatePricedUsage(usages.map(\.today)),
+            thirtyDay: aggregatePricedUsage(usages.map(\.thirtyDay)),
+            sevenDay: aggregatePricedUsage(usages.map(\.sevenDay)),
+            month: aggregatePricedUsage(usages.map(\.month)),
+            lifetime: aggregatePricedUsage(usages.map(\.lifetime)),
+            parsedFileCount: usages.reduce(0) { $0 + $1.parsedFileCount },
+            tokenEventCount: usages.reduce(0) { $0 + $1.tokenEventCount }
+        )
+    }
+
+    private static func aggregatePricedUsage(_ usages: [PricedTokenUsage]) -> PricedTokenUsage {
+        var result = PricedTokenUsage.zero
+        for usage in usages {
+            result.tokens.add(usage.tokens)
+            result.estimatedCostUSD += usage.estimatedCostUSD
+        }
+        return result
+    }
+
+    private static func aggregateDailyBuckets(_ bucketLists: [[DailyTokenBucket]]) -> [DailyTokenBucket] {
+        guard let template = bucketLists.first(where: { !$0.isEmpty }) else { return [] }
+        return template.map { bucket in
+            DailyTokenBucket(
+                id: bucket.id,
+                label: bucket.label,
+                tokens: bucketLists.reduce(Int64(0)) { sum, buckets in
+                    sum + (buckets.first(where: { $0.id == bucket.id })?.tokens ?? 0)
+                }
+            )
+        }
+    }
+
+    private static func aggregateSevenDayModelBuckets(_ localPairs: [(UsageProvider, LocalUsage)]) -> [String: [DailyTokenBucket]] {
+        var result: [String: [DailyTokenBucket]] = [:]
+        for (provider, local) in localPairs {
+            for (model, buckets) in local.sevenDayModelBuckets {
+                result["\(provider.shortLabel) · \(model)"] = buckets
+            }
+        }
+        return result
+    }
+
+    private static func aggregateModelUsage(
+        _ localPairs: [(UsageProvider, LocalUsage)],
+        keyPath: KeyPath<LocalUsage, [ModelUsageItem]>
+    ) -> [ModelUsageItem] {
+        localPairs.flatMap { provider, local in
+            local[keyPath: keyPath].map { item in
+                ModelUsageItem(
+                    model: item.model,
+                    provider: "\(provider.shortLabel) · \(item.provider)",
+                    tokens: item.tokens,
+                    uncachedInputTokens: item.uncachedInputTokens,
+                    cachedInputTokens: item.cachedInputTokens,
+                    outputTokens: item.outputTokens,
+                    estimatedCostUSD: item.estimatedCostUSD,
+                    inputPricePerMillion: item.inputPricePerMillion,
+                    cachedInputPricePerMillion: item.cachedInputPricePerMillion,
+                    outputPricePerMillion: item.outputPricePerMillion,
+                    currency: item.currency,
+                    avgTokensPerSecond: item.avgTokensPerSecond
+                )
+            }
+        }
+        .sorted { lhs, rhs in
+            if lhs.tokens == rhs.tokens {
+                return lhs.provider.localizedCaseInsensitiveCompare(rhs.provider) == .orderedAscending
+            }
+            return lhs.tokens > rhs.tokens
         }
     }
 
@@ -480,78 +709,6 @@ final class UsageStore: ObservableObject {
                 value
             }
         }
-    }
-
-    func createAgentProfile() -> AgentProfile {
-        let index = agentProfiles.count + 1
-        let profile = AgentProfile.starter(name: "Profile \(index)")
-        agentProfiles.insert(profile, at: 0)
-        persistAgentProfiles()
-        return profile
-    }
-
-    func duplicateAgentProfile(id: String) -> AgentProfile? {
-        guard var profile = agentProfiles.first(where: { $0.id == id }) else { return nil }
-        profile = AgentProfile(
-            id: UUID().uuidString,
-            name: "\(profile.name) Copy",
-            summary: profile.summary,
-            persona: profile.persona,
-            workingStyle: profile.workingStyle,
-            constraints: profile.constraints,
-            selectedAssetIDs: profile.selectedAssetIDs,
-            updatedAt: Date()
-        )
-        agentProfiles.insert(profile, at: 0)
-        persistAgentProfiles()
-        return profile
-    }
-
-    func saveAgentProfile(_ profile: AgentProfile) {
-        if let index = agentProfiles.firstIndex(where: { $0.id == profile.id }) {
-            agentProfiles[index] = profile
-        } else {
-            agentProfiles.insert(profile, at: 0)
-        }
-        persistAgentProfiles()
-    }
-
-    func deleteAgentProfile(id: String) {
-        agentProfiles.removeAll { $0.id == id }
-        persistAgentProfiles()
-    }
-
-    func exportPath(profileID: String, tool: AgentTargetTool) -> String {
-        exportPaths[exportPathKey(profileID: profileID, tool: tool)] ?? ""
-    }
-
-    func setExportPath(_ path: String, profileID: String, tool: AgentTargetTool) {
-        exportPaths[exportPathKey(profileID: profileID, tool: tool)] = path
-        persistExportPaths()
-    }
-
-    func persistAgentProfiles() {
-        AgentDeskDatabase.shared.saveAgentProfiles(agentProfiles)
-    }
-
-    private static func loadAgentProfiles() -> [AgentProfile] {
-        let profiles = AgentDeskDatabase.shared.loadAgentProfiles()
-        guard !profiles.isEmpty else {
-            return [AgentProfile.starter()]
-        }
-        return profiles.sorted { $0.updatedAt > $1.updatedAt }
-    }
-
-    private func persistExportPaths() {
-        AgentDeskDatabase.shared.saveExportPaths(exportPaths)
-    }
-
-    private static func loadExportPaths() -> [String: String] {
-        AgentDeskDatabase.shared.loadExportPaths()
-    }
-
-    private func exportPathKey(profileID: String, tool: AgentTargetTool) -> String {
-        "\(profileID)::\(tool.rawValue)"
     }
 
     private func syncRefreshingState() {

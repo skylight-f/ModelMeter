@@ -95,167 +95,34 @@ final class CodexUsageReader {
             ))
         }
 
+        let supportedProviderCount = providers.filter { provider in
+            guard let usageProvider = UsageProvider(rawValue: provider.id) else { return false }
+            return usageProvider != .all
+        }.count
+        if supportedProviderCount > 1 {
+            providers.insert(DiscoveredProvider(
+                id: UsageProvider.all.rawValue,
+                name: "All Sources",
+                shortName: "All",
+                icon: "square.grid.2x2",
+                databasePaths: [],
+                type: .generic
+            ), at: 0)
+        }
+
         return providers
-    }
-
-    static func loadPromptRegistry(workspaceHints: [String] = []) -> PromptRegistry {
-        let fileManager = FileManager.default
-        let roots = promptAssetRoots(workspaceHints: workspaceHints)
-        var assets: [PromptAsset] = []
-        var seenPaths = Set<String>()
-
-        for root in roots where fileManager.fileExists(atPath: root.path) {
-            guard let enumerator = fileManager.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
-                options: [],
-                errorHandler: nil
-            ) else { continue }
-
-            for case let fileURL as URL in enumerator {
-                guard shouldIncludePromptAsset(fileURL: fileURL) else { continue }
-                let standardizedPath = fileURL.standardizedFileURL.path
-                guard seenPaths.insert(standardizedPath).inserted else { continue }
-                guard let asset = makePromptAsset(from: fileURL) else { continue }
-                assets.append(asset)
-            }
-        }
-
-        assets.sort { lhs, rhs in
-            if lhs.source == rhs.source {
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            }
-            return lhs.source.rawValue < rhs.source.rawValue
-        }
-
-        return PromptRegistry(refreshedAt: Date(), assets: assets)
-    }
-
-    private static func promptAssetRoots(workspaceHints: [String]) -> [URL] {
-        let home = NSHomeDirectory()
-        var roots: [URL] = [
-            URL(fileURLWithPath: home).appendingPathComponent(".codex/skills"),
-            URL(fileURLWithPath: home).appendingPathComponent(".agents/skills")
-        ]
-
-        let workspaceCandidates = Set(workspaceHints.filter { !$0.isEmpty })
-        for path in workspaceCandidates {
-            let workspace = URL(fileURLWithPath: path)
-            roots.append(workspace.appendingPathComponent("prompts"))
-            roots.append(workspace.appendingPathComponent("skills"))
-            roots.append(workspace.appendingPathComponent(".prompts"))
-            roots.append(workspace.appendingPathComponent(".codex/skills"))
-            roots.append(workspace.appendingPathComponent(".agents/skills"))
-        }
-
-        return roots
-    }
-
-    private static func shouldIncludePromptAsset(fileURL: URL) -> Bool {
-        guard
-            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
-            values.isRegularFile == true
-        else { return false }
-
-        let name = fileURL.lastPathComponent.lowercased()
-        let parent = fileURL.deletingLastPathComponent().lastPathComponent.lowercased()
-        let ext = fileURL.pathExtension.lowercased()
-
-        if name == "skill.md" { return true }
-        if ext == "prompt" { return true }
-        if name.contains("prompt") { return true }
-        if ["yaml", "yml", "json", "toml"].contains(ext) && (parent.contains("prompt") || parent.contains("skill")) {
-            return true
-        }
-        if ext == "md" && (parent.contains("prompt") || parent.contains("skill")) {
-            return true
-        }
-        return false
-    }
-
-    private static func makePromptAsset(from fileURL: URL) -> PromptAsset? {
-        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        let kind = promptAssetKind(for: fileURL)
-        let source = promptAssetSource(for: fileURL)
-        let name = promptAssetName(for: fileURL, content: trimmed)
-        let summary = promptAssetSummary(content: trimmed)
-        let preview = String(trimmed.prefix(4000))
-        let resourceValues = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
-        let modifiedAt = resourceValues?.contentModificationDate
-        let tags = promptAssetTags(for: fileURL)
-
-        return PromptAsset(
-            id: fileURL.standardizedFileURL.path,
-            name: name,
-            kind: kind,
-            source: source,
-            path: fileURL.standardizedFileURL.path,
-            summary: summary,
-            content: preview,
-            modifiedAt: modifiedAt,
-            tags: tags
-        )
-    }
-
-    private static func promptAssetKind(for fileURL: URL) -> PromptAssetKind {
-        let name = fileURL.lastPathComponent.lowercased()
-        let ext = fileURL.pathExtension.lowercased()
-        if name == "skill.md" { return .skill }
-        if ext == "prompt" || name.contains("prompt") { return .prompt }
-        return .config
-    }
-
-    private static func promptAssetSource(for fileURL: URL) -> PromptAssetSource {
-        let path = fileURL.standardizedFileURL.path
-        let home = NSHomeDirectory()
-        if path.hasPrefix(home + "/.codex/skills/.system/") { return .codexSystem }
-        if path.hasPrefix(home + "/.codex/skills/") { return .codexUser }
-        if path.hasPrefix(home + "/.agents/skills/") { return .agents }
-        return .workspace
-    }
-
-    private static func promptAssetName(for fileURL: URL, content: String) -> String {
-        for rawLine in content.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.hasPrefix("#") {
-                let title = line.trimmingCharacters(in: CharacterSet(charactersIn: "# " ))
-                if !title.isEmpty { return title }
-            }
-        }
-        if fileURL.lastPathComponent == "SKILL.md" {
-            return fileURL.deletingLastPathComponent().lastPathComponent
-        }
-        return fileURL.deletingPathExtension().lastPathComponent
-    }
-
-    private static func promptAssetSummary(content: String) -> String {
-        for rawLine in content.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty else { continue }
-            if line.hasPrefix("#") { continue }
-            return String(line.prefix(140))
-        }
-        return ""
-    }
-
-    private static func promptAssetTags(for fileURL: URL) -> [String] {
-        let parts = fileURL.deletingLastPathComponent().pathComponents
-        let interesting = parts.filter { part in
-            !part.isEmpty
-                && part != "/"
-                && part != ".codex"
-                && part != ".agents"
-                && part != "skills"
-                && part != "prompts"
-        }
-        return Array(interesting.suffix(3))
     }
 
     func load() -> UsageSnapshot {
         var messages: [String] = []
+        if provider == .all {
+            let sourceProviders = Self.discoverProviders()
+                .compactMap { UsageProvider(rawValue: $0.id) }
+                .filter { $0 != .all }
+            let snapshots = sourceProviders.map { CodexUsageReader(provider: $0).load() }
+            return UsageStore.aggregateSnapshot(from: snapshots).snapshot
+        }
+
         if provider == .mimocode {
             let account = readMimoAccount()
             let local = readMimoLocalUsage(messages: &messages)
@@ -271,7 +138,6 @@ final class CodexUsageReader {
                 credits: nil,
                 cloudLifetimeTokens: nil,
                 local: local,
-                taskBoard: nil,
                 messages: messages
             )
         }
@@ -290,17 +156,8 @@ final class CodexUsageReader {
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
             local: local,
-            taskBoard: nil,
             messages: messages
         )
-    }
-
-    func loadTaskBoard() -> TaskBoard? {
-        var messages: [String] = []
-        if provider == .mimocode {
-            return readMimoTaskBoard(messages: &messages)
-        }
-        return readTaskBoard(messages: &messages)
     }
 
     private struct AppServerSnapshot {
@@ -766,10 +623,17 @@ final class CodexUsageReader {
                 accumulator.tokenEventCount += entry.tokenEventCount
             }
 
-            let price = modelTokenPrice(for: source.model)
-            let modelName = normalizedModelName(source.model, fallback: price.model)
-            let bucketKey = modelUsageBucketKey(model: modelName, provider: source.modelProvider)
             for delta in entry.deltas {
+                let eventModel = delta.model ?? source.model
+                let eventProvider = delta.modelProvider ?? source.modelProvider
+                let price = modelTokenPrice(for: eventModel)
+                let modelName = normalizedModelName(eventModel, fallback: price.model)
+                let bucketKey = modelUsageBucketKey(model: modelName, provider: eventProvider)
+
+                if let eventProvider {
+                    modelProviders[bucketKey] = eventProvider
+                }
+
                 accumulator.add(
                     delta.tokens,
                     at: delta.date,
@@ -844,31 +708,16 @@ final class CodexUsageReader {
             return cached
         }
 
-        let tokenCountPattern = #""type":"token_count""#
-        let tokenCountNeedle = Data(tokenCountPattern.utf8)
-        if let parsed = parseSessionUsageWithGrep(
-            url: url,
-            tokenCountPattern: tokenCountPattern,
-            tokenCountNeedle: tokenCountNeedle,
-            fractionalFormatter: fractionalFormatter,
-            plainFormatter: plainFormatter
-        ) {
-            let entry = SessionUsageCacheEntry(
-                fileSize: fileSize,
-                modificationDate: modificationDate,
-                hasTokenEvents: parsed.hasTokenEvents,
-                tokenEventCount: parsed.tokenEventCount,
-                deltas: parsed.deltas
-            )
-            Self.sessionUsageCache[source.rolloutPath] = entry
-            return entry
-        }
-
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
 
+        let tokenCountNeedle = Data(#""type":"token_count""#.utf8)
+        let modelNeedle = Data(#""model"#.utf8)
+        let providerNeedle = Data(#""provider"#.utf8)
         var buffer = Data()
         var previous = TokenBreakdown.zero
+        var currentModel = source.model
+        var currentProvider = source.modelProvider
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
@@ -886,9 +735,13 @@ final class CodexUsageReader {
                 processUsageLine(
                     lineData,
                     tokenCountNeedle: tokenCountNeedle,
+                    modelNeedle: modelNeedle,
+                    providerNeedle: providerNeedle,
                     fractionalFormatter: fractionalFormatter,
                     plainFormatter: plainFormatter,
                     previous: &previous,
+                    currentModel: &currentModel,
+                    currentProvider: &currentProvider,
                     sawTokenEvent: &sawTokenEvent,
                     tokenEventCount: &tokenEventCount,
                     deltas: &deltas
@@ -900,9 +753,13 @@ final class CodexUsageReader {
             processUsageLine(
                 buffer,
                 tokenCountNeedle: tokenCountNeedle,
+                modelNeedle: modelNeedle,
+                providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 previous: &previous,
+                currentModel: &currentModel,
+                currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
                 deltas: &deltas
@@ -953,6 +810,10 @@ final class CodexUsageReader {
 
         var buffer = data
         var previous = TokenBreakdown.zero
+        var currentModel: String?
+        var currentProvider: String?
+        let modelNeedle = Data(#""model"#.utf8)
+        let providerNeedle = Data(#""provider"#.utf8)
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
@@ -963,9 +824,13 @@ final class CodexUsageReader {
             processUsageLine(
                 lineData,
                 tokenCountNeedle: tokenCountNeedle,
+                modelNeedle: modelNeedle,
+                providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 previous: &previous,
+                currentModel: &currentModel,
+                currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
                 deltas: &deltas
@@ -976,9 +841,13 @@ final class CodexUsageReader {
             processUsageLine(
                 buffer,
                 tokenCountNeedle: tokenCountNeedle,
+                modelNeedle: modelNeedle,
+                providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 previous: &previous,
+                currentModel: &currentModel,
+                currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
                 deltas: &deltas
@@ -991,20 +860,40 @@ final class CodexUsageReader {
     private func processUsageLine(
         _ lineData: Data,
         tokenCountNeedle: Data,
+        modelNeedle: Data,
+        providerNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
         plainFormatter: ISO8601DateFormatter,
         previous: inout TokenBreakdown,
+        currentModel: inout String?,
+        currentProvider: inout String?,
         sawTokenEvent: inout Bool,
         tokenEventCount: inout Int,
         deltas: inout [SessionUsageDelta]
     ) {
-        guard lineData.range(of: tokenCountNeedle) != nil,
-              let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+        let hasTokenCount = lineData.range(of: tokenCountNeedle) != nil
+        let hasModelHint = lineData.range(of: modelNeedle) != nil
+        let hasProviderHint = lineData.range(of: providerNeedle) != nil
+        guard hasTokenCount || hasModelHint || hasProviderHint,
+              let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
+        else { return }
+
+        let payload = object["payload"] as? [String: Any] ?? [:]
+        let info = payload["info"] as? [String: Any] ?? [:]
+        let totalUsage = info["total_token_usage"] as? [String: Any] ?? [:]
+        let detectedModel = tokenEventModel(object: object, payload: payload, info: info, totalUsage: totalUsage)
+        let detectedProvider = tokenEventProvider(object: object, payload: payload, info: info, totalUsage: totalUsage)
+        if let detectedModel {
+            currentModel = detectedModel
+        }
+        if let detectedProvider {
+            currentProvider = detectedProvider
+        }
+
+        guard hasTokenCount,
               let timestamp = object["timestamp"] as? String,
-              let payload = object["payload"] as? [String: Any],
               payload["type"] as? String == "token_count",
-              let info = payload["info"] as? [String: Any],
-              let totalUsage = info["total_token_usage"] as? [String: Any],
+              !totalUsage.isEmpty,
               let date = fractionalFormatter.date(from: timestamp) ?? plainFormatter.date(from: timestamp)
         else { return }
 
@@ -1026,133 +915,84 @@ final class CodexUsageReader {
         previous = current
 
         guard !delta.isZero else { return }
-        deltas.append(SessionUsageDelta(date: date, tokens: delta))
+        deltas.append(SessionUsageDelta(
+            date: date,
+            tokens: delta,
+            model: detectedModel ?? currentModel,
+            modelProvider: detectedProvider ?? currentProvider
+        ))
     }
 
-    private func readTaskBoard(messages: inout [String]) -> TaskBoard? {
-        let calendar = Calendar.current
-        let now = Date()
-        let dayStart = calendar.startOfDay(for: now)
-        let activeCutoff = now.addingTimeInterval(-2 * 60 * 60)
-
-        var activeItems: [TaskItem] = []
-        var pendingItems: [TaskItem] = []
-
-        if let dbPath = firstExistingPath([
-            NSHomeDirectory() + "/.codex/state_5.sqlite",
-            NSHomeDirectory() + "/.codex/sqlite/state_5.sqlite"
-        ]), let sqlitePath = firstExistingPath([
-            "/usr/bin/sqlite3",
-            "/opt/homebrew/bin/sqlite3",
-            "/opt/homebrew/share/android-commandlinetools/platform-tools/sqlite3"
-        ]) {
-            let todayThreadsQuery = """
-            SELECT id, title, preview, cwd, tokens_used AS tokens, updated_at AS updatedAt, recency_at AS recencyAt, model
-            FROM threads
-            WHERE archived = 0
-              AND preview <> ''
-              AND (
-                updated_at >= \(Int(dayStart.timeIntervalSince1970))
-                OR recency_at >= \(Int(dayStart.timeIntervalSince1970))
-                OR created_at >= \(Int(dayStart.timeIntervalSince1970))
-              )
-            ORDER BY recency_at DESC, updated_at DESC
-            LIMIT 24;
-            """
-
-            let todayThreads = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: todayThreadsQuery)
-            for object in todayThreads {
-                let updatedAt = dateFromEpoch(object["recencyAt"]) ?? dateFromEpoch(object["updatedAt"])
-                let kind: TaskColumnKind = (updatedAt ?? .distantPast) >= activeCutoff ? .active : .pending
-                let item = makeThreadTaskItem(object: object, updatedAt: updatedAt, kind: kind)
-                if kind == .active {
-                    activeItems.append(item)
-                } else {
-                    pendingItems.append(item)
-                }
-            }
-        } else {
-            messages.append("任务看板未找到 SQLite 数据源")
-        }
-
-        let scheduledItems = readAutomationTasks()
-
-        return TaskBoard(refreshedAt: Date(), columns: [
-            TaskColumn(id: .active, title: "进行中", count: activeItems.count, items: Array(activeItems.prefix(5))),
-            TaskColumn(id: .scheduled, title: "定时", count: scheduledItems.count, items: Array(scheduledItems.prefix(3)))
-        ])
-    }
-
-    private func makeThreadTaskItem(object: [String: Any], updatedAt: Date?, kind: TaskColumnKind) -> TaskItem {
-        let rawId = object["id"] as? String ?? UUID().uuidString
-        let title = normalizedTitle(object["title"] as? String, fallback: object["preview"] as? String)
-        let cwd = object["cwd"] as? String ?? ""
-        let tokens = int64Value(object["tokens"]) ?? 0
-        let compactId = rawId.replacingOccurrences(of: "-", with: "")
-        let code = "COD-" + compactId.suffix(4).uppercased()
-        let chip: String
-
-        switch kind {
-        case .active:
-            chip = tokens >= 5_000_000 ? "High" : "Active"
-        case .pending:
-            chip = tokens >= 2_000_000 ? "Medium" : "Idle"
-        case .scheduled:
-            chip = "Cron"
-        case .done:
-            chip = "Done"
-        }
-
-        let detailParts = [
-            shortWorkspaceName(cwd),
-            tokens > 0 ? formatTokens(tokens) : nil
-        ].compactMap { $0 }.filter { !$0.isEmpty }
-
-        return TaskItem(
-            id: rawId + kind.rawValue,
-            rawThreadId: rawId,
-            code: String(code),
-            title: title,
-            detail: detailParts.joined(separator: " · "),
-            chip: chip,
-            updatedAt: updatedAt,
-            tokens: tokens,
-            kind: kind
+    private func tokenEventModel(
+        object: [String: Any],
+        payload: [String: Any],
+        info: [String: Any],
+        totalUsage: [String: Any]
+    ) -> String? {
+        firstTokenEventString(
+            keys: ["model", "model_slug", "model_id", "modelId", "modelID", "model_name", "modelName"],
+            dictionaries: [info, totalUsage, payload, object]
         )
     }
 
-    private func readAutomationTasks() -> [TaskItem] {
-        let root = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex/automations")
-        guard let enumerator = fileManager.enumerator(at: root, includingPropertiesForKeys: nil) else {
-            return []
+    private func tokenEventProvider(
+        object: [String: Any],
+        payload: [String: Any],
+        info: [String: Any],
+        totalUsage: [String: Any]
+    ) -> String? {
+        firstTokenEventString(
+            keys: ["model_provider", "modelProvider", "provider", "provider_id", "providerId", "providerID"],
+            dictionaries: [info, totalUsage, payload, object]
+        )
+    }
+
+    private func firstTokenEventString(keys: [String], dictionaries: [[String: Any]]) -> String? {
+        for dictionary in dictionaries {
+            if let value = firstStringValue(keys: keys, in: dictionary) {
+                return value
+            }
         }
-
-        var items: [TaskItem] = []
-        for case let url as URL in enumerator where url.lastPathComponent == "automation.toml" {
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            let fields = parseSimpleTOML(text)
-            guard (fields["status"] ?? "").uppercased() == "ACTIVE" else { continue }
-
-            let id = fields["id"] ?? url.deletingLastPathComponent().lastPathComponent
-            let name = fields["name"] ?? id
-            let kind = fields["kind"] ?? "cron"
-            let schedule = scheduleSummary(fields["rrule"])
-            let detail = [kind.uppercased(), schedule].filter { !$0.isEmpty }.joined(separator: " · ")
-
-            items.append(TaskItem(
-                id: "automation-" + id,
-                rawThreadId: id,
-                code: "AUTO-" + id.prefix(4).uppercased(),
-                title: name,
-                detail: detail,
-                chip: kind == "heartbeat" ? "Wake" : "Cron",
-                updatedAt: dateFromEpoch(fields["updated_at"]),
-                tokens: nil,
-                kind: .scheduled
-            ))
+        for dictionary in dictionaries {
+            if let value = firstNestedStringValue(keys: keys, in: dictionary, depth: 2) {
+                return value
+            }
         }
+        return nil
+    }
 
-        return items.sorted { $0.title < $1.title }
+    private func firstStringValue(keys: [String], in dictionary: [String: Any]) -> String? {
+        for key in keys {
+            if let value = stringValue(dictionary[key])?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private func firstNestedStringValue(keys: [String], in dictionary: [String: Any], depth: Int) -> String? {
+        guard depth > 0 else { return nil }
+        for (_, value) in dictionary {
+            if let nested = value as? [String: Any] {
+                if let found = firstStringValue(keys: keys, in: nested) {
+                    return found
+                }
+                if let found = firstNestedStringValue(keys: keys, in: nested, depth: depth - 1) {
+                    return found
+                }
+            } else if let nestedArray = value as? [[String: Any]] {
+                for nested in nestedArray {
+                    if let found = firstStringValue(keys: keys, in: nested) {
+                        return found
+                    }
+                    if let found = firstNestedStringValue(keys: keys, in: nested, depth: depth - 1) {
+                        return found
+                    }
+                }
+            }
+        }
+        return nil
     }
 
     private func readMimoAccount() -> AccountInfo? {
@@ -1243,20 +1083,6 @@ final class CodexUsageReader {
                   let date = dateFromEpoch(object["timeCreated"])
             else { continue }
 
-            let outputTokens = int64Value(object["outputTokens"]) ?? 0
-            let timeCreated = (object["timeCreated"] as? Double) ?? 0
-            let timeCompleted = (object["timeCompleted"] as? Double) ?? 0
-            if timeCompleted > timeCreated, outputTokens > 0 {
-                let durationMs = timeCompleted - timeCreated
-                let modelName = normalizedModelName(object["model"] as? String, fallback: "")
-                let providerID = object["provider"] as? String
-                let bucketKey = modelUsageBucketKey(model: modelName, provider: providerID)
-                if !modelName.isEmpty {
-                    modelTotalTokens[bucketKey, default: 0] += outputTokens
-                    modelTotalTimeMs[bucketKey, default: 0] += durationMs
-                }
-            }
-
             let uncachedInputTokens = int64Value(object["inputTokens"]) ?? 0
             let cachedInputTokens = int64Value(object["cachedInputTokens"]) ?? 0
             let current = TokenBreakdown(
@@ -1286,6 +1112,16 @@ final class CodexUsageReader {
             let providerID = (object["provider"] as? String) ?? ""
             let bucketKey = modelUsageBucketKey(model: modelName, provider: providerID)
             let rawCost = estimatedCostUSD(tokens: current, price: price)
+
+            if current.outputTokens > 0,
+               let timeCreated = epochMilliseconds(object["timeCreated"]),
+               let timeCompleted = epochMilliseconds(object["timeCompleted"]) {
+                let durationMs = timeCompleted - timeCreated
+                if durationMs > 0 {
+                    modelTotalTokens[bucketKey, default: 0] += current.outputTokens
+                    modelTotalTimeMs[bucketKey, default: 0] += durationMs
+                }
+            }
 
             if !providerID.isEmpty {
                 modelProviders[bucketKey] = providerID
@@ -1411,82 +1247,6 @@ final class CodexUsageReader {
         }
 
         return result
-    }
-
-    private func readMimoTaskBoard(messages: inout [String]) -> TaskBoard? {
-        guard let dbPath = mimoDatabasePath(),
-              let sqlitePath = sqliteExecutablePath()
-        else {
-            messages.append("任务看板未找到 MimoCode SQLite 数据源")
-            return nil
-        }
-
-        let calendar = Calendar.current
-        let now = Date()
-        let dayStart = calendar.startOfDay(for: now)
-        let activeCutoff = now.addingTimeInterval(-2 * 60 * 60)
-        let dayStartMs = Int(dayStart.timeIntervalSince1970 * 1000)
-
-        let todayQuery = """
-        SELECT id, title, directory, time_updated AS updatedAt, time_archived AS archivedAt
-        FROM session
-        WHERE time_archived IS NULL
-          AND (
-            time_updated >= \(dayStartMs)
-            OR time_created >= \(dayStartMs)
-          )
-        ORDER BY time_updated DESC
-        LIMIT 24;
-        """
-
-        var activeItems: [TaskItem] = []
-        var pendingItems: [TaskItem] = []
-
-        for object in runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: todayQuery) {
-            let updatedAt = dateFromEpoch(object["updatedAt"])
-            let kind: TaskColumnKind = (updatedAt ?? .distantPast) >= activeCutoff ? .active : .pending
-            let item = makeMimoSessionTaskItem(object: object, updatedAt: updatedAt, kind: kind)
-            if kind == .active {
-                activeItems.append(item)
-            } else {
-                pendingItems.append(item)
-            }
-        }
-
-        return TaskBoard(refreshedAt: Date(), columns: [
-            TaskColumn(id: .active, title: "进行中", count: activeItems.count, items: Array(activeItems.prefix(5))),
-            TaskColumn(id: .scheduled, title: "定时", count: 0, items: [])
-        ])
-    }
-
-    private func makeMimoSessionTaskItem(object: [String: Any], updatedAt: Date?, kind: TaskColumnKind) -> TaskItem {
-        let rawId = object["id"] as? String ?? UUID().uuidString
-        let compactId = rawId.replacingOccurrences(of: "-", with: "")
-        let code = "MIMO-" + compactId.suffix(4).uppercased()
-        let chip: String
-
-        switch kind {
-        case .active:
-            chip = "Active"
-        case .pending:
-            chip = "Idle"
-        case .scheduled:
-            chip = "Cron"
-        case .done:
-            chip = "Done"
-        }
-
-        return TaskItem(
-            id: rawId + kind.rawValue,
-            rawThreadId: rawId,
-            code: String(code),
-            title: normalizedTitle(object["title"] as? String, fallback: nil),
-            detail: shortWorkspaceName(object["directory"] as? String ?? ""),
-            chip: chip,
-            updatedAt: updatedAt,
-            tokens: nil,
-            kind: kind
-        )
     }
 
     private func mimoDatabasePath() -> String? {

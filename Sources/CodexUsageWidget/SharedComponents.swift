@@ -158,14 +158,14 @@ struct ProviderSwitch: View {
             set: { onSelect($0) }
         )) {
             ForEach(UsageProvider.allCases, id: \.self) { item in
-                Text(item.shortLabel).tag(item)
+                Text(item.shortLabel(language: language)).tag(item)
             }
         }
         .labelsHidden()
         .pickerStyle(.segmented)
         .controlSize(.mini)
         .frame(width: 122)
-        .help(language.text("数据源：Codex / MimoCode", "Source: Codex / MimoCode"))
+        .help(language.text("数据源：全部 / Codex / MimoCode", "Source: All / Codex / MimoCode"))
         .accessibilityLabel(language.text("数据源", "Source"))
     }
 }
@@ -185,7 +185,7 @@ struct DiscoveredProviderPicker: View {
                 } label: {
                     HStack {
                         Image(systemName: provider.icon)
-                        Text(provider.name)
+                        Text(localizedProviderName(provider, language: language))
                         if provider.id == selected?.id {
                             Image(systemName: "checkmark")
                         }
@@ -206,7 +206,7 @@ struct DiscoveredProviderPicker: View {
                 if let selected {
                     Image(systemName: selected.icon)
                         .font(.system(size: 10))
-                    Text(selected.shortName)
+                    Text(localizedProviderShortName(selected, language: language))
                         .font(.system(size: 10, weight: .medium))
                 } else {
                     Image(systemName: "questionmark.circle")
@@ -229,6 +229,20 @@ struct DiscoveredProviderPicker: View {
         .frame(minWidth: 80)
         .help(language.text("选择数据源", "Select data source"))
     }
+}
+
+private func localizedProviderName(_ provider: DiscoveredProvider, language: WidgetLanguage) -> String {
+    if let usageProvider = UsageProvider(rawValue: provider.id) {
+        return usageProvider.displayName(language: language)
+    }
+    return provider.name
+}
+
+private func localizedProviderShortName(_ provider: DiscoveredProvider, language: WidgetLanguage) -> String {
+    if let usageProvider = UsageProvider(rawValue: provider.id) {
+        return usageProvider.shortLabel(language: language)
+    }
+    return provider.shortName
 }
 
 struct ThemeSwitch: View {

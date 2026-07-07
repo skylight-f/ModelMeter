@@ -34,6 +34,7 @@ AgentDesk is a macOS desktop widget for monitoring token usage and costs across 
 - **Smart Detection**: Automatically scans local databases for available sources
 - **Multi-Source Support**: Codex, MimoCode, Claude Code, Cursor, Windsurf
 - **One-Click Switch**: Dropdown menu to quickly switch data sources
+- **All Sources**: Combines Codex and MimoCode usage overview with a source split
 
 ### Desktop Integration
 - **Always Visible**: Stays on desktop layer for quick viewing

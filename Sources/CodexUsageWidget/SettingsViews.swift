@@ -155,7 +155,7 @@ struct SettingsView: View {
             Spacer(minLength: 12)
 
             HStack(spacing: 8) {
-                statusPill(localizedText("数据源 \(provider.shortLabel)", "Source \(provider.shortLabel)"))
+                statusPill(localizedText("数据源 \(provider.shortLabel(language: language))", "Source \(provider.shortLabel(language: language))"))
                 statusPill(themeMode == .system ? localizedText("外观 自动", "Appearance System") : themeMode == .light ? localizedText("外观 浅色", "Appearance Light") : localizedText("外观 深色", "Appearance Dark"))
                 statusPill(language == .zh ? "中文" : "English")
             }
@@ -169,7 +169,7 @@ struct SettingsView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            StudioPanelHeader(
+            SettingsPanelHeader(
                 title: localizedText("设置导航", "Settings"),
                 detail: localizedText("全局应用偏好", "Global app preferences")
             )
@@ -294,7 +294,7 @@ struct SettingsView: View {
                         ) {
                             Picker("", selection: $provider) {
                                 ForEach(UsageProvider.allCases, id: \.self) { p in
-                                    Text(p.displayName).tag(p)
+                                    Text(p.displayName(language: language)).tag(p)
                                 }
                             }
                             .labelsHidden()
@@ -334,7 +334,7 @@ struct SettingsView: View {
                     HStack(spacing: 10) {
                         PromptSummaryStatRow(
                             title: localizedText("默认源", "Default"),
-                            value: provider.shortLabel,
+                            value: provider.shortLabel(language: language),
                             detail: localizedText("已写入本地偏好", "Stored in local preferences")
                         )
                         PromptSummaryStatRow(
@@ -542,7 +542,7 @@ struct SettingsView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            StudioPanelHeader(title: title, detail: detail)
+            SettingsPanelHeader(title: title, detail: detail)
             content()
         }
         .padding(12)
@@ -825,5 +825,50 @@ struct SettingsView: View {
         case .light: return localizedText("浅色", "Light")
         case .dark: return localizedText("深色", "Dark")
         }
+    }
+}
+
+private struct SettingsPanelHeader: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+            Spacer()
+            Text(detail)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct PromptSummaryStatRow: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(value)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
+            }
+            Text(detail)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack)
+        )
     }
 }

@@ -16,7 +16,7 @@
 
 - 使用 `.primary`、`.secondary`、`.tertiary` 作为文本层级，方向正确。
 - macOS 26 使用 `GlassEffectContainer`，低版本使用 `NSVisualEffectView`，材质路线成立。
-- 信息架构清楚：额度、token、趋势、任务看板有明确区域。
+- 信息架构清楚：额度、token、趋势、模型用量和来源对比有明确区域。
 - SF Symbols 使用统一，和 macOS 原生生态一致。
 
 ### 主要问题
@@ -25,7 +25,7 @@
 - 语义复用混乱：绿色同时代表 5h 额度、缓存、成功、正收益；橙色同时代表进行中、警告、输出、亏损。
 - 主色偏离 logo：logo 主色是蓝紫高饱和渐变，界面主视觉却偏青绿和灰蓝。
 - 材质叠加偏重：`Color.white.opacity(...)` 被大量用于卡片和轨道，在复杂壁纸上容易变脏或失去边界。
-- 大面积染色过多：任务列和图表背景使用色彩填充时，容易削弱 Apple 风格的“安静内容层 + 克制强调”。
+- 大面积染色过多：图表背景使用色彩填充时，容易削弱 Apple 风格的“安静内容层 + 克制强调”。
 
 ## Apple 风格原则
 
@@ -138,24 +138,6 @@ Reduce Transparency 开启时，`surface.window` 和 `surface.card` 必须提高
 | `data.zero` | `#8E8E93` at 35% | 0 值、空柱 |
 
 绿色只保留给成功、完成等小面积状态语义，不用于可能占据大面积的数据条。
-
-### Task Board
-
-任务看板应使用“低饱和背景 + 高饱和小面积标识”。
-
-| Kind | Accent | Fill | Icon |
-| --- | --- | --- | --- |
-| Active | `#FF9F0A` | accent at 7% | `record.circle` |
-| Pending | `#8E8E93` | accent at 6% | `circle` |
-| Scheduled | `#8B6DFF` | accent at 7% | `clock` |
-| Done | `#34C759` | accent at 7% | `checkmark.circle.fill` |
-
-规则：
-
-- 列背景只用 6% 到 8% 透明度。
-- 任务卡片背景保持中性，不随列状态大面积染色。
-- chip 可以使用 13% 到 16% 透明度填充，文字使用 accent 本色。
-- 任务卡片内状态色面积控制在图标、chip、avatar 三处以内。
 
 ## 组件用色规范
 
@@ -276,25 +258,20 @@ private enum WidgetPalette {
 | 7d 高光 | `#7AC7FF` | `data.quotaSecondaryHighlight` |
 | 缓存 token | `#149E7A` | `data.cached`，迁移到品牌紫 |
 | 输出 token | `#EB941F` | `data.output` |
-| active task | `#E0800D` | `task.active` |
-| scheduled task | `#128C4F` | `task.scheduled` |
-| done task | `#126EC7` | `task.done` |
 | danger | `#D1382E` | `status.danger` |
 
 ### 3. 分阶段迁移
 
 1. 第一阶段：新增 `WidgetPalette`，替换所有硬编码 RGB，不改变布局。
 2. 第二阶段：调整 quota ring 和 token split 的语义色，完成品牌主色迁移。
-3. 第三阶段：调整任务看板列背景和 chip，让大面积色彩降噪。
-4. 第四阶段：为 Reduce Transparency 和 Increased Contrast 增加动态 surface。
-5. 第五阶段：在浅色壁纸、深色壁纸、桌面图片复杂背景下截图验证。
+3. 第三阶段：为 Reduce Transparency 和 Increased Contrast 增加动态 surface。
+4. 第四阶段：在浅色壁纸、深色壁纸、桌面图片复杂背景下截图验证。
 
 ## 验收标准
 
 - 代码中组件内部不再出现新的 `Color(red:green:blue:)`。
 - 主视觉从青绿迁移到 logo 蓝紫，绿色只用于成功或完成等小面积状态语义。
 - 任何状态色都不作为普通品牌色使用。
-- 任务看板列背景不会比任务卡片更抢眼。
 - 正文和数值在浅色、深色、复杂壁纸下都能稳定阅读。
 - 开启 Reduce Transparency 后，卡片和窗口仍有明确层级。
 - 颜色不是唯一信息通道，图标、文本、位置也能表达状态。

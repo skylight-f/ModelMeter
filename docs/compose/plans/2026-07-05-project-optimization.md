@@ -296,15 +296,14 @@ git commit -m "refactor: extract chart and metric card components from Views.swi
 
 ---
 
-### Task 5: Extract model usage and task board components
+### Task 5: Extract model usage and wool progress components
 
 **Files:**
 - Create: `Sources/CodexUsageWidget/WidgetModelUsage.swift`
-- Create: `Sources/CodexUsageWidget/WidgetTaskBoard.swift`
 - Create: `Sources/CodexUsageWidget/WidgetWoolProgress.swift`
 
 **Interfaces:**
-- Produces: model usage views, task board views, wool progress views
+- Produces: model usage views and wool progress views
 
 - [ ] **Step 1: Create WidgetModelUsage.swift**
 
@@ -313,32 +312,24 @@ Move from Views.swift:
 - `struct ModelDetailView` (line 4213)
 - `struct ModelConsumptionRow` (line 5787)
 
-- [ ] **Step 2: Create WidgetTaskBoard.swift**
-
-Move from Views.swift:
-- `struct TaskBoardColumnView` (line 4599)
-- `struct TaskIssueCard` (line 4659)
-- `struct TaskAvatar` (line 4705)
-- `struct TaskChip` (line 4721)
-
-- [ ] **Step 3: Create WidgetWoolProgress.swift**
+- [ ] **Step 2: Create WidgetWoolProgress.swift**
 
 Move from Views.swift:
 - `struct WoolProgressCard` (line 4389)
 - `struct SubscriptionMilestone` (line 4362)
 
-- [ ] **Step 4: Remove extracted code from Views.swift**
+- [ ] **Step 3: Remove extracted code from Views.swift**
 
-- [ ] **Step 5: Build and verify**
+- [ ] **Step 4: Build and verify**
 
 Run: `make build`
 Expected: BUILD SUCCEEDED
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add Sources/CodexUsageWidget/WidgetModelUsage.swift Sources/CodexUsageWidget/WidgetTaskBoard.swift Sources/CodexUsageWidget/WidgetWoolProgress.swift Sources/CodexUsageWidget/Views.swift
-git commit -m "refactor: extract model usage, task board, and wool progress components"
+git add Sources/CodexUsageWidget/WidgetModelUsage.swift Sources/CodexUsageWidget/WidgetWoolProgress.swift Sources/CodexUsageWidget/Views.swift
+git commit -m "refactor: extract model usage and wool progress components"
 ```
 
 ---
@@ -625,12 +616,9 @@ git commit -m "test: add unit tests for TokenBreakdown calculations"
 **Files:**
 - Modify: `Sources/CodexUsageWidget/UsageStore.swift` (start/stop methods)
 
-- [ ] **Step 1: Change taskBoardTimer interval from 10s to 60s**
+- [ ] **Step 1: Remove obsolete secondary timer guidance**
 
-In `UsageStore.start()`, change:
-```swift
-taskBoardTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-```
+The secondary board surface was removed from the product, so there is no dedicated refresh timer to tune.
 
 - [ ] **Step 2: Build and verify**
 
@@ -641,7 +629,7 @@ Expected: BUILD SUCCEEDED
 
 ```bash
 git add Sources/CodexUsageWidget/UsageStore.swift
-git commit -m "perf: increase taskBoardTimer interval from 10s to 60s"
+git commit -m "perf: simplify refresh timers"
 ```
 
 ---

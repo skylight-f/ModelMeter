@@ -100,33 +100,15 @@ final class DesktopWidgetWindow: NSPanel {
     }
 }
 
-final class StudioWindow: NSWindow {
-    init(contentRect: NSRect) {
-        super.init(
-            contentRect: contentRect,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        title = "Prompt Studio"
-        isReleasedWhenClosed = false
-        minSize = CGSize(width: 980, height: 640)
-        level = .floating
-        center()
-    }
-}
-
 // MARK: - AppDelegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: AppDelegate?
     private enum WindowStorageKey {
-        static let studioFrame = "AgentDesk.windowFrame.studio"
         static let settingsFrame = "AgentDesk.windowFrame.settings"
     }
     private let store = UsageStore()
     private var window: DesktopWidgetWindow?
-    private var studioWindow: StudioWindow?
     private var settingsWindow: NSWindow?
     private var statusItem: NSStatusItem?
     private var statusMenu: NSMenu?
@@ -197,25 +179,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         toggleWindowLayer()
     }
 
-    func openPromptStudio() {
-        WidgetThemeMode.storedOrAutomatic().applyAppearance()
-
-        if studioWindow == nil {
-            let studio = StudioWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 760))
-            studio.delegate = self
-            studio.identifier = NSUserInterfaceItemIdentifier("AgentDeskPromptStudioWindow")
-            if !restoreFrame(for: studio, storageKey: WindowStorageKey.studioFrame) {
-                studio.center()
-            }
-            let hostingController = NSHostingController(rootView: PromptStudioView(store: store))
-            studio.contentViewController = hostingController
-            studioWindow = studio
-        }
-
-        studioWindow?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
     func refreshStatusItemLocalization() {
         statusMenu = makeStatusMenu()
         let language = WidgetLanguage.storedOrAutomatic()
@@ -246,7 +209,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func makeStatusMenu() -> NSMenu {
         let language = WidgetLanguage.storedOrAutomatic()
         let menu = NSMenu()
-        menu.addItem(withTitle: language.text("打开 Prompt Studio", "Open Prompt Studio"), action: #selector(openPromptStudioFromMenu), keyEquivalent: "")
         menu.addItem(withTitle: language.text("切换前台/桌面层", "Toggle Front/Desktop Layer"), action: #selector(toggleWindowLayerFromMenu), keyEquivalent: "")
         menu.addItem(withTitle: language.text("刷新数据", "Refresh Data"), action: #selector(refreshDataFromMenu), keyEquivalent: "")
         menu.addItem(.separator())
@@ -255,10 +217,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(withTitle: language.text("退出 AgentDesk", "Quit AgentDesk"), action: #selector(quitFromMenu), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
         return menu
-    }
-
-    @objc private func openPromptStudioFromMenu() {
-        openPromptStudio()
     }
 
     @objc private func toggleWindowLayerFromMenu() {
@@ -324,8 +282,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let window = notification.object as? NSWindow else { return }
         let storageKey: String?
         switch window.identifier?.rawValue {
-        case "AgentDeskPromptStudioWindow":
-            storageKey = WindowStorageKey.studioFrame
         case "AgentDeskSettingsWindow":
             storageKey = WindowStorageKey.settingsFrame
         default:

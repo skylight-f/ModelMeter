@@ -281,41 +281,6 @@ enum ModelUsagePeriod: String, CaseIterable, Codable {
     }
 }
 
-enum TaskColumnKind: String, Equatable, Codable {
-    case active
-    case pending
-    case scheduled
-    case done
-}
-
-struct TaskItem: Identifiable, Equatable, Codable {
-    let id: String
-    let rawThreadId: String
-    let code: String
-    let title: String
-    let detail: String
-    let chip: String
-    let updatedAt: Date?
-    let tokens: Int64?
-    let kind: TaskColumnKind
-}
-
-struct TaskColumn: Identifiable, Equatable, Codable {
-    let id: TaskColumnKind
-    let title: String
-    let count: Int
-    let items: [TaskItem]
-}
-
-struct TaskBoard: Equatable, Codable {
-    let refreshedAt: Date
-    let columns: [TaskColumn]
-
-    var totalCount: Int {
-        columns.reduce(0) { $0 + $1.count }
-    }
-}
-
 struct UsageSnapshot: Equatable, Codable {
     let provider: UsageProvider
     let refreshedAt: Date
@@ -327,7 +292,6 @@ struct UsageSnapshot: Equatable, Codable {
     let credits: CreditsInfo?
     let cloudLifetimeTokens: Int64?
     let local: LocalUsage?
-    let taskBoard: TaskBoard?
     let messages: [String]
 
     static let empty = UsageSnapshot.empty(provider: .codex)
@@ -344,25 +308,7 @@ struct UsageSnapshot: Equatable, Codable {
             credits: nil,
             cloudLifetimeTokens: nil,
             local: nil,
-            taskBoard: nil,
             messages: ["正在读取 \(provider.displayName) 数据"]
-        )
-    }
-
-    func replacingTaskBoard(_ taskBoard: TaskBoard?) -> UsageSnapshot {
-        UsageSnapshot(
-            provider: provider,
-            refreshedAt: refreshedAt,
-            account: account,
-            limitId: limitId,
-            limitName: limitName,
-            primary: primary,
-            secondary: secondary,
-            credits: credits,
-            cloudLifetimeTokens: cloudLifetimeTokens,
-            local: local,
-            taskBoard: taskBoard,
-            messages: messages
         )
     }
 
@@ -378,7 +324,6 @@ struct UsageSnapshot: Equatable, Codable {
             credits: credits ?? fallback.credits,
             cloudLifetimeTokens: cloudLifetimeTokens ?? fallback.cloudLifetimeTokens,
             local: local ?? fallback.local,
-            taskBoard: taskBoard,
             messages: messages.isEmpty ? fallback.messages : messages
         )
     }
@@ -416,6 +361,7 @@ enum ProviderType {
 }
 
 enum UsageProvider: String, CaseIterable, Equatable, Codable {
+    case all
     case codex
     case mimocode
 
@@ -423,6 +369,8 @@ enum UsageProvider: String, CaseIterable, Equatable, Codable {
 
     var displayName: String {
         switch self {
+        case .all:
+            return "All Sources"
         case .codex:
             return "Codex"
         case .mimocode:
@@ -432,6 +380,8 @@ enum UsageProvider: String, CaseIterable, Equatable, Codable {
 
     var shortLabel: String {
         switch self {
+        case .all:
+            return "All"
         case .codex:
             return "Codex"
         case .mimocode:
@@ -449,6 +399,63 @@ enum UsageProvider: String, CaseIterable, Equatable, Codable {
     func persist() {
         AgentDeskDatabase.shared.set(rawValue, forKey: Self.storageKey)
     }
+
+    func displayName(language: WidgetLanguage) -> String {
+        switch self {
+        case .all:
+            return language.text("全部来源", "All Sources")
+        case .codex:
+            return "Codex"
+        case .mimocode:
+            return "MimoCode"
+        }
+    }
+
+    func shortLabel(language: WidgetLanguage) -> String {
+        switch self {
+        case .all:
+            return language.text("全部", "All")
+        case .codex:
+            return "Codex"
+        case .mimocode:
+            return "Mimo"
+        }
+    }
+}
+
+struct SourceUsagePeriodSummary: Equatable {
+    let tokens: Int64
+    let estimatedCost: Double
+    let cacheHitRate: Double?
+}
+
+struct SourceUsageSummary: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let shortName: String
+    let twentyFourHour: SourceUsagePeriodSummary
+    let today: SourceUsagePeriodSummary
+    let sevenDay: SourceUsagePeriodSummary
+    let thirtyDay: SourceUsagePeriodSummary
+
+    var tokens: Int64 { today.tokens }
+    var estimatedCost: Double { today.estimatedCost }
+    var cacheHitRate: Double? { today.cacheHitRate }
+
+    func usage(for period: ModelUsagePeriod) -> SourceUsagePeriodSummary {
+        switch period {
+        case .twentyFourHour:
+            return twentyFourHour
+        case .today:
+            return today
+        case .sevenDay:
+            return sevenDay
+        case .thirtyDay:
+            return thirtyDay
+        case .lifetime:
+            return thirtyDay
+        }
+    }
 }
 
 struct DiagnosticItem: Identifiable {
@@ -457,67 +464,6 @@ struct DiagnosticItem: Identifiable {
     let detail: String
     let systemName: String
     let tint: Color
-}
-
-enum PromptAssetKind: String, CaseIterable, Equatable {
-    case skill
-    case prompt
-    case config
-}
-
-enum PromptAssetSource: String, CaseIterable, Equatable {
-    case codexSystem
-    case codexUser
-    case agents
-    case workspace
-}
-
-struct PromptAsset: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let kind: PromptAssetKind
-    let source: PromptAssetSource
-    let path: String
-    let summary: String
-    let content: String
-    let modifiedAt: Date?
-    let tags: [String]
-}
-
-struct PromptRegistry: Equatable {
-    let refreshedAt: Date
-    let assets: [PromptAsset]
-
-    static let empty = PromptRegistry(refreshedAt: Date(), assets: [])
-}
-
-enum AgentTargetTool: String, CaseIterable, Equatable, Codable {
-    case codex
-    case mimocode
-}
-
-struct AgentProfile: Identifiable, Equatable, Codable {
-    let id: String
-    var name: String
-    var summary: String
-    var persona: String
-    var workingStyle: String
-    var constraints: String
-    var selectedAssetIDs: [String]
-    var updatedAt: Date
-
-    static func starter(name: String = "Shared Builder") -> AgentProfile {
-        AgentProfile(
-            id: UUID().uuidString,
-            name: name,
-            summary: "Shared agent profile for multi-tool collaboration.",
-            persona: "",
-            workingStyle: "",
-            constraints: "",
-            selectedAssetIDs: [],
-            updatedAt: Date()
-        )
-    }
 }
 
 struct ModelConsumptionStat: Identifiable, Equatable {
