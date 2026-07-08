@@ -3,12 +3,13 @@ import SwiftUI
 struct RuntimeSelector: View {
     @Environment(\.colorScheme) private var colorScheme
     let selected: RuntimeScope
+    let scopes: [RuntimeScope]
     let language: WidgetLanguage
     let onSelect: (RuntimeScope) -> Void
 
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(RuntimeScope.allCases) { scope in
+            ForEach(scopes) { scope in
                 Button {
                     onSelect(scope)
                 } label: {
@@ -62,12 +63,13 @@ struct RuntimeStatusMenuView: View {
     let quit: () -> Void
 
     private var language: WidgetLanguage { settings.language }
+    private var displayedScopes: [RuntimeScope] { settings.visibleRuntimeScopes }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             VStack(spacing: 9) {
-                ForEach(RuntimeScope.allCases) { scope in
+                ForEach(displayedScopes) { scope in
                     RuntimeSummaryCard(
                         summary: summary(for: scope),
                         isSelected: store.selectedRuntimeScope == scope,
@@ -81,7 +83,7 @@ struct RuntimeStatusMenuView: View {
             footer
         }
         .padding(14)
-        .frame(width: 380, height: 426, alignment: .top)
+        .frame(width: 380, height: runtimeStatusPopoverHeight(for: displayedScopes.count), alignment: .top)
     }
 
     private var header: some View {
@@ -121,7 +123,7 @@ struct RuntimeStatusMenuView: View {
             Text(language.text("今日总 token", "Total tokens today"))
                 .font(.system(size: 11, weight: .semibold))
             Spacer()
-            Text(runtimeFormatTokens(store.totalTodayTokens))
+            Text(runtimeFormatTokens(store.totalTodayTokens(for: displayedScopes)))
                 .font(.system(size: 13, weight: .bold, design: .rounded))
                 .monospacedDigit()
         }

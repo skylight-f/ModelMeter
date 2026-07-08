@@ -6,6 +6,13 @@ enum RuntimeScope: String, CaseIterable, Identifiable, Codable, Equatable {
 
     var id: String { rawValue }
 
+    static func storedIdentifier(_ value: String) -> RuntimeScope? {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return allCases.first { scope in
+            scope.rawValue.lowercased() == normalized || scope.runtimeId.lowercased() == normalized
+        }
+    }
+
     var runtimeId: String {
         switch self {
         case .codex:
@@ -126,16 +133,16 @@ struct MultiRuntimeUsageSnapshot: Equatable {
         runtime(for: scope)?.snapshot ?? runtimes.first?.snapshot ?? aggregate
     }
 
-    func defaultScope(preferred: RuntimeScope) -> RuntimeScope {
-        if runtime(for: preferred) != nil {
+    func defaultScope(preferred: RuntimeScope, allowedScopes: [RuntimeScope] = RuntimeScope.allCases) -> RuntimeScope {
+        let allowed = allowedScopes.isEmpty ? RuntimeScope.allCases : allowedScopes
+        if allowed.contains(preferred), runtime(for: preferred) != nil {
             return preferred
         }
-        if let codex = runtime(for: .codex), codex.status != .unavailable {
-            return .codex
+        if let available = allowed.first(where: { scope in
+            runtime(for: scope)?.status != .unavailable
+        }) {
+            return available
         }
-        if let claude = runtime(for: .claudeCode), claude.status != .unavailable {
-            return .claudeCode
-        }
-        return preferred
+        return allowed.first ?? preferred
     }
 }

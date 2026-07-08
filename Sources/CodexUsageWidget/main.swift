@@ -506,6 +506,7 @@ final class UsageStore: ObservableObject {
     @Published var multiRuntimeSnapshot: MultiRuntimeUsageSnapshot = .empty
     @Published var runtimeSnapshots: [RuntimeUsageSnapshot] = []
     @Published var selectedRuntimeScope: RuntimeScope = .codex
+    @Published var visibleRuntimeScopes: [RuntimeScope] = RuntimeScope.allCases
     @Published var isRefreshing = false
 
     private var fullTimer: Timer?
@@ -520,6 +521,12 @@ final class UsageStore: ObservableObject {
 
     var totalTodayTokens: Int64 {
         multiRuntimeSnapshot.totalTodayTokens
+    }
+
+    func totalTodayTokens(for scopes: [RuntimeScope]) -> Int64 {
+        scopes.reduce(Int64(0)) { total, scope in
+            total + (runtimeSnapshot(for: scope)?.todayTokens ?? 0)
+        }
     }
 
     func start() {
@@ -551,12 +558,20 @@ final class UsageStore: ObservableObject {
     }
 
     func selectRuntime(_ scope: RuntimeScope) {
-        selectedRuntimeScope = scope
-        snapshot = multiRuntimeSnapshot.displaySnapshot(for: scope)
+        let nextScope = visibleRuntimeScopes.contains(scope) ? scope : (visibleRuntimeScopes.first ?? scope)
+        selectedRuntimeScope = nextScope
+        snapshot = multiRuntimeSnapshot.displaySnapshot(for: nextScope)
     }
 
     func runtimeSnapshot(for scope: RuntimeScope) -> RuntimeUsageSnapshot? {
         runtimeSnapshots.first { $0.scope == scope }
+    }
+
+    func updateVisibleRuntimeScopes(_ scopes: [RuntimeScope]) {
+        visibleRuntimeScopes = scopes.isEmpty ? RuntimeScope.allCases : scopes
+        if !visibleRuntimeScopes.contains(selectedRuntimeScope) {
+            selectRuntime(visibleRuntimeScopes.first ?? selectedRuntimeScope)
+        }
     }
 
     private func refreshTaskBoard() {
@@ -574,7 +589,10 @@ final class UsageStore: ObservableObject {
     }
 
     private func apply(_ multiSnapshot: MultiRuntimeUsageSnapshot) {
-        let nextScope = multiSnapshot.defaultScope(preferred: selectedRuntimeScope)
+        let nextScope = multiSnapshot.defaultScope(
+            preferred: selectedRuntimeScope,
+            allowedScopes: visibleRuntimeScopes
+        )
         multiRuntimeSnapshot = multiSnapshot
         runtimeSnapshots = multiSnapshot.runtimes
         selectedRuntimeScope = nextScope
@@ -2454,6 +2472,7 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
 final class AppSettings: ObservableObject {
     private static let keepMainWindowOnTopKey = "codexU.keepMainWindowOnTop"
     private static let keepRunningWhenMainWindowClosedKey = "codexU.keepRunningWhenMainWindowClosed"
+    private static let visibleRuntimeScopesKey = "codexU.visibleRuntimeScopes"
 
     private let defaults: UserDefaults
 
@@ -2482,6 +2501,12 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published private(set) var visibleRuntimeScopes: [RuntimeScope] {
+        didSet {
+            defaults.set(visibleRuntimeScopes.map(\.runtimeId), forKey: Self.visibleRuntimeScopesKey)
+        }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         language = WidgetLanguage.storedOrAutomatic(defaults: defaults)
@@ -2492,6 +2517,37 @@ final class AppSettings: ObservableObject {
         } else {
             keepRunningWhenMainWindowClosed = defaults.bool(forKey: Self.keepRunningWhenMainWindowClosedKey)
         }
+        visibleRuntimeScopes = Self.storedVisibleRuntimeScopes(defaults: defaults)
+    }
+
+    func isRuntimeVisible(_ scope: RuntimeScope) -> Bool {
+        visibleRuntimeScopes.contains(scope)
+    }
+
+    @discardableResult
+    func setRuntime(_ scope: RuntimeScope, visible: Bool) -> Bool {
+        if visible {
+            visibleRuntimeScopes = Self.orderedRuntimeScopes(Set(visibleRuntimeScopes + [scope]))
+            return true
+        }
+        guard visibleRuntimeScopes.count > 1 else {
+            return false
+        }
+        visibleRuntimeScopes = visibleRuntimeScopes.filter { $0 != scope }
+        return true
+    }
+
+    private static func storedVisibleRuntimeScopes(defaults: UserDefaults) -> [RuntimeScope] {
+        guard let identifiers = defaults.array(forKey: visibleRuntimeScopesKey) as? [String] else {
+            return RuntimeScope.allCases
+        }
+        let scopes = identifiers.compactMap(RuntimeScope.storedIdentifier)
+        let ordered = orderedRuntimeScopes(Set(scopes))
+        return ordered.isEmpty ? RuntimeScope.allCases : ordered
+    }
+
+    private static func orderedRuntimeScopes(_ scopes: Set<RuntimeScope>) -> [RuntimeScope] {
+        RuntimeScope.allCases.filter { scopes.contains($0) }
     }
 }
 
@@ -2704,7 +2760,11 @@ struct UsageWidgetView: View {
         case .tasks:
             taskBoardContent
         case .usage:
-            UsageTrendPanel(trend: snapshot.local?.usageTrend, language: language)
+            UsageTrendPanel(
+                trend: snapshot.local?.usageTrend,
+                runtimeScope: store.selectedRuntimeScope,
+                language: language
+            )
         case .projects:
             ProjectBoardPanel(
                 projectBoard: snapshot.local?.projectBoard,
@@ -3038,6 +3098,7 @@ struct TitlebarToolbarView: View {
         HStack(spacing: 10) {
             RuntimeSelector(
                 selected: store.selectedRuntimeScope,
+                scopes: settings.visibleRuntimeScopes,
                 language: language
             ) { scope in
                 store.selectRuntime(scope)
@@ -3118,6 +3179,31 @@ struct SettingsPanelView: View {
                     .labelsHidden()
                     .pickerStyle(.segmented)
                     .frame(width: 190)
+                }
+            }
+
+            settingsSection(
+                title: "Runtime",
+                detail: language.text("展示范围", "Display")
+            ) {
+                SettingsToggleRow(
+                    title: "Codex",
+                    detail: language.text("在主窗口和菜单栏浮窗中展示 Codex", "Show Codex in the main window and menu popover")
+                ) {
+                    Toggle("", isOn: runtimeVisibilityBinding(.codex))
+                        .labelsHidden()
+                        .disabled(isOnlyVisibleRuntime(.codex))
+                        .help(runtimeVisibilityHelp(.codex))
+                }
+
+                SettingsToggleRow(
+                    title: "Claude Code",
+                    detail: language.text("在主窗口和菜单栏浮窗中展示 Claude Code", "Show Claude Code in the main window and menu popover")
+                ) {
+                    Toggle("", isOn: runtimeVisibilityBinding(.claudeCode))
+                        .labelsHidden()
+                        .disabled(isOnlyVisibleRuntime(.claudeCode))
+                        .help(runtimeVisibilityHelp(.claudeCode))
                 }
             }
 
@@ -3204,6 +3290,24 @@ struct SettingsPanelView: View {
 
     private var planLabel: String {
         store.snapshot.account?.planType?.uppercased() ?? "LOCAL"
+    }
+
+    private func runtimeVisibilityBinding(_ scope: RuntimeScope) -> Binding<Bool> {
+        Binding(
+            get: { settings.isRuntimeVisible(scope) },
+            set: { settings.setRuntime(scope, visible: $0) }
+        )
+    }
+
+    private func isOnlyVisibleRuntime(_ scope: RuntimeScope) -> Bool {
+        settings.isRuntimeVisible(scope) && settings.visibleRuntimeScopes.count == 1
+    }
+
+    private func runtimeVisibilityHelp(_ scope: RuntimeScope) -> String {
+        if isOnlyVisibleRuntime(scope) {
+            return language.text("至少需要保留一个 Runtime", "At least one runtime must stay visible")
+        }
+        return language.text("控制 \(scope.displayName) 是否出现在 Runtime 切换和菜单栏浮窗中", "Controls whether \(scope.displayName) appears in runtime switching and the menu popover")
     }
 }
 
@@ -4071,15 +4175,141 @@ struct MiniTrendCard: View {
     }
 }
 
+struct ChartTooltipRow: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let value: String
+}
+
+struct ChartTooltipPayload: Equatable {
+    let title: String
+    let rows: [ChartTooltipRow]
+}
+
+struct ChartTooltipView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let payload: ChartTooltipPayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(payload.title)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            VStack(spacing: 4) {
+                ForEach(payload.rows) { row in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.label)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(row.value)
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(WidgetPalette.cardFill(colorScheme, elevated: true))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(WidgetPalette.cardStroke(colorScheme, elevated: true), lineWidth: 0.9)
+                )
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.26 : 0.12), radius: 10, x: 0, y: 5)
+        )
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private func usageTooltipPayload(
+    date: Date,
+    usage: PricedTokenUsage?,
+    runtimeScope: RuntimeScope,
+    sourceQuality: UsageSourceQuality,
+    language: WidgetLanguage
+) -> ChartTooltipPayload {
+    let title = fullDateText(date, language: language)
+    guard let usage, usage.tokens.visibleTotalTokens > 0 else {
+        return ChartTooltipPayload(
+            title: title,
+            rows: [
+                ChartTooltipRow(id: "runtime", label: "Runtime", value: runtimeScope.displayName),
+                ChartTooltipRow(id: "total", label: language.text("总量", "Total"), value: "0 tokens"),
+                ChartTooltipRow(id: "status", label: language.text("状态", "Status"), value: language.text("无本机记录", "No local records")),
+                ChartTooltipRow(id: "source", label: language.text("口径", "Source"), value: sourceQualityText(sourceQuality, language: language))
+            ]
+        )
+    }
+
+    var rows = [
+        ChartTooltipRow(id: "runtime", label: "Runtime", value: runtimeScope.displayName),
+        ChartTooltipRow(
+            id: "total",
+            label: language.text("总量", "Total"),
+            value: "\(formatTokens(usage.tokens.visibleTotalTokens)) tokens"
+        )
+    ]
+
+    if usage.tokens.splitTotalTokens > 0 {
+        rows.append(ChartTooltipRow(
+            id: "uncached",
+            label: language.text("未缓存", "Input"),
+            value: formatTokens(usage.tokens.uncachedInputTokens)
+        ))
+        rows.append(ChartTooltipRow(
+            id: "cached",
+            label: language.text("缓存", "Cached"),
+            value: formatTokens(usage.tokens.billableCachedInputTokens)
+        ))
+        rows.append(ChartTooltipRow(
+            id: "output",
+            label: language.text("输出", "Output"),
+            value: formatTokens(usage.tokens.outputTokens)
+        ))
+    } else {
+        rows.append(ChartTooltipRow(
+            id: "split",
+            label: language.text("拆分", "Split"),
+            value: language.text("暂不可用", "Unavailable")
+        ))
+    }
+
+    if usage.estimatedCostUSD > 0 {
+        rows.append(ChartTooltipRow(
+            id: "cost",
+            label: language.text("估算", "Est."),
+            value: formatUSD(usage.estimatedCostUSD)
+        ))
+    }
+
+    rows.append(ChartTooltipRow(
+        id: "source",
+        label: language.text("口径", "Source"),
+        value: sourceQualityText(sourceQuality, language: language)
+    ))
+
+    return ChartTooltipPayload(title: title, rows: rows)
+}
+
 struct UsageTrendPanel: View {
     let trend: UsageTrend?
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
 
     var body: some View {
         if let trend {
             GeometryReader { geometry in
                 HStack(alignment: .top, spacing: usageTrendCardSpacing) {
-                    UsageHeatmapCard(trend: trend, language: language)
+                    UsageHeatmapCard(trend: trend, runtimeScope: runtimeScope, language: language)
                         .frame(
                             width: usageTrendHeatmapCardWidth(
                                 containerWidth: geometry.size.width,
@@ -4088,7 +4318,7 @@ struct UsageTrendPanel: View {
                             height: usageTrendCardHeight,
                             alignment: .topLeading
                         )
-                    UsageSevenDaySummaryCard(trend: trend, language: language)
+                    UsageSevenDaySummaryCard(trend: trend, runtimeScope: runtimeScope, language: language)
                         .frame(
                             width: usageTrendSevenDayCardWidth(
                                 containerWidth: geometry.size.width,
@@ -4112,6 +4342,7 @@ struct UsageTrendPanel: View {
 
 struct UsageHeatmapCard: View {
     let trend: UsageTrend
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
 
     var body: some View {
@@ -4127,7 +4358,7 @@ struct UsageHeatmapCard: View {
                     )
                 }
 
-                UsageHeatmapView(trend: trend, language: language)
+                UsageHeatmapView(trend: trend, runtimeScope: runtimeScope, language: language)
 
                 Spacer(minLength: 0)
 
@@ -4154,7 +4385,10 @@ struct UsageHeatmapCard: View {
 
 struct UsageHeatmapView: View {
     let trend: UsageTrend
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
+    @State private var hoveredCell: UsageHeatmapDay?
+    @State private var hoverAnchor: CGPoint = .zero
 
     private let cellSize: CGFloat = heatmapCellSize
     private let cellSpacing: CGFloat = usageHeatmapCellSpacing
@@ -4167,6 +4401,33 @@ struct UsageHeatmapView: View {
     }
 
     var body: some View {
+        ZStack(alignment: .topLeading) {
+            heatmapGrid
+            if let hoveredCell {
+                let payload = heatTooltipPayload(hoveredCell)
+                ChartTooltipView(payload: payload)
+                    .frame(width: chartTooltipWidth)
+                    .position(chartTooltipPosition(
+                        anchor: hoverAnchor,
+                        containerSize: heatmapContentSize,
+                        rowCount: payload.rows.count
+                    ))
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .zIndex(10)
+            }
+        }
+        .frame(width: heatmapContentSize.width, height: heatmapContentSize.height, alignment: .topLeading)
+        .padding(.top, 4)
+    }
+
+    private var heatmapContentSize: CGSize {
+        CGSize(
+            width: usageHeatmapContentWidth(weekCount: trend.heatmapWeeks.count),
+            height: usageHeatmapMonthLabelHeight + 5 + cellSize * 7 + cellSpacing * 6
+        )
+    }
+
+    private var heatmapGrid: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .center, spacing: cellSpacing) {
                 Text("")
@@ -4198,9 +4459,9 @@ struct UsageHeatmapView: View {
                 }
 
                 HStack(alignment: .top, spacing: cellSpacing) {
-                    ForEach(Array(trend.heatmapWeeks.enumerated()), id: \.offset) { _, week in
+                    ForEach(Array(trend.heatmapWeeks.enumerated()), id: \.offset) { weekIndex, week in
                         VStack(spacing: cellSpacing) {
-                            ForEach(week) { cell in
+                            ForEach(Array(week.enumerated()), id: \.element.id) { dayIndex, cell in
                                 if cell.isFuture {
                                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                                         .fill(Color.clear)
@@ -4209,7 +4470,22 @@ struct UsageHeatmapView: View {
                                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                                         .fill(heatmapColor(level: heatLevel(cell.tokens)))
                                         .frame(width: cellSize, height: cellSize)
-                                        .help(heatTooltip(cell))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                                .strokeBorder(
+                                                    hoveredCell?.id == cell.id ? WidgetPalette.brandPrimary.opacity(0.78) : Color.clear,
+                                                    lineWidth: 1
+                                                )
+                                        )
+                                        .contentShape(Rectangle())
+                                        .onHover { hovering in
+                                            if hovering {
+                                                hoveredCell = cell
+                                                hoverAnchor = heatmapCellAnchor(weekIndex: weekIndex, dayIndex: dayIndex)
+                                            } else if hoveredCell?.id == cell.id {
+                                                hoveredCell = nil
+                                            }
+                                        }
                                         .accessibilityLabel(heatTooltip(cell))
                                 }
                             }
@@ -4220,7 +4496,13 @@ struct UsageHeatmapView: View {
                     .frame(width: weekdayLabelWidth, height: 1)
             }
         }
-        .padding(.top, 4)
+    }
+
+    private func heatmapCellAnchor(weekIndex: Int, dayIndex: Int) -> CGPoint {
+        CGPoint(
+            x: weekdayLabelWidth + cellSpacing + CGFloat(weekIndex) * (cellSize + cellSpacing) + cellSize / 2,
+            y: usageHeatmapMonthLabelHeight + 5 + CGFloat(dayIndex) * (cellSize + cellSpacing) + cellSize / 2
+        )
     }
 
     private var monthMarkers: [MonthMarker] {
@@ -4294,10 +4576,21 @@ struct UsageHeatmapView: View {
         let cost = usage.estimatedCostUSD > 0 ? " · \(language.text("估算", "est.")) \(formatUSD(usage.estimatedCostUSD))" : ""
         return "\(date) · \(formatTokens(usage.tokens.visibleTotalTokens)) tokens\(cost)"
     }
+
+    private func heatTooltipPayload(_ cell: UsageHeatmapDay) -> ChartTooltipPayload {
+        usageTooltipPayload(
+            date: cell.date,
+            usage: cell.usage,
+            runtimeScope: runtimeScope,
+            sourceQuality: trend.sourceQuality,
+            language: language
+        )
+    }
 }
 
 struct UsageSevenDaySummaryCard: View {
     let trend: UsageTrend
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
 
     var body: some View {
@@ -4314,7 +4607,7 @@ struct UsageSevenDaySummaryCard: View {
                         .lineLimit(1)
                 }
 
-                SevenDayLineChart(buckets: lastSevenDayBuckets, language: language)
+                SevenDayLineChart(buckets: lastSevenDayBuckets, runtimeScope: runtimeScope, language: language)
                     .frame(height: 116)
 
                 Spacer(minLength: 0)
@@ -4358,7 +4651,10 @@ struct UsageSevenDaySummaryCard: View {
 
 struct SevenDayLineChart: View {
     let buckets: [UsageDayBucket]
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
+    @State private var hoveredBucket: UsageDayBucket?
+    @State private var hoverAnchor: CGPoint = .zero
 
     private var maxTokens: Int64 {
         max(buckets.map(\.tokens).max() ?? 0, 1)
@@ -4391,11 +4687,38 @@ struct SevenDayLineChart: View {
                     )
 
                     ForEach(Array(points.enumerated()), id: \.offset) { index, point in
-                        Circle()
-                            .fill(buckets[index].tokens > 0 ? WidgetPalette.brandSecondary : WidgetPalette.surfaceTrack)
-                            .frame(width: 6, height: 6)
-                            .position(point)
-                            .help(dayTooltip(buckets[index]))
+                        ZStack {
+                            Circle()
+                                .fill(buckets[index].tokens > 0 ? WidgetPalette.brandSecondary : WidgetPalette.surfaceTrack)
+                                .frame(width: hoveredBucket?.id == buckets[index].id ? 8 : 6, height: hoveredBucket?.id == buckets[index].id ? 8 : 6)
+                            Circle()
+                                .fill(Color.clear)
+                                .frame(width: 28, height: 28)
+                        }
+                        .contentShape(Circle())
+                        .position(point)
+                        .onHover { hovering in
+                            if hovering {
+                                hoveredBucket = buckets[index]
+                                hoverAnchor = point
+                            } else if hoveredBucket?.id == buckets[index].id {
+                                hoveredBucket = nil
+                            }
+                        }
+                        .accessibilityLabel(dayTooltip(buckets[index]))
+                    }
+
+                    if let hoveredBucket {
+                        let payload = dayTooltipPayload(hoveredBucket)
+                        ChartTooltipView(payload: payload)
+                            .frame(width: chartTooltipWidth)
+                            .position(chartTooltipPosition(
+                                anchor: hoverAnchor,
+                                containerSize: geometry.size,
+                                rowCount: payload.rows.count
+                            ))
+                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                            .zIndex(10)
                     }
                 }
             }
@@ -4428,6 +4751,16 @@ struct SevenDayLineChart: View {
 
     private func dayTooltip(_ bucket: UsageDayBucket) -> String {
         "\(fullDateText(bucket.date, language: language)) · \(formatTokens(bucket.tokens)) tokens"
+    }
+
+    private func dayTooltipPayload(_ bucket: UsageDayBucket) -> ChartTooltipPayload {
+        usageTooltipPayload(
+            date: bucket.date,
+            usage: bucket.usage,
+            runtimeScope: runtimeScope,
+            sourceQuality: bucket.sourceQuality,
+            language: language
+        )
     }
 }
 
@@ -5410,6 +5743,29 @@ private let usageHeatmapWeekdayLabelWidth: CGFloat = 20
 private let usageHeatmapMonthLabelWidth: CGFloat = 42
 private let usageHeatmapMonthLabelHeight: CGFloat = 16
 private let heatmapCellSize: CGFloat = 10
+private let chartTooltipWidth: CGFloat = 188
+
+func runtimeStatusPopoverHeight(for runtimeCount: Int) -> CGFloat {
+    runtimeCount <= 1 ? 300 : 426
+}
+
+private func chartTooltipPosition(anchor: CGPoint, containerSize: CGSize, rowCount: Int) -> CGPoint {
+    let tooltipHeight = CGFloat(38 + rowCount * 17)
+    let margin: CGFloat = 8
+    let x = min(
+        max(anchor.x, chartTooltipWidth / 2 + margin),
+        max(chartTooltipWidth / 2 + margin, containerSize.width - chartTooltipWidth / 2 - margin)
+    )
+    let showBelow = anchor.y < tooltipHeight + margin * 2
+    let rawY = showBelow
+        ? anchor.y + tooltipHeight / 2 + margin
+        : anchor.y - tooltipHeight / 2 - margin
+    let y = min(
+        max(rawY, tooltipHeight / 2 + margin),
+        max(tooltipHeight / 2 + margin, containerSize.height - tooltipHeight / 2 - margin)
+    )
+    return CGPoint(x: x, y: y)
+}
 
 private func usageHeatmapGridWidth(weekCount: Int) -> CGFloat {
     guard weekCount > 0 else { return 0 }
@@ -6102,6 +6458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         observeStatusItemUsage()
         observeSettings()
         registerGlobalHotKey()
+        store.updateVisibleRuntimeScopes(settings.visibleRuntimeScopes)
         store.start()
     }
 
@@ -6301,7 +6658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
         if settingsWindow == nil {
             let settingsWindow = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 480, height: 520),
+                contentRect: NSRect(x: 0, y: 0, width: 480, height: 610),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false
@@ -6342,6 +6699,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             }
             .store(in: &cancellables)
 
+        settings.$visibleRuntimeScopes
+            .receive(on: RunLoop.main)
+            .sink { [weak self] scopes in
+                guard let self else { return }
+                self.store.updateVisibleRuntimeScopes(scopes)
+                self.statusPopover?.contentSize = CGSize(
+                    width: 380,
+                    height: runtimeStatusPopoverHeight(for: scopes.count)
+                )
+                self.updateStatusItemTooltip()
+                self.updateStatusItem()
+            }
+            .store(in: &cancellables)
+
     }
 
     @objc private func statusItemClicked() {
@@ -6358,7 +6729,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         let popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = CGSize(width: 380, height: 426)
+        popover.contentSize = CGSize(
+            width: 380,
+            height: runtimeStatusPopoverHeight(for: settings.visibleRuntimeScopes.count)
+        )
         popover.delegate = self
         popover.contentViewController = NSHostingController(
             rootView: RuntimeStatusMenuView(
