@@ -3096,6 +3096,7 @@ struct TitlebarToolbarView: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            Spacer(minLength: 0)
             RuntimeSelector(
                 selected: store.selectedRuntimeScope,
                 scopes: settings.visibleRuntimeScopes,
@@ -3131,10 +3132,10 @@ struct TitlebarToolbarView: View {
                     )
             )
         }
-        .padding(.top, 8)
+        .padding(.top, 10)
         .padding(.bottom, 2)
-        .padding(.trailing, 14)
-        .frame(height: 44, alignment: .top)
+        .padding(.trailing, 18)
+        .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: .topTrailing)
         .environment(\.colorScheme, effectiveColorScheme)
         .preferredColorScheme(themeMode.preferredColorScheme)
     }
@@ -3158,27 +3159,29 @@ struct SettingsPanelView: View {
                     title: language.text("语言", "Language"),
                     detail: language.text("影响主窗口、浮窗和设置窗口", "Applies to the main window, menu popover, and settings")
                 ) {
-                    Picker("", selection: $settings.language) {
-                        Text("中文").tag(WidgetLanguage.zh)
-                        Text("English").tag(WidgetLanguage.en)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 156)
+                    SettingsSegmentedControl(
+                        selection: $settings.language,
+                        options: [
+                            SettingsSegmentOption(value: .zh, title: "中文"),
+                            SettingsSegmentOption(value: .en, title: "English")
+                        ],
+                        width: 156
+                    )
                 }
 
                 SettingsPickerRow(
                     title: language.text("外观", "Appearance"),
                     detail: language.text("默认跟随系统", "System is the default")
                 ) {
-                    Picker("", selection: $settings.themeMode) {
-                        Text(language.text("自动", "System")).tag(WidgetThemeMode.system)
-                        Text(language.text("浅色", "Light")).tag(WidgetThemeMode.light)
-                        Text(language.text("深色", "Dark")).tag(WidgetThemeMode.dark)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 190)
+                    SettingsSegmentedControl(
+                        selection: $settings.themeMode,
+                        options: [
+                            SettingsSegmentOption(value: .system, title: language.text("自动", "System")),
+                            SettingsSegmentOption(value: .light, title: language.text("浅色", "Light")),
+                            SettingsSegmentOption(value: .dark, title: language.text("深色", "Dark"))
+                        ],
+                        width: 190
+                    )
                 }
             }
 
@@ -3190,20 +3193,22 @@ struct SettingsPanelView: View {
                     title: "Codex",
                     detail: language.text("在主窗口和菜单栏浮窗中展示 Codex", "Show Codex in the main window and menu popover")
                 ) {
-                    Toggle("", isOn: runtimeVisibilityBinding(.codex))
-                        .labelsHidden()
-                        .disabled(isOnlyVisibleRuntime(.codex))
-                        .help(runtimeVisibilityHelp(.codex))
+                    SettingsSwitchToggle(
+                        isOn: runtimeVisibilityBinding(.codex),
+                        isDisabled: isOnlyVisibleRuntime(.codex),
+                        help: runtimeVisibilityHelp(.codex)
+                    )
                 }
 
                 SettingsToggleRow(
                     title: "Claude Code",
                     detail: language.text("在主窗口和菜单栏浮窗中展示 Claude Code", "Show Claude Code in the main window and menu popover")
                 ) {
-                    Toggle("", isOn: runtimeVisibilityBinding(.claudeCode))
-                        .labelsHidden()
-                        .disabled(isOnlyVisibleRuntime(.claudeCode))
-                        .help(runtimeVisibilityHelp(.claudeCode))
+                    SettingsSwitchToggle(
+                        isOn: runtimeVisibilityBinding(.claudeCode),
+                        isDisabled: isOnlyVisibleRuntime(.claudeCode),
+                        help: runtimeVisibilityHelp(.claudeCode)
+                    )
                 }
             }
 
@@ -3215,16 +3220,14 @@ struct SettingsPanelView: View {
                     title: language.text("保持主窗口置顶", "Keep main window on top"),
                     detail: language.text("适合需要持续观察用量时开启", "Use this when you need the usage view visible")
                 ) {
-                    Toggle("", isOn: $settings.keepMainWindowOnTop)
-                        .labelsHidden()
+                    SettingsSwitchToggle(isOn: $settings.keepMainWindowOnTop)
                 }
 
                 SettingsToggleRow(
                     title: language.text("关闭后继续在菜单栏运行", "Keep running after closing the window"),
                     detail: language.text("关闭主窗口不会退出应用，可从菜单栏再次打开", "Closing the main window keeps the menu bar item available")
                 ) {
-                    Toggle("", isOn: $settings.keepRunningWhenMainWindowClosed)
-                        .labelsHidden()
+                    SettingsSwitchToggle(isOn: $settings.keepRunningWhenMainWindowClosed)
                 }
 
                 SettingsValueRow(
@@ -3329,6 +3332,79 @@ struct SettingsPickerRow<Control: View>: View {
     }
 }
 
+struct SettingsSegmentOption<Value: Hashable>: Identifiable {
+    let value: Value
+    let title: String
+
+    var id: Value { value }
+}
+
+struct SettingsSegmentedControl<Value: Hashable>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Binding var selection: Value
+    let options: [SettingsSegmentOption<Value>]
+    let width: CGFloat
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                Button {
+                    selection = option.value
+                } label: {
+                    Text(option.title)
+                        .font(.system(size: 12, weight: selection == option.value ? .semibold : .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                        .foregroundStyle(selection == option.value ? Color.white : Color.secondary)
+                        .frame(maxWidth: .infinity, minHeight: settingsSegmentHeight)
+                        .background(
+                            RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                                .fill(selection == option.value ? WidgetPalette.brandPrimary : Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(option.title)
+
+                if index < options.count - 1 {
+                    Rectangle()
+                        .fill(WidgetPalette.controlStroke(colorScheme))
+                        .frame(width: 1, height: 16)
+                        .padding(.horizontal, 1)
+                }
+            }
+        }
+        .padding(3)
+        .frame(width: width, height: settingsSegmentHeight + 6)
+        .background(
+            RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                .fill(WidgetPalette.controlFill(colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous))
+    }
+}
+
+struct SettingsSwitchToggle: View {
+    let isOn: Binding<Bool>
+    var isDisabled = false
+    var help: String?
+
+    var body: some View {
+        Toggle("", isOn: isOn)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.regular)
+            .tint(WidgetPalette.brandPrimary)
+            .frame(width: settingsSwitchWidth, alignment: .trailing)
+            .disabled(isDisabled)
+            .help(help ?? "")
+    }
+}
+
 struct SettingsToggleRow<Control: View>: View {
     let title: String
     let detail: String
@@ -3386,11 +3462,13 @@ struct SettingsBaseRow<Accessory: View>: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             accessory
+                .frame(width: settingsAccessoryColumnWidth, alignment: .trailing)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -4691,22 +4769,22 @@ struct SevenDayLineChart: View {
                             Circle()
                                 .fill(buckets[index].tokens > 0 ? WidgetPalette.brandSecondary : WidgetPalette.surfaceTrack)
                                 .frame(width: hoveredBucket?.id == buckets[index].id ? 8 : 6, height: hoveredBucket?.id == buckets[index].id ? 8 : 6)
-                            Circle()
-                                .fill(Color.clear)
-                                .frame(width: 28, height: 28)
                         }
-                        .contentShape(Circle())
                         .position(point)
-                        .onHover { hovering in
-                            if hovering {
-                                hoveredBucket = buckets[index]
-                                hoverAnchor = point
-                            } else if hoveredBucket?.id == buckets[index].id {
+                        .accessibilityLabel(dayTooltip(buckets[index]))
+                    }
+
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.001))
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                updateHover(location: location, points: points)
+                            case .ended:
                                 hoveredBucket = nil
                             }
                         }
-                        .accessibilityLabel(dayTooltip(buckets[index]))
-                    }
 
                     if let hoveredBucket {
                         let payload = dayTooltipPayload(hoveredBucket)
@@ -4747,6 +4825,22 @@ struct SevenDayLineChart: View {
             let y = verticalPadding + availableHeight * CGFloat(1 - max(0, min(1, ratio)))
             return CGPoint(x: x, y: y)
         }
+    }
+
+    private func updateHover(location: CGPoint, points: [CGPoint]) {
+        guard let index = nearestPointIndex(to: location.x, points: points),
+              buckets.indices.contains(index)
+        else { return }
+        hoveredBucket = buckets[index]
+        hoverAnchor = points[index]
+    }
+
+    private func nearestPointIndex(to x: CGFloat, points: [CGPoint]) -> Int? {
+        points.enumerated()
+            .min { left, right in
+                abs(left.element.x - x) < abs(right.element.x - x)
+            }?
+            .offset
     }
 
     private func dayTooltip(_ bucket: UsageDayBucket) -> String {
@@ -5735,6 +5829,10 @@ private let dashboardCardTitleSize: CGFloat = 11
 private let dashboardListRowSpacing: CGFloat = 6
 private let dashboardRowPadding: CGFloat = 7
 private let dashboardRowCornerRadius: CGFloat = 8
+private let settingsAccessoryColumnWidth: CGFloat = 220
+private let settingsControlCornerRadius: CGFloat = 8
+private let settingsSegmentHeight: CGFloat = 30
+private let settingsSwitchWidth: CGFloat = 56
 private let usageTrendCardHeight: CGFloat = 214
 private let usageTrendCardSpacing: CGFloat = dashboardGridSpacing
 private let usageSevenDayMinimumCardWidth: CGFloat = 260
@@ -6500,7 +6598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 }
             )
         )
-        toolbarView.frame = NSRect(x: 0, y: 0, width: 334, height: 44)
+        toolbarView.frame = NSRect(x: 0, y: 0, width: UsageWidgetView.widgetWidth - 24, height: 44)
 
         let controller = NSTitlebarAccessoryViewController()
         controller.layoutAttribute = .right

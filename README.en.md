@@ -113,10 +113,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.0.0-beta01-mac-arm64.dmg
-dist/codexU-1.0.0-beta01-mac-arm64.dmg.sha256
-dist/codexU-1.0.0-beta01-mac-x86_64.dmg
-dist/codexU-1.0.0-beta01-mac-x86_64.dmg.sha256
+dist/codexU-1.0.0-beta02-mac-arm64.dmg
+dist/codexU-1.0.0-beta02-mac-arm64.dmg.sha256
+dist/codexU-1.0.0-beta02-mac-x86_64.dmg
+dist/codexU-1.0.0-beta02-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

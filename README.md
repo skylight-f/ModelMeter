@@ -140,10 +140,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.0.0-beta01-mac-arm64.dmg
-dist/codexU-1.0.0-beta01-mac-arm64.dmg.sha256
-dist/codexU-1.0.0-beta01-mac-x86_64.dmg
-dist/codexU-1.0.0-beta01-mac-x86_64.dmg.sha256
+dist/codexU-1.0.0-beta02-mac-arm64.dmg
+dist/codexU-1.0.0-beta02-mac-arm64.dmg.sha256
+dist/codexU-1.0.0-beta02-mac-x86_64.dmg
+dist/codexU-1.0.0-beta02-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
