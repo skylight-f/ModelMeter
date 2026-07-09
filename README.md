@@ -38,7 +38,8 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 - 展示工具调用 TOP 列表和 Skill 使用 TOP 列表，帮助判断本地 Codex 工作结构。
 - 以标准 macOS 窗口运行，支持 Dock、系统窗口控制、最小化和关闭主窗口后继续在菜单栏运行。
 - 支持 `Command + U` 显示或隐藏主窗口；菜单栏 Runtime 菜单也可以快速打开主窗口、设置或退出。
-- 设置窗口支持中文/英文界面、自动/浅色/深色外观、主窗口置顶和关闭行为配置。
+- 设置窗口支持中文/英文界面、自动/浅色/深色外观、主窗口置顶、关闭行为和更新检测配置。
+- 支持自动检查 GitHub Release 新版本，发现新版时提供匹配当前 Mac 架构的 DMG 下载入口；不会静默下载安装。
 - 本地读取数据，不上传 usage、线程或账户数据到第三方服务。
 
 ## 羊毛进度
@@ -61,7 +62,7 @@ API 等效价值 =
 - `Command + U`：显示或隐藏主窗口；如果窗口已最小化，会恢复并唤到前台。
 - 菜单栏仪表图标：点击后打开 Runtime 菜单；点击 Codex 或 Claude Code 卡片会打开主界面并切到对应 Runtime。
 - 菜单栏 Runtime 菜单：展示 Codex / Claude Code 快速状态，并提供打开主窗口、打开设置和退出。
-- 设置窗口：配置语言、外观、主窗口置顶，以及关闭主窗口后是否继续在菜单栏运行。
+- 设置窗口：配置语言、外观、主窗口置顶、关闭主窗口后是否继续在菜单栏运行，以及是否自动检查 GitHub Release 更新。
 - 主窗口顶部刷新按钮：立即刷新额度、token 统计、趋势图和任务看板。
 - 系统红黄绿窗口按钮：关闭、最小化或缩放主窗口；退出请使用菜单栏 Runtime 菜单或 App 菜单。
 
@@ -89,6 +90,8 @@ codexU 需要读取本机 `~/.codex/` 下的 Codex 数据；如果启用 Claude 
 2. 将 `codexU.app` 拖到 `Applications` 文件夹。
 3. 从 `Applications` 打开 codexU。
 4. 按上面的 **首次安装：隐私与安全** 步骤完成手动放行。
+
+安装后，codexU 默认每天最多自动检查一次 GitHub Release 是否有新版本。该检查只读取公开 Release 元数据；发现新版时会打开浏览器下载 DMG 或查看 Release 页面，安装仍由你手动完成。可以在设置窗口关闭自动检查，或手动点击“检查更新”。
 
 ## 运行要求
 
@@ -160,6 +163,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 - Claude Code 历史 token：`~/.claude/projects/**/*.jsonl` 中 assistant message 的 `message.usage` 字段。
 - Claude Code 工具、Skill 和任务：transcript 中的 `tool_use.name` / 显式 Skill attribution，以及 `~/.claude/tasks/**/*.json`。
 - Claude Code active 额度：可选读取 `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`；缺失时 5 小时/7 日额度显示为 `--`。
+- 更新检测：可选访问 GitHub Releases API，读取 `shanggqm/codexU` 的公开 release 元数据，并把检查结果缓存到 `~/Library/Caches/codexU/update-check.json`。
 
 当前 Codex 额度 API 暴露的是滚动窗口百分比和重置时间，不暴露绝对配额数量；Claude Code 首版只读取本地历史记录和可选 active snapshot，不代表 Claude.ai 官方账单。更完整的数据口径和回退策略见 [RESEARCH.md](RESEARCH.md)。
 
@@ -171,7 +175,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 
 ### codexU 会上传我的 Codex 线程或 usage 数据吗？
 
-不会。codexU 只在本机读取 Codex 账户额度、本机 SQLite usage 和 automation 元数据，不把这些数据上传到第三方服务。
+不会。codexU 只在本机读取 Codex 账户额度、本机 SQLite usage 和 automation 元数据，不把这些数据上传到第三方服务。自动更新检测只请求 GitHub Release 的公开版本元数据，不携带本机 usage、线程、路径、日志或账户数据。
 
 ### 为什么显示的是剩余百分比，而不是绝对额度？
 

@@ -26,5 +26,14 @@ codexU reads:
 - `~/.claude/projects/**/*.jsonl` assistant `message.usage` and `tool_use.name` metadata
 - `~/.claude/tasks/**/*.json` task status/title metadata
 - optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`
+- optional `~/Library/Caches/codexU/update-check.json` for cached GitHub Release update metadata
 
 It should not upload local usage, transcript, task, thread, account, or path data to a third-party service. Claude Code transcript parsing must not store prompt text, assistant response text, tool arguments, or tool output.
+
+## Network Scope
+
+codexU is local-first. The update checker may request public GitHub Release metadata from `https://api.github.com/repos/shanggqm/codexU/releases` when automatic checks are enabled or the user manually checks for updates.
+
+Update requests must not include local usage, transcript, task, thread, account, path, prompt, response, tool argument, or tool output data. The update checker may send standard HTTPS headers such as `User-Agent` and `If-None-Match` for ETag caching.
+
+codexU must not silently download, install, replace, or relaunch the app as part of the GitHub Release check. It may open the user's default browser to a matching DMG asset or the Release page.
