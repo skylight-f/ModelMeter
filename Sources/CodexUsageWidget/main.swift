@@ -2611,6 +2611,7 @@ final class WindowPresentationState: ObservableObject {
 struct UsageWidgetView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var settings: AppSettings
+    @ObservedObject var updateStore: AppUpdateStore
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedDashboardTab: DashboardTab = .tasks
 
@@ -2834,6 +2835,7 @@ struct UsageWidgetView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
+            AppUpdateFooterButton(updateStore: updateStore, language: language)
             Spacer()
             Text("\(language.text("刷新", "Refreshed")) \(timeOnly(snapshot.refreshedAt, language: language))")
                 .font(.system(size: 10, weight: .medium))
@@ -3188,113 +3190,127 @@ struct TitlebarToolbarView: View {
 struct SettingsPanelView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
+    @ObservedObject var updateStore: AppUpdateStore
     @Environment(\.colorScheme) private var colorScheme
 
     private var language: WidgetLanguage { settings.language }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            settingsHeader
-            settingsSection(
-                title: language.text("通用", "General"),
-                detail: language.text("界面偏好", "Interface")
-            ) {
-                SettingsPickerRow(
-                    title: language.text("语言", "Language"),
-                    detail: language.text("影响主窗口、浮窗和设置窗口", "Applies to the main window, menu popover, and settings")
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                settingsHeader
+                settingsSection(
+                    title: language.text("通用", "General"),
+                    detail: language.text("界面偏好", "Interface")
                 ) {
-                    SettingsSegmentedControl(
-                        selection: $settings.language,
-                        options: [
-                            SettingsSegmentOption(value: .zh, title: "中文"),
-                            SettingsSegmentOption(value: .en, title: "English")
-                        ],
-                        width: 156
+                    SettingsPickerRow(
+                        title: language.text("语言", "Language"),
+                        detail: language.text("影响主窗口、浮窗和设置窗口", "Applies to the main window, menu popover, and settings")
+                    ) {
+                        SettingsSegmentedControl(
+                            selection: $settings.language,
+                            options: [
+                                SettingsSegmentOption(value: .zh, title: "中文"),
+                                SettingsSegmentOption(value: .en, title: "English")
+                            ],
+                            width: 156
+                        )
+                    }
+
+                    SettingsPickerRow(
+                        title: language.text("外观", "Appearance"),
+                        detail: language.text("默认跟随系统", "System is the default")
+                    ) {
+                        SettingsSegmentedControl(
+                            selection: $settings.themeMode,
+                            options: [
+                                SettingsSegmentOption(value: .system, title: language.text("自动", "System")),
+                                SettingsSegmentOption(value: .light, title: language.text("浅色", "Light")),
+                                SettingsSegmentOption(value: .dark, title: language.text("深色", "Dark"))
+                            ],
+                            width: 190
+                        )
+                    }
+                }
+
+                settingsSection(
+                    title: "Runtime",
+                    detail: language.text("展示范围", "Display")
+                ) {
+                    SettingsToggleRow(
+                        title: "Codex",
+                        detail: language.text("在主窗口和菜单栏浮窗中展示 Codex", "Show Codex in the main window and menu popover")
+                    ) {
+                        SettingsSwitchToggle(
+                            isOn: runtimeVisibilityBinding(.codex),
+                            isDisabled: isOnlyVisibleRuntime(.codex),
+                            help: runtimeVisibilityHelp(.codex)
+                        )
+                    }
+
+                    SettingsToggleRow(
+                        title: "Claude Code",
+                        detail: language.text("在主窗口和菜单栏浮窗中展示 Claude Code", "Show Claude Code in the main window and menu popover")
+                    ) {
+                        SettingsSwitchToggle(
+                            isOn: runtimeVisibilityBinding(.claudeCode),
+                            isDisabled: isOnlyVisibleRuntime(.claudeCode),
+                            help: runtimeVisibilityHelp(.claudeCode)
+                        )
+                    }
+                }
+
+                settingsSection(
+                    title: language.text("更新", "Updates"),
+                    detail: language.text("GitHub Release", "GitHub Releases")
+                ) {
+                    AppUpdateSettingsRows(
+                        settings: settings,
+                        updateStore: updateStore,
+                        language: language
                     )
                 }
 
-                SettingsPickerRow(
-                    title: language.text("外观", "Appearance"),
-                    detail: language.text("默认跟随系统", "System is the default")
+                settingsSection(
+                    title: language.text("窗口", "Window"),
+                    detail: language.text("主窗口行为", "Main window")
                 ) {
-                    SettingsSegmentedControl(
-                        selection: $settings.themeMode,
-                        options: [
-                            SettingsSegmentOption(value: .system, title: language.text("自动", "System")),
-                            SettingsSegmentOption(value: .light, title: language.text("浅色", "Light")),
-                            SettingsSegmentOption(value: .dark, title: language.text("深色", "Dark"))
-                        ],
-                        width: 190
-                    )
-                }
-            }
+                    SettingsToggleRow(
+                        title: language.text("保持主窗口置顶", "Keep main window on top"),
+                        detail: language.text("适合需要持续观察用量时开启", "Use this when you need the usage view visible")
+                    ) {
+                        SettingsSwitchToggle(isOn: $settings.keepMainWindowOnTop)
+                    }
 
-            settingsSection(
-                title: "Runtime",
-                detail: language.text("展示范围", "Display")
-            ) {
-                SettingsToggleRow(
-                    title: "Codex",
-                    detail: language.text("在主窗口和菜单栏浮窗中展示 Codex", "Show Codex in the main window and menu popover")
-                ) {
-                    SettingsSwitchToggle(
-                        isOn: runtimeVisibilityBinding(.codex),
-                        isDisabled: isOnlyVisibleRuntime(.codex),
-                        help: runtimeVisibilityHelp(.codex)
+                    SettingsToggleRow(
+                        title: language.text("关闭后继续在菜单栏运行", "Keep running after closing the window"),
+                        detail: language.text("关闭主窗口不会退出应用，可从菜单栏再次打开", "Closing the main window keeps the menu bar item available")
+                    ) {
+                        SettingsSwitchToggle(isOn: $settings.keepRunningWhenMainWindowClosed)
+                    }
+
+                    SettingsValueRow(
+                        title: language.text("快捷键", "Shortcut"),
+                        detail: language.text("显示或隐藏主窗口", "Show or hide the main window"),
+                        value: "⌘U"
                     )
                 }
 
-                SettingsToggleRow(
-                    title: "Claude Code",
-                    detail: language.text("在主窗口和菜单栏浮窗中展示 Claude Code", "Show Claude Code in the main window and menu popover")
+                settingsSection(
+                    title: language.text("账户", "Account"),
+                    detail: language.text("只读状态", "Read only")
                 ) {
-                    SettingsSwitchToggle(
-                        isOn: runtimeVisibilityBinding(.claudeCode),
-                        isDisabled: isOnlyVisibleRuntime(.claudeCode),
-                        help: runtimeVisibilityHelp(.claudeCode)
+                    SettingsValueRow(
+                        title: language.text("当前 Runtime", "Current runtime"),
+                        detail: language.text("主窗口数据范围", "Main window data scope"),
+                        value: store.selectedRuntimeScope.displayName
+                    )
+                    SettingsValueRow(
+                        title: language.text("计划状态", "Plan"),
+                        detail: language.text("来自本机账户读取结果", "Read from the local account result"),
+                        value: planLabel
                     )
                 }
-            }
-
-            settingsSection(
-                title: language.text("窗口", "Window"),
-                detail: language.text("主窗口行为", "Main window")
-            ) {
-                SettingsToggleRow(
-                    title: language.text("保持主窗口置顶", "Keep main window on top"),
-                    detail: language.text("适合需要持续观察用量时开启", "Use this when you need the usage view visible")
-                ) {
-                    SettingsSwitchToggle(isOn: $settings.keepMainWindowOnTop)
-                }
-
-                SettingsToggleRow(
-                    title: language.text("关闭后继续在菜单栏运行", "Keep running after closing the window"),
-                    detail: language.text("关闭主窗口不会退出应用，可从菜单栏再次打开", "Closing the main window keeps the menu bar item available")
-                ) {
-                    SettingsSwitchToggle(isOn: $settings.keepRunningWhenMainWindowClosed)
-                }
-
-                SettingsValueRow(
-                    title: language.text("快捷键", "Shortcut"),
-                    detail: language.text("显示或隐藏主窗口", "Show or hide the main window"),
-                    value: "⌘U"
-                )
-            }
-
-            settingsSection(
-                title: language.text("账户", "Account"),
-                detail: language.text("只读状态", "Read only")
-            ) {
-                SettingsValueRow(
-                    title: language.text("当前 Runtime", "Current runtime"),
-                    detail: language.text("主窗口数据范围", "Main window data scope"),
-                    value: store.selectedRuntimeScope.displayName
-                )
-                SettingsValueRow(
-                    title: language.text("计划状态", "Plan"),
-                    detail: language.text("来自本机账户读取结果", "Read from the local account result"),
-                    value: planLabel
-                )
             }
         }
         .padding(20)
@@ -5888,7 +5904,7 @@ private let heatmapCellSize: CGFloat = 10
 private let chartTooltipWidth: CGFloat = 188
 
 func runtimeStatusPopoverHeight(for runtimeCount: Int) -> CGFloat {
-    runtimeCount <= 1 ? 300 : 426
+    runtimeCount <= 1 ? 352 : 478
 }
 
 private func chartTooltipPosition(anchor: CGPoint, containerSize: CGSize, rowCount: Int) -> CGPoint {
@@ -6624,7 +6640,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         mainWindow.contentView = GlassHostingContainer(
             rootView: UsageWidgetView(
                 store: store,
-                settings: settings
+                settings: settings,
+                updateStore: updateStore
             ),
             cornerRadius: UsageWidgetView.windowCornerRadius
         )
@@ -6802,7 +6819,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
         if settingsWindow == nil {
             let settingsWindow = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 480, height: 610),
+                contentRect: NSRect(x: 0, y: 0, width: 480, height: 690),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false
@@ -6811,7 +6828,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             settingsWindow.isReleasedWhenClosed = false
             settingsWindow.delegate = self
             settingsWindow.contentView = NSHostingView(
-                rootView: SettingsPanelView(settings: settings, store: store)
+                rootView: SettingsPanelView(settings: settings, store: store, updateStore: updateStore)
             )
             settingsWindow.center()
             self.settingsWindow = settingsWindow
@@ -6882,6 +6899,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             rootView: RuntimeStatusMenuView(
                 store: store,
                 settings: settings,
+                updateStore: updateStore,
                 openRuntime: { [weak self] scope in
                     self?.openMainWindow(selecting: scope)
                 },

@@ -57,6 +57,7 @@ struct RuntimeStatusMenuView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: UsageStore
     @ObservedObject var settings: AppSettings
+    @ObservedObject var updateStore: AppUpdateStore
     let openRuntime: (RuntimeScope) -> Void
     let openCurrent: () -> Void
     let openSettings: () -> Void
@@ -80,6 +81,7 @@ struct RuntimeStatusMenuView: View {
                 }
             }
             totalRow
+            AppUpdateMenuRow(updateStore: updateStore, language: language)
             footer
         }
         .padding(14)
