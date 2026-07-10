@@ -663,12 +663,7 @@ final class CodexUsageReader {
     }
 
     private func readAppServer(messages: inout [String]) -> AppServerSnapshot {
-        guard let codexPath = firstExistingPath([
-            "/Applications/Codex.app/Contents/Resources/codex",
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex",
-            "/usr/bin/codex"
-        ]) else {
+        guard let codexPath = resolveCodexExecutablePath() else {
             messages.append("未找到 codex 可执行文件")
             return AppServerSnapshot()
         }
@@ -1935,6 +1930,29 @@ final class CodexUsageReader {
         return json
     }
 
+    private func resolveCodexExecutablePath() -> String? {
+        var candidates: [String] = []
+
+        // The app's display name and install path may change, while its bundle identifier remains stable.
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
+            candidates.append(
+                appURL
+                    .appendingPathComponent("Contents/Resources/codex")
+                    .path
+            )
+        }
+
+        candidates.append(contentsOf: [
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            "/Applications/Codex.app/Contents/Resources/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex",
+            "/usr/bin/codex"
+        ])
+
+        return firstExistingPath(candidates)
+    }
+
     private func firstExistingPath(_ paths: [String]) -> String? {
         paths.first { fileManager.isExecutableFile(atPath: $0) || fileManager.fileExists(atPath: $0) }
     }
@@ -2927,7 +2945,7 @@ struct UsageWidgetView: View {
                 items.append(DiagnosticItem(
                     id: "codex-missing",
                     title: language.text("未找到 Codex", "Codex not found"),
-                    detail: language.text("请先安装 Codex App，或确认 codex CLI 位于 /Applications/Codex.app、/opt/homebrew/bin 或 /usr/local/bin。", "Install Codex App first, or make sure the codex CLI is in /Applications/Codex.app, /opt/homebrew/bin, or /usr/local/bin."),
+                    detail: language.text("请先安装 ChatGPT/Codex App，或确认 codex CLI 位于标准安装目录。", "Install the ChatGPT/Codex app first, or make sure the codex CLI is in a standard installation directory."),
                     systemName: "magnifyingglass",
                     tint: WidgetPalette.statusWarning
                 ))
