@@ -171,12 +171,7 @@ final class CodexUsageReader {
     }
 
     private func readAppServer(messages: inout [String]) -> AppServerSnapshot {
-        guard let codexPath = firstExistingPath([
-            "/Applications/Codex.app/Contents/Resources/codex",
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex",
-            "/usr/bin/codex"
-        ]) else {
+        guard let codexPath = codexExecutablePath() else {
             messages.append("未找到 codex 可执行文件")
             return AppServerSnapshot()
         }
@@ -336,7 +331,8 @@ final class CodexUsageReader {
     }
 
     private func parseAccount(_ result: [String: Any]) -> AccountInfo? {
-        guard let account = result["account"] as? [String: Any],
+        let account = (result["account"] as? [String: Any]) ?? result
+        guard
               let type = account["type"] as? String else { return nil }
 
         return AccountInfo(
@@ -347,26 +343,19 @@ final class CodexUsageReader {
     }
 
     private func parseRateLimits(_ result: [String: Any], into snapshot: inout AppServerSnapshot) {
-        let selected: [String: Any]?
-        if let byId = result["rateLimitsByLimitId"] as? [String: Any],
-           let codex = byId["codex"] as? [String: Any] {
-            selected = codex
-        } else {
-            selected = result["rateLimits"] as? [String: Any]
-        }
+        guard let selected = selectRateLimits(from: result) else { return }
 
-        guard let limits = selected else { return }
-        snapshot.limitId = limits["limitId"] as? String
-        snapshot.limitName = limits["limitName"] as? String
-        snapshot.primary = parseRateWindow(limits["primary"])
-        snapshot.secondary = parseRateWindow(limits["secondary"])
+        snapshot.limitId = stringValue(selected["limitId"])
+        snapshot.limitName = stringValue(selected["limitName"])
+        snapshot.primary = parseRateWindow(selected["primary"])
+        snapshot.secondary = parseRateWindow(selected["secondary"])
 
         var resetCredits: Int?
         if let reset = result["rateLimitResetCredits"] as? [String: Any] {
             resetCredits = intValue(reset["availableCount"])
         }
 
-        if let credits = limits["credits"] as? [String: Any] {
+        if let credits = selected["credits"] as? [String: Any] {
             snapshot.credits = CreditsInfo(
                 hasCredits: credits["hasCredits"] as? Bool ?? false,
                 unlimited: credits["unlimited"] as? Bool ?? false,
@@ -381,11 +370,17 @@ final class CodexUsageReader {
     private func parseRateWindow(_ value: Any?) -> RateWindow? {
         guard let object = value as? [String: Any],
               let used = doubleValue(object["usedPercent"])
+                ?? doubleValue(object["usedPercentage"])
+                ?? doubleValue(object["used_percent"])
         else { return nil }
 
         let resetDate: Date?
         if let timestamp = doubleValue(object["resetsAt"]) {
-            resetDate = Date(timeIntervalSince1970: timestamp)
+            // Some app-server versions return milliseconds; older versions use seconds.
+            resetDate = Date(timeIntervalSince1970: timestamp > 10_000_000_000 ? timestamp / 1_000 : timestamp)
+        } else if let dateString = stringValue(object["resetsAt"]),
+                  let date = ISO8601DateFormatter().date(from: dateString) {
+            resetDate = date
         } else {
             resetDate = nil
         }
@@ -395,6 +390,58 @@ final class CodexUsageReader {
             windowDurationMins: intValue(object["windowDurationMins"]),
             resetsAt: resetDate
         )
+    }
+
+    /// The app-server may expose a single default pool, or a map of pools keyed by
+    /// product/plan.  The default is authoritative for a merged ChatGPT + Codex
+    /// login; the map remains a fallback for older Codex-only installations.
+    private func selectRateLimits(from result: [String: Any]) -> [String: Any]? {
+        if let defaultLimits = result["rateLimits"] as? [String: Any],
+           containsRateWindow(defaultLimits) {
+            return defaultLimits
+        }
+
+        guard let byID = result["rateLimitsByLimitId"] as? [String: Any] else {
+            return result["rateLimits"] as? [String: Any]
+        }
+
+        let pools = byID.compactMap { key, value -> (String, [String: Any])? in
+            guard let limits = value as? [String: Any], containsRateWindow(limits) else { return nil }
+            return (key, limits)
+        }
+
+        // Preserve the old Codex-only behavior when there is no default pool, but
+        // do not require a literal "codex" key after account pools are unified.
+        if let codexPool = pools.first(where: { $0.0.caseInsensitiveCompare("codex") == .orderedSame }) {
+            return codexPool.1
+        }
+        if let chatGPTPool = pools.first(where: { $0.0.localizedCaseInsensitiveContains("chatgpt") }) {
+            return chatGPTPool.1
+        }
+        return pools.first?.1
+    }
+
+    private func containsRateWindow(_ limits: [String: Any]) -> Bool {
+        limits["primary"] is [String: Any] || limits["secondary"] is [String: Any]
+    }
+
+    private func codexExecutablePath() -> String? {
+        let home = NSHomeDirectory()
+        var candidates = [
+            "/Applications/Codex.app/Contents/Resources/codex",
+            home + "/.local/bin/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex",
+            "/usr/bin/codex"
+        ]
+
+        // Desktop apps often have a short PATH, while CLI installs commonly live
+        // in ~/.local/bin.  Inspect PATH as an additional, non-exclusive source.
+        if let path = ProcessInfo.processInfo.environment["PATH"] {
+            candidates.append(contentsOf: path.split(separator: ":").map { "\($0)/codex" })
+        }
+
+        return candidates.first(where: { fileManager.isExecutableFile(atPath: $0) })
     }
 
     private func parseCloudLifetimeTokens(_ result: [String: Any]) -> Int64? {
@@ -611,6 +658,29 @@ final class CodexUsageReader {
         var thirtyDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayTokensByModelAndDay: [String: [String: Int64]] = [:]
+        var todayModelTotalTokens: [String: Int64] = [:]
+        var todayModelTotalTimeMs: [String: Double] = [:]
+        var twentyFourHourModelTotalTokens: [String: Int64] = [:]
+        var twentyFourHourModelTotalTimeMs: [String: Double] = [:]
+        var sevenDayModelTotalTokens: [String: Int64] = [:]
+        var sevenDayModelTotalTimeMs: [String: Double] = [:]
+        var thirtyDayModelTotalTokens: [String: Int64] = [:]
+        var thirtyDayModelTotalTimeMs: [String: Double] = [:]
+        var lifetimeModelTotalTokens: [String: Int64] = [:]
+        var lifetimeModelTotalTimeMs: [String: Double] = [:]
+
+        func recordThroughput(
+            bucketKey: String,
+            outputTokens: Int64,
+            durationMs: Double?,
+            tokens: inout [String: Int64],
+            timeMs: inout [String: Double]
+        ) {
+            guard outputTokens > 0, let durationMs, durationMs > 0 else { return }
+            tokens[bucketKey, default: 0] += outputTokens
+            timeMs[bucketKey, default: 0] += durationMs
+        }
+
         for source in sources {
             guard let entry = cachedSessionUsage(
                 source: source,
@@ -648,11 +718,25 @@ final class CodexUsageReader {
                     var usage = todayUsageByModel[bucketKey] ?? .zero
                     usage.add(tokens: delta.tokens, costUSD: rawCost)
                     todayUsageByModel[bucketKey] = usage
+                    recordThroughput(
+                        bucketKey: bucketKey,
+                        outputTokens: delta.tokens.outputTokens + delta.tokens.reasoningOutputTokens,
+                        durationMs: delta.endToEndDurationMs,
+                        tokens: &todayModelTotalTokens,
+                        timeMs: &todayModelTotalTimeMs
+                    )
                 }
                 if delta.date >= twentyFourHourStart {
                     var usage = twentyFourHourUsageByModel[bucketKey] ?? .zero
                     usage.add(tokens: delta.tokens, costUSD: rawCost)
                     twentyFourHourUsageByModel[bucketKey] = usage
+                    recordThroughput(
+                        bucketKey: bucketKey,
+                        outputTokens: delta.tokens.outputTokens + delta.tokens.reasoningOutputTokens,
+                        durationMs: delta.endToEndDurationMs,
+                        tokens: &twentyFourHourModelTotalTokens,
+                        timeMs: &twentyFourHourModelTotalTimeMs
+                    )
                 }
                 if delta.date >= sevenDayStart {
                     var usage = sevenDayUsageByModel[bucketKey] ?? .zero
@@ -662,15 +746,36 @@ final class CodexUsageReader {
                     var byDay = sevenDayTokensByModelAndDay[bucketKey] ?? [:]
                     byDay[dayKey, default: 0] += delta.tokens.visibleTotalTokens
                     sevenDayTokensByModelAndDay[bucketKey] = byDay
+                    recordThroughput(
+                        bucketKey: bucketKey,
+                        outputTokens: delta.tokens.outputTokens + delta.tokens.reasoningOutputTokens,
+                        durationMs: delta.endToEndDurationMs,
+                        tokens: &sevenDayModelTotalTokens,
+                        timeMs: &sevenDayModelTotalTimeMs
+                    )
                 }
                 if delta.date >= thirtyDayStart {
                     var usage = thirtyDayUsageByModel[bucketKey] ?? .zero
                     usage.add(tokens: delta.tokens, costUSD: rawCost)
                     thirtyDayUsageByModel[bucketKey] = usage
+                    recordThroughput(
+                        bucketKey: bucketKey,
+                        outputTokens: delta.tokens.outputTokens + delta.tokens.reasoningOutputTokens,
+                        durationMs: delta.endToEndDurationMs,
+                        tokens: &thirtyDayModelTotalTokens,
+                        timeMs: &thirtyDayModelTotalTimeMs
+                    )
                 }
                 var lifetimeUsage = lifetimeUsageByModel[bucketKey] ?? .zero
                 lifetimeUsage.add(tokens: delta.tokens, costUSD: rawCost)
                 lifetimeUsageByModel[bucketKey] = lifetimeUsage
+                recordThroughput(
+                    bucketKey: bucketKey,
+                    outputTokens: delta.tokens.outputTokens + delta.tokens.reasoningOutputTokens,
+                    durationMs: delta.endToEndDurationMs,
+                    tokens: &lifetimeModelTotalTokens,
+                    timeMs: &lifetimeModelTotalTimeMs
+                )
             }
         }
 
@@ -679,11 +784,11 @@ final class CodexUsageReader {
             return nil
         }
 
-        todayModelUsage = sortedModelUsageItems(todayUsageByModel, providers: modelProviders)
-        twentyFourHourModelUsage = sortedModelUsageItems(twentyFourHourUsageByModel, providers: modelProviders)
-        sevenDayModelUsage = sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders)
-        thirtyDayModelUsage = sortedModelUsageItems(thirtyDayUsageByModel, providers: modelProviders)
-        lifetimeModelUsage = sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders)
+        todayModelUsage = sortedModelUsageItems(todayUsageByModel, providers: modelProviders, throughput: calculateThroughput(todayModelTotalTokens, todayModelTotalTimeMs))
+        twentyFourHourModelUsage = sortedModelUsageItems(twentyFourHourUsageByModel, providers: modelProviders, throughput: calculateThroughput(twentyFourHourModelTotalTokens, twentyFourHourModelTotalTimeMs))
+        sevenDayModelUsage = sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(sevenDayModelTotalTokens, sevenDayModelTotalTimeMs))
+        thirtyDayModelUsage = sortedModelUsageItems(thirtyDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(thirtyDayModelTotalTokens, thirtyDayModelTotalTimeMs))
+        lifetimeModelUsage = sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders, throughput: calculateThroughput(lifetimeModelTotalTokens, lifetimeModelTotalTimeMs))
         sevenDayModelBuckets = buildSevenDayModelBuckets(
             tokenUsageByModelAndDay: sevenDayTokensByModelAndDay,
             templateBuckets: dailyBuckets
@@ -712,6 +817,7 @@ final class CodexUsageReader {
         defer { try? handle.close() }
 
         let tokenCountNeedle = Data(#""type":"token_count""#.utf8)
+        let taskCompleteNeedle = Data(#""type":"task_complete""#.utf8)
         let modelNeedle = Data(#""model"#.utf8)
         let providerNeedle = Data(#""provider"#.utf8)
         var buffer = Data()
@@ -721,6 +827,7 @@ final class CodexUsageReader {
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
+        var pendingDurationDeltaIndex: Int?
 
         while true {
             let chunk = try? handle.read(upToCount: 64 * 1024)
@@ -735,6 +842,7 @@ final class CodexUsageReader {
                 processUsageLine(
                     lineData,
                     tokenCountNeedle: tokenCountNeedle,
+                    taskCompleteNeedle: taskCompleteNeedle,
                     modelNeedle: modelNeedle,
                     providerNeedle: providerNeedle,
                     fractionalFormatter: fractionalFormatter,
@@ -744,6 +852,7 @@ final class CodexUsageReader {
                     currentProvider: &currentProvider,
                     sawTokenEvent: &sawTokenEvent,
                     tokenEventCount: &tokenEventCount,
+                    pendingDurationDeltaIndex: &pendingDurationDeltaIndex,
                     deltas: &deltas
                 )
             }
@@ -753,6 +862,7 @@ final class CodexUsageReader {
             processUsageLine(
                 buffer,
                 tokenCountNeedle: tokenCountNeedle,
+                taskCompleteNeedle: taskCompleteNeedle,
                 modelNeedle: modelNeedle,
                 providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
@@ -762,6 +872,7 @@ final class CodexUsageReader {
                 currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
+                pendingDurationDeltaIndex: &pendingDurationDeltaIndex,
                 deltas: &deltas
             )
         }
@@ -814,9 +925,11 @@ final class CodexUsageReader {
         var currentProvider: String?
         let modelNeedle = Data(#""model"#.utf8)
         let providerNeedle = Data(#""provider"#.utf8)
+        let taskCompleteNeedle = Data(#""type":"task_complete""#.utf8)
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
+        var pendingDurationDeltaIndex: Int?
 
         while let newline = buffer.firstIndex(of: 10) {
             let lineData = buffer.subdata(in: buffer.startIndex..<newline)
@@ -824,6 +937,7 @@ final class CodexUsageReader {
             processUsageLine(
                 lineData,
                 tokenCountNeedle: tokenCountNeedle,
+                taskCompleteNeedle: taskCompleteNeedle,
                 modelNeedle: modelNeedle,
                 providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
@@ -833,6 +947,7 @@ final class CodexUsageReader {
                 currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
+                pendingDurationDeltaIndex: &pendingDurationDeltaIndex,
                 deltas: &deltas
             )
         }
@@ -841,6 +956,7 @@ final class CodexUsageReader {
             processUsageLine(
                 buffer,
                 tokenCountNeedle: tokenCountNeedle,
+                taskCompleteNeedle: taskCompleteNeedle,
                 modelNeedle: modelNeedle,
                 providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
@@ -850,6 +966,7 @@ final class CodexUsageReader {
                 currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
+                pendingDurationDeltaIndex: &pendingDurationDeltaIndex,
                 deltas: &deltas
             )
         }
@@ -860,6 +977,7 @@ final class CodexUsageReader {
     private func processUsageLine(
         _ lineData: Data,
         tokenCountNeedle: Data,
+        taskCompleteNeedle: Data,
         modelNeedle: Data,
         providerNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
@@ -869,16 +987,29 @@ final class CodexUsageReader {
         currentProvider: inout String?,
         sawTokenEvent: inout Bool,
         tokenEventCount: inout Int,
+        pendingDurationDeltaIndex: inout Int?,
         deltas: inout [SessionUsageDelta]
     ) {
         let hasTokenCount = lineData.range(of: tokenCountNeedle) != nil
+        let hasTaskComplete = lineData.range(of: taskCompleteNeedle) != nil
         let hasModelHint = lineData.range(of: modelNeedle) != nil
         let hasProviderHint = lineData.range(of: providerNeedle) != nil
-        guard hasTokenCount || hasModelHint || hasProviderHint,
+        guard hasTokenCount || hasTaskComplete || hasModelHint || hasProviderHint,
               let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
         else { return }
 
         let payload = object["payload"] as? [String: Any] ?? [:]
+        if hasTaskComplete, payload["type"] as? String == "task_complete" {
+            if let index = pendingDurationDeltaIndex,
+               deltas.indices.contains(index),
+               let durationMs = doubleValue(payload["duration_ms"]),
+               durationMs > 0 {
+                deltas[index].endToEndDurationMs = durationMs
+            }
+            pendingDurationDeltaIndex = nil
+            return
+        }
+
         let info = payload["info"] as? [String: Any] ?? [:]
         let totalUsage = info["total_token_usage"] as? [String: Any] ?? [:]
         let detectedModel = tokenEventModel(object: object, payload: payload, info: info, totalUsage: totalUsage)
@@ -919,8 +1050,10 @@ final class CodexUsageReader {
             date: date,
             tokens: delta,
             model: detectedModel ?? currentModel,
-            modelProvider: detectedProvider ?? currentProvider
+            modelProvider: detectedProvider ?? currentProvider,
+            endToEndDurationMs: nil
         ))
+        pendingDurationDeltaIndex = deltas.count - 1
     }
 
     private func tokenEventModel(
@@ -1070,13 +1203,33 @@ final class CodexUsageReader {
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayTokensByModelAndDay: [String: [String: Int64]] = [:]
         var modelProviders: [String: String] = [:]
-        var modelTotalTokens: [String: Int64] = [:]
-        var modelTotalTimeMs: [String: Double] = [:]
+        var todayModelTotalTokens: [String: Int64] = [:]
+        var todayModelTotalTimeMs: [String: Double] = [:]
+        var twentyFourHourModelTotalTokens: [String: Int64] = [:]
+        var twentyFourHourModelTotalTimeMs: [String: Double] = [:]
+        var sevenDayModelTotalTokens: [String: Int64] = [:]
+        var sevenDayModelTotalTimeMs: [String: Double] = [:]
+        var thirtyDayModelTotalTokens: [String: Int64] = [:]
+        var thirtyDayModelTotalTimeMs: [String: Double] = [:]
+        var lifetimeModelTotalTokens: [String: Int64] = [:]
+        var lifetimeModelTotalTimeMs: [String: Double] = [:]
 
         let dayFormatter = DateFormatter()
         dayFormatter.calendar = calendar
         dayFormatter.locale = Locale(identifier: "en_US_POSIX")
         dayFormatter.dateFormat = "yyyy-MM-dd"
+
+        func recordThroughput(
+            bucketKey: String,
+            outputTokens: Int64,
+            durationMs: Double,
+            tokens: inout [String: Int64],
+            timeMs: inout [String: Double]
+        ) {
+            guard outputTokens > 0, durationMs > 0 else { return }
+            tokens[bucketKey, default: 0] += outputTokens
+            timeMs[bucketKey, default: 0] += durationMs
+        }
 
         for object in eventObjects {
             guard let sessionId = object["sessionId"] as? String,
@@ -1113,15 +1266,14 @@ final class CodexUsageReader {
             let bucketKey = modelUsageBucketKey(model: modelName, provider: providerID)
             let rawCost = estimatedCostUSD(tokens: current, price: price)
 
-            if current.outputTokens > 0,
-               let timeCreated = epochMilliseconds(object["timeCreated"]),
+            let durationMs: Double?
+            if let timeCreated = epochMilliseconds(object["timeCreated"]),
                let timeCompleted = epochMilliseconds(object["timeCompleted"]) {
-                let durationMs = timeCompleted - timeCreated
-                if durationMs > 0 {
-                    modelTotalTokens[bucketKey, default: 0] += current.outputTokens
-                    modelTotalTimeMs[bucketKey, default: 0] += durationMs
-                }
+                durationMs = timeCompleted - timeCreated
+            } else {
+                durationMs = nil
             }
+            let throughputTokens = current.outputTokens + current.reasoningOutputTokens
 
             if !providerID.isEmpty {
                 modelProviders[bucketKey] = providerID
@@ -1131,11 +1283,29 @@ final class CodexUsageReader {
                 var usage = todayUsageByModel[bucketKey] ?? .zero
                 usage.add(tokens: current, costUSD: rawCost)
                 todayUsageByModel[bucketKey] = usage
+                if let durationMs {
+                    recordThroughput(
+                        bucketKey: bucketKey,
+                        outputTokens: throughputTokens,
+                        durationMs: durationMs,
+                        tokens: &todayModelTotalTokens,
+                        timeMs: &todayModelTotalTimeMs
+                    )
+                }
             }
             if date >= twentyFourHourStart {
                 var usage = twentyFourHourUsageByModel[bucketKey] ?? .zero
                 usage.add(tokens: current, costUSD: rawCost)
                 twentyFourHourUsageByModel[bucketKey] = usage
+                if let durationMs {
+                    recordThroughput(
+                        bucketKey: bucketKey,
+                        outputTokens: throughputTokens,
+                        durationMs: durationMs,
+                        tokens: &twentyFourHourModelTotalTokens,
+                        timeMs: &twentyFourHourModelTotalTimeMs
+                    )
+                }
             }
             if date >= sevenDayStart {
                 var usage = sevenDayUsageByModel[bucketKey] ?? .zero
@@ -1145,15 +1315,42 @@ final class CodexUsageReader {
                 byDay[dayFormatter.string(from: date), default: 0] += current.visibleTotalTokens
                 sevenDayTokensByModelAndDay[bucketKey] = byDay
                 tokensByDay[dayFormatter.string(from: date), default: 0] += current.visibleTotalTokens
+                if let durationMs {
+                    recordThroughput(
+                        bucketKey: bucketKey,
+                        outputTokens: throughputTokens,
+                        durationMs: durationMs,
+                        tokens: &sevenDayModelTotalTokens,
+                        timeMs: &sevenDayModelTotalTimeMs
+                    )
+                }
             }
             if date >= thirtyDayStart {
                 var usage = thirtyDayUsageByModel[bucketKey] ?? .zero
                 usage.add(tokens: current, costUSD: rawCost)
                 thirtyDayUsageByModel[bucketKey] = usage
+                if let durationMs {
+                    recordThroughput(
+                        bucketKey: bucketKey,
+                        outputTokens: throughputTokens,
+                        durationMs: durationMs,
+                        tokens: &thirtyDayModelTotalTokens,
+                        timeMs: &thirtyDayModelTotalTimeMs
+                    )
+                }
             }
             var lifetimeUsage = lifetimeUsageByModel[bucketKey] ?? .zero
             lifetimeUsage.add(tokens: current, costUSD: rawCost)
             lifetimeUsageByModel[bucketKey] = lifetimeUsage
+            if let durationMs {
+                recordThroughput(
+                    bucketKey: bucketKey,
+                    outputTokens: throughputTokens,
+                    durationMs: durationMs,
+                    tokens: &lifetimeModelTotalTokens,
+                    timeMs: &lifetimeModelTotalTimeMs
+                )
+            }
             tokensBySession[sessionId, default: 0] += current.visibleTotalTokens
         }
 
@@ -1208,11 +1405,11 @@ final class CodexUsageReader {
                 templateBuckets: dailyBuckets
             ),
             recentThreads: recent,
-            todayModelUsage: sortedModelUsageItems(todayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
-            twentyFourHourModelUsage: sortedModelUsageItems(twentyFourHourUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
-            sevenDayModelUsage: sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
-            thirtyDayModelUsage: sortedModelUsageItems(thirtyDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
-            lifetimeModelUsage: sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders, throughput: calculateThroughput(modelTotalTokens, modelTotalTimeMs)),
+            todayModelUsage: sortedModelUsageItems(todayUsageByModel, providers: modelProviders, throughput: calculateThroughput(todayModelTotalTokens, todayModelTotalTimeMs)),
+            twentyFourHourModelUsage: sortedModelUsageItems(twentyFourHourUsageByModel, providers: modelProviders, throughput: calculateThroughput(twentyFourHourModelTotalTokens, twentyFourHourModelTotalTimeMs)),
+            sevenDayModelUsage: sortedModelUsageItems(sevenDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(sevenDayModelTotalTokens, sevenDayModelTotalTimeMs)),
+            thirtyDayModelUsage: sortedModelUsageItems(thirtyDayUsageByModel, providers: modelProviders, throughput: calculateThroughput(thirtyDayModelTotalTokens, thirtyDayModelTotalTimeMs)),
+            lifetimeModelUsage: sortedModelUsageItems(lifetimeUsageByModel, providers: modelProviders, throughput: calculateThroughput(lifetimeModelTotalTokens, lifetimeModelTotalTimeMs)),
             detailedUsage: totals
         )
     }

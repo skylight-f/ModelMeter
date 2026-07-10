@@ -137,7 +137,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.contentMinSize = panel.minSize
         panel.contentMaxSize = panel.maxSize
         panel.contentView = GlassHostingContainer(rootView: UsageWidgetView(store: store), cornerRadius: 24)
-        panel.moveToDesktopLayer()
+        panel.moveToFrontLayer()
+        isFrontMode = true
         window = panel
 
         setupStatusItem()

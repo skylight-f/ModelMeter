@@ -570,7 +570,6 @@ struct UsageWidgetView: View {
         }
     }
 
-    @State private var selectedModelDetail: ModelUsageItem?
     @State private var modelSearchText = ""
 
     private var filteredModelUsage: [ModelUsageItem] {
@@ -676,7 +675,7 @@ struct UsageWidgetView: View {
                     Text(language.text("速度", "TPS"))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.tertiary)
-                        .frame(minWidth: 36, alignment: .trailing)
+                        .frame(minWidth: 40, alignment: .trailing)
 
                     Text(language.text("未缓存", "Unc"))
                         .font(.system(size: 10, weight: .semibold))
@@ -722,9 +721,7 @@ struct UsageWidgetView: View {
                 } else {
                     let maxTokens = filteredModelUsage.map(\.tokens).max() ?? 1
                     ForEach(filteredModelUsage) { item in
-                        ModelUsageRow(item: item, language: language, maxTokens: maxTokens) { selectedItem in
-                            selectedModelDetail = selectedItem
-                        }
+                        ModelUsageRow(item: item, language: language, maxTokens: maxTokens)
                         if item.id != filteredModelUsage.last?.id {
                             Divider()
                         }
@@ -732,9 +729,6 @@ struct UsageWidgetView: View {
                 }
             }
             .cardBackground(cornerRadius: 10)
-        }
-        .sheet(item: $selectedModelDetail) { item in
-            ModelDetailView(item: item, language: language)
         }
     }
 

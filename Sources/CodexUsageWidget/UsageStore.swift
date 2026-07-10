@@ -13,6 +13,7 @@ struct SessionUsageDelta {
     let tokens: TokenBreakdown
     let model: String?
     let modelProvider: String?
+    var endToEndDurationMs: Double?
 }
 
 struct SessionUsageCacheEntry {
@@ -86,6 +87,7 @@ final class UsageStore: ObservableObject {
     @Published var requestStats: RequestStats = RequestStats(totalRequests: 0, totalTokens: 0, avgTokensPerRequest: 0, uniqueModels: 0, uniqueProjects: 0)
 
     private var fullTimer: Timer?
+    private var refreshInterval: TimeInterval = 30
     private var snapshotCache: [UsageProvider: UsageSnapshot] = [:]
     private var refreshingProviders = Set<UsageProvider>()
     private var discoveryNoticeWorkItem: DispatchWorkItem?
@@ -105,6 +107,7 @@ final class UsageStore: ObservableObject {
     }
 
     @objc private func handlePreferencesDidChange() {
+        configureRefreshTimer()
         let newProvider = UsageProvider.stored()
         if newProvider != provider {
             provider = newProvider
@@ -120,13 +123,14 @@ final class UsageStore: ObservableObject {
     func rediscoverProvidersManually() {
         let previousIds = Set(discoveredProviders.map(\.id))
         let discovered = CodexUsageReader.discoverProviders()
-        let discoveredIds = Set(discovered.map(\.id))
+        let supportedDiscovered = supportedDiscoveries(from: discovered)
+        let discoveredIds = Set(supportedDiscovered.map(\.id))
         let newCount = discoveredIds.subtracting(previousIds).count
 
         applyDiscoveredProviders(discovered)
 
         let notice: String
-        if discovered.isEmpty {
+        if supportedDiscovered.isEmpty {
             notice = "未发现数据源"
         } else if newCount == 0 {
             notice = "未发现新数据源"
@@ -137,20 +141,49 @@ final class UsageStore: ObservableObject {
     }
 
     private func applyDiscoveredProviders(_ discovered: [DiscoveredProvider]) {
-        discoveredProviders = discovered
+        let supported = supportedDiscoveries(from: discovered)
+        discoveredProviders = supported
 
-        if let current = discovered.first(where: { $0.id == provider.rawValue }) {
+        if let current = supported.first(where: { $0.id == provider.rawValue }) {
             selectedDiscoveredProvider = current
             return
         }
 
         if let savedId = AgentDeskDatabase.shared.string(forKey: "AgentDesk.selectedProviderId"),
-           let found = discovered.first(where: { $0.id == savedId }) {
+           let found = supported.first(where: { $0.id == savedId }) {
             selectedDiscoveredProvider = found
+            if let usageProvider = UsageProvider(rawValue: found.id) {
+                applyProviderSelectionIfNeeded(usageProvider)
+            }
             return
         }
 
-        selectedDiscoveredProvider = discovered.first
+        selectedDiscoveredProvider = supported.first
+        if let first = supported.first,
+           let usageProvider = UsageProvider(rawValue: first.id) {
+            applyProviderSelectionIfNeeded(usageProvider)
+        }
+    }
+
+    private func supportedDiscoveries(from discovered: [DiscoveredProvider]) -> [DiscoveredProvider] {
+        discovered.filter { UsageProvider(rawValue: $0.id) != nil }
+    }
+
+    private func applyProviderSelectionIfNeeded(_ provider: UsageProvider) {
+        guard self.provider != provider else { return }
+        provider.persist()
+        self.provider = provider
+        if let cached = snapshotCache[provider] {
+            snapshot = cached
+        } else if let persisted = AgentDeskDatabase.shared.loadUsageSnapshot(provider: provider) {
+            snapshot = persisted
+            snapshotCache[provider] = persisted
+        } else {
+            let empty = UsageSnapshot.empty(provider: provider)
+            snapshot = empty
+            snapshotCache[provider] = empty
+        }
+        syncRefreshingState()
     }
 
     private func showDiscoveryNotice(_ notice: String) {
@@ -176,14 +209,33 @@ final class UsageStore: ObservableObject {
     func start() {
         refresh()
         refreshAnalytics(period: .today)
-        fullTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            self?.refresh()
-            self?.refreshAnalytics(period: .today)
-        }
+        configureRefreshTimer()
     }
 
     func stop() {
         fullTimer?.invalidate()
+        fullTimer = nil
+    }
+
+    private func configureRefreshTimer() {
+        let interval = Self.storedRefreshInterval()
+        guard fullTimer == nil || refreshInterval != interval else { return }
+
+        fullTimer?.invalidate()
+        refreshInterval = interval
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            self?.refresh()
+            self?.refreshAnalytics(period: .today)
+        }
+        timer.tolerance = min(5, interval * 0.1)
+        RunLoop.main.add(timer, forMode: .common)
+        fullTimer = timer
+    }
+
+    private static func storedRefreshInterval() -> TimeInterval {
+        let stored = AgentDeskDatabase.shared.double(forKey: "AgentDesk.refreshInterval")
+        let interval = stored > 0 ? stored : 30
+        return max(5, min(300, interval))
     }
 
     func refresh() {
@@ -201,15 +253,9 @@ final class UsageStore: ObservableObject {
         DispatchQueue.global(qos: .utility).async {
             let snapshot = CodexUsageReader(provider: provider).load()
             DispatchQueue.main.async {
-                let cached = self.snapshotCache[provider]
-                    ?? AgentDeskDatabase.shared.loadUsageSnapshot(provider: provider)
-                let merged = cached.map { snapshot.merging(with: $0) } ?? snapshot
-                if merged.hasPersistableContent {
-                    AgentDeskDatabase.shared.saveUsageSnapshot(merged)
-                }
-                self.snapshotCache[provider] = snapshot.hasPersistableContent ? merged : (cached ?? snapshot)
+                let resolvedSnapshot = self.resolvedRefreshSnapshot(snapshot)
                 if self.provider == provider {
-                    self.snapshot = self.snapshotCache[provider] ?? snapshot
+                    self.snapshot = resolvedSnapshot
                     self.sourceUsageSummaries = []
                 }
                 self.refreshingProviders.remove(provider)
@@ -229,21 +275,15 @@ final class UsageStore: ObservableObject {
                 snapshots.append(snapshot)
             }
 
-            let aggregate = UsageStore.aggregateSnapshot(from: snapshots)
-
             DispatchQueue.main.async {
-                for snapshot in snapshots {
-                    if snapshot.hasPersistableContent {
-                        AgentDeskDatabase.shared.saveUsageSnapshot(snapshot)
-                    }
-                    self.snapshotCache[snapshot.provider] = snapshot
-                }
+                let resolvedSnapshots = snapshots.map { self.resolvedRefreshSnapshot($0) }
+                let aggregate = UsageStore.aggregateSnapshot(from: resolvedSnapshots)
                 if aggregate.snapshot.hasPersistableContent {
+                    self.snapshotCache[provider] = aggregate.snapshot
                     AgentDeskDatabase.shared.saveUsageSnapshot(aggregate.snapshot)
                 }
-                self.snapshotCache[provider] = aggregate.snapshot
                 if self.provider == provider {
-                    self.snapshot = aggregate.snapshot
+                    self.snapshot = self.snapshotCache[provider] ?? aggregate.snapshot
                     self.sourceUsageSummaries = aggregate.sourceSummaries
                 }
                 self.refreshingProviders.remove(provider)
@@ -263,19 +303,26 @@ final class UsageStore: ObservableObject {
 
         DispatchQueue.global(qos: .utility).async {
             let snapshots = sourceProviders.map { CodexUsageReader(provider: $0).load() }
-            let aggregate = UsageStore.aggregateSnapshot(from: snapshots)
 
             DispatchQueue.main.async {
-                for snapshot in snapshots {
-                    if snapshot.hasPersistableContent {
-                        AgentDeskDatabase.shared.saveUsageSnapshot(snapshot)
-                    }
-                    self.snapshotCache[snapshot.provider] = snapshot
-                }
-                self.sourceUsageSummaries = aggregate.sourceSummaries
-                completion?(aggregate.sourceSummaries)
+                let resolvedSnapshots = snapshots.map { self.resolvedRefreshSnapshot($0) }
+                let resolvedAggregate = UsageStore.aggregateSnapshot(from: resolvedSnapshots)
+                self.sourceUsageSummaries = resolvedAggregate.sourceSummaries
+                completion?(resolvedAggregate.sourceSummaries)
             }
         }
+    }
+
+    private func resolvedRefreshSnapshot(_ snapshot: UsageSnapshot) -> UsageSnapshot {
+        let cached = snapshotCache[snapshot.provider]
+            ?? AgentDeskDatabase.shared.loadUsageSnapshot(provider: snapshot.provider)
+        let merged = cached.map { snapshot.merging(with: $0) } ?? snapshot
+        let resolved = snapshot.hasPersistableContent ? merged : (cached ?? snapshot)
+        if snapshot.hasPersistableContent, resolved.hasPersistableContent {
+            AgentDeskDatabase.shared.saveUsageSnapshot(resolved)
+        }
+        snapshotCache[snapshot.provider] = resolved
+        return resolved
     }
 
     func selectProvider(_ provider: UsageProvider) {
@@ -328,7 +375,7 @@ final class UsageStore: ObservableObject {
             return discovered.filter { seen.insert($0.rawValue).inserted }
                 .sorted { $0.rawValue < $1.rawValue }
         }
-        return UsageProvider.allCases.filter { $0 != .all }
+        return []
     }
 
     static func aggregateSnapshot(from snapshots: [UsageSnapshot]) -> (snapshot: UsageSnapshot, sourceSummaries: [SourceUsageSummary]) {

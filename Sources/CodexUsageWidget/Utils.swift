@@ -681,7 +681,11 @@ func modelUsageDisplayLabel(from key: String) -> String {
     return "\(model) · \(provider)"
 }
 
-func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage], providers: [String: String] = [:], throughput: [String: Double] = [:]) -> [ModelUsageItem] {
+func sortedModelUsageItems(
+    _ usageByModel: [String: PricedTokenUsage],
+    providers: [String: String] = [:],
+    throughput: [String: Double] = [:]
+) -> [ModelUsageItem] {
     usageByModel.map { key, value in
         let model = modelUsageModelName(from: key)
         let provider = providers[key] ?? modelUsageProviderName(from: key) ?? modelProvider(from: model)
@@ -1029,7 +1033,8 @@ func dumpJSON(_ snapshot: UsageSnapshot) {
                 "inputPricePerMillion": item.inputPricePerMillion,
                 "cachedInputPricePerMillion": item.cachedInputPricePerMillion,
                 "outputPricePerMillion": item.outputPricePerMillion,
-                "currency": item.currency.rawValue
+                "currency": item.currency.rawValue,
+                "avgTokensPerSecond": item.avgTokensPerSecond
             ] as [String: Any]
         }
         localObject["sevenDayModelUsage"] = local.sevenDayModelUsage.map { item in
@@ -1041,7 +1046,8 @@ func dumpJSON(_ snapshot: UsageSnapshot) {
                 "inputPricePerMillion": item.inputPricePerMillion,
                 "cachedInputPricePerMillion": item.cachedInputPricePerMillion,
                 "outputPricePerMillion": item.outputPricePerMillion,
-                "currency": item.currency.rawValue
+                "currency": item.currency.rawValue,
+                "avgTokensPerSecond": item.avgTokensPerSecond
             ] as [String: Any]
         }
         localObject["lifetimeModelUsage"] = local.lifetimeModelUsage.map { item in
@@ -1053,7 +1059,8 @@ func dumpJSON(_ snapshot: UsageSnapshot) {
                 "inputPricePerMillion": item.inputPricePerMillion,
                 "cachedInputPricePerMillion": item.cachedInputPricePerMillion,
                 "outputPricePerMillion": item.outputPricePerMillion,
-                "currency": item.currency.rawValue
+                "currency": item.currency.rawValue,
+                "avgTokensPerSecond": item.avgTokensPerSecond
             ] as [String: Any]
         }
 

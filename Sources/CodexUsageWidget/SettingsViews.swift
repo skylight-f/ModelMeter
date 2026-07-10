@@ -85,6 +85,13 @@ struct SettingsView: View {
     let languageChanged: () -> Void
     let themeChanged: () -> Void
 
+    private var discoveredUsageProviders: [UsageProvider] {
+        var seen = Set<String>()
+        return store.discoveredProviders
+            .compactMap { UsageProvider(rawValue: $0.id) }
+            .filter { seen.insert($0.rawValue).inserted }
+    }
+
     init(store: UsageStore, languageChanged: @escaping () -> Void, themeChanged: @escaping () -> Void) {
         self.store = store
         self.languageChanged = languageChanged
@@ -292,16 +299,23 @@ struct SettingsView: View {
                             title: localizedText("默认数据源", "Default Source"),
                             detail: localizedText("启动时优先展示的数据来源", "Preferred source shown when the app starts")
                         ) {
-                            Picker("", selection: $provider) {
-                                ForEach(UsageProvider.allCases, id: \.self) { p in
-                                    Text(p.displayName(language: language)).tag(p)
+                            if discoveredUsageProviders.isEmpty {
+                                Text(localizedText("未发现可用数据源", "No available source"))
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Picker("", selection: $provider) {
+                                    ForEach(discoveredUsageProviders, id: \.self) { p in
+                                        Text(p.displayName(language: language)).tag(p)
+                                    }
                                 }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.segmented)
-                            .onChange(of: provider) { _, v in
-                                v.persist()
-                                postPreferencesDidChange()
+                                .labelsHidden()
+                                .pickerStyle(.segmented)
+                                .onChange(of: provider) { _, v in
+                                    guard discoveredUsageProviders.contains(v) else { return }
+                                    v.persist()
+                                    postPreferencesDidChange()
+                                }
                             }
                         }
 

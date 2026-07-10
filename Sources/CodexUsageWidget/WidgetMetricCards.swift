@@ -10,7 +10,9 @@ struct DetailedTokenMetricCard: View {
     let currency: ModelTokenPrice.Currency
 
     private var displayTokens: Int64? {
-        usage?.tokens.visibleTotalTokens ?? fallbackTokens
+        // `threads.tokens_used` is Codex's final per-thread total. Prefer it for
+        // the headline number over reconstructing a total from JSONL snapshots.
+        fallbackTokens ?? usage?.tokens.visibleTotalTokens
     }
 
     private var cacheHitRate: Double? {
@@ -279,26 +281,6 @@ struct MetricTile: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(WidgetPalette.surfaceTrack)
         )
-    }
-}
-
-struct DetailMetricCard: View {
-    let title: String
-    let value: String
-    let color: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.headline.monospacedDigit())
-                .foregroundStyle(color)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .cardBackground(cornerRadius: 8)
     }
 }
 

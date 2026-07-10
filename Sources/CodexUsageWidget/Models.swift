@@ -143,6 +143,83 @@ struct ModelUsageItem: Identifiable, Equatable, Codable {
     let avgTokensPerSecond: Double
 
     var id: String { "\(model)|\(provider)" }
+
+    init(
+        model: String,
+        provider: String,
+        tokens: Int64,
+        uncachedInputTokens: Int64,
+        cachedInputTokens: Int64,
+        outputTokens: Int64,
+        estimatedCostUSD: Double,
+        inputPricePerMillion: Double,
+        cachedInputPricePerMillion: Double,
+        outputPricePerMillion: Double,
+        currency: ModelTokenPrice.Currency,
+        avgTokensPerSecond: Double
+    ) {
+        self.model = model
+        self.provider = provider
+        self.tokens = tokens
+        self.uncachedInputTokens = uncachedInputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.outputTokens = outputTokens
+        self.estimatedCostUSD = estimatedCostUSD
+        self.inputPricePerMillion = inputPricePerMillion
+        self.cachedInputPricePerMillion = cachedInputPricePerMillion
+        self.outputPricePerMillion = outputPricePerMillion
+        self.currency = currency
+        self.avgTokensPerSecond = avgTokensPerSecond
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case model
+        case provider
+        case tokens
+        case uncachedInputTokens
+        case cachedInputTokens
+        case outputTokens
+        case estimatedCostUSD
+        case inputPricePerMillion
+        case cachedInputPricePerMillion
+        case outputPricePerMillion
+        case currency
+        case avgTokensPerSecond
+        case endToEndTokensPerSecond
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        model = try container.decode(String.self, forKey: .model)
+        provider = try container.decode(String.self, forKey: .provider)
+        tokens = try container.decode(Int64.self, forKey: .tokens)
+        uncachedInputTokens = try container.decode(Int64.self, forKey: .uncachedInputTokens)
+        cachedInputTokens = try container.decode(Int64.self, forKey: .cachedInputTokens)
+        outputTokens = try container.decode(Int64.self, forKey: .outputTokens)
+        estimatedCostUSD = try container.decode(Double.self, forKey: .estimatedCostUSD)
+        inputPricePerMillion = try container.decode(Double.self, forKey: .inputPricePerMillion)
+        cachedInputPricePerMillion = try container.decode(Double.self, forKey: .cachedInputPricePerMillion)
+        outputPricePerMillion = try container.decode(Double.self, forKey: .outputPricePerMillion)
+        currency = try container.decode(ModelTokenPrice.Currency.self, forKey: .currency)
+        let legacySpeed = try container.decodeIfPresent(Double.self, forKey: .avgTokensPerSecond) ?? 0
+        avgTokensPerSecond = try container.decodeIfPresent(Double.self, forKey: .endToEndTokensPerSecond) ?? legacySpeed
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(model, forKey: .model)
+        try container.encode(provider, forKey: .provider)
+        try container.encode(tokens, forKey: .tokens)
+        try container.encode(uncachedInputTokens, forKey: .uncachedInputTokens)
+        try container.encode(cachedInputTokens, forKey: .cachedInputTokens)
+        try container.encode(outputTokens, forKey: .outputTokens)
+        try container.encode(estimatedCostUSD, forKey: .estimatedCostUSD)
+        try container.encode(inputPricePerMillion, forKey: .inputPricePerMillion)
+        try container.encode(cachedInputPricePerMillion, forKey: .cachedInputPricePerMillion)
+        try container.encode(outputPricePerMillion, forKey: .outputPricePerMillion)
+        try container.encode(currency, forKey: .currency)
+        try container.encode(avgTokensPerSecond, forKey: .avgTokensPerSecond)
+    }
 }
 
 func modelProvider(from model: String) -> String {

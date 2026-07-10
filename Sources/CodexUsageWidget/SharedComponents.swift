@@ -147,29 +147,6 @@ struct LanguageSwitch: View {
     }
 }
 
-struct ProviderSwitch: View {
-    let provider: UsageProvider
-    let language: WidgetLanguage
-    let onSelect: (UsageProvider) -> Void
-
-    var body: some View {
-        Picker("", selection: Binding(
-            get: { provider },
-            set: { onSelect($0) }
-        )) {
-            ForEach(UsageProvider.allCases, id: \.self) { item in
-                Text(item.shortLabel(language: language)).tag(item)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .controlSize(.mini)
-        .frame(width: 122)
-        .help(language.text("数据源：全部 / Codex / MimoCode", "Source: All / Codex / MimoCode"))
-        .accessibilityLabel(language.text("数据源", "Source"))
-    }
-}
-
 struct DiscoveredProviderPicker: View {
     let providers: [DiscoveredProvider]
     let selected: DiscoveredProvider?
