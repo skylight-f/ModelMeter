@@ -1,4 +1,4 @@
-import Foundation
+import Cocoa
 
 enum StatusItemPresentationSelfTest {
     static func run() -> Bool {
@@ -125,6 +125,17 @@ enum StatusItemPresentationSelfTest {
         let classic = builder.build(source: source, preferences: classicPreferences, language: .en, now: now)
         expect(classic.itemLength <= 88, "classic double-ring item should stay within 88pt")
         expect(classic.mode == .classic, "classic presentation should select the number-ring renderer")
+        let renderer = StatusItemRenderer()
+        let aquaImage = renderer.render(classic, appearance: NSAppearance(named: .aqua))
+        let darkImage = renderer.render(classic, appearance: NSAppearance(named: .darkAqua))
+        expect(aquaImage.size == classic.imageSize, "Aqua render should preserve presentation size")
+        expect(darkImage.size == classic.imageSize, "Dark Aqua render should preserve presentation size")
+        if let bitmap = aquaImage.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)),
+           let corner = bitmap.colorAt(x: 0, y: 0) {
+            expect(corner.alphaComponent < 0.01, "status item image background should remain transparent")
+        } else {
+            failures.append("status item render should produce a readable bitmap")
+        }
 
         let rich = builder.build(source: source, preferences: .default, language: .en, now: now)
         expect(rich.itemLength <= 124, "default rich item should not exceed the previous width")

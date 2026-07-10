@@ -178,7 +178,7 @@ private struct StatusItemPreviewRow: View {
             ZStack {
                 RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
                     .fill(previewBackground)
-                Image(nsImage: renderer.render(presentation))
+                Image(nsImage: renderer.render(presentation, appearance: previewAppearance))
                     .interpolation(.high)
                     .frame(
                         width: presentation.imageSize.width,
@@ -210,6 +210,10 @@ private struct StatusItemPreviewRow: View {
         colorScheme == .dark
             ? Color.white.opacity(0.055)
             : Color.black.opacity(0.075)
+    }
+
+    private var previewAppearance: NSAppearance? {
+        NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
     }
 }
 

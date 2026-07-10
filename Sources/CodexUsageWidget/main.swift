@@ -7017,6 +7017,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private var statusItem: NSStatusItem?
     private var statusPopover: NSPopover?
     private var statusPopoverEventMonitors: [Any] = []
+    private var statusItemAppearanceObservation: NSKeyValueObservation?
     private var globalHotKeyRef: EventHotKeyRef?
     private var globalHotKeyHandler: EventHandlerRef?
     private var cancellables = Set<AnyCancellable>()
@@ -7089,6 +7090,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
     func applicationWillTerminate(_ notification: Notification) {
         closeStatusPopover()
+        statusItemAppearanceObservation = nil
         unregisterGlobalHotKey()
         store.stop()
     }
@@ -7285,6 +7287,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             }
             .store(in: &cancellables)
 
+        settings.$themeMode
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateStatusItem()
+            }
+            .store(in: &cancellables)
+
         settings.$visibleRuntimeScopes
             .receive(on: RunLoop.main)
             .sink { [weak self] scopes in
@@ -7437,6 +7446,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         guard let button = item.button else { return }
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleNone
+        statusItemAppearanceObservation = button.observe(
+            \.effectiveAppearance,
+            options: [.new]
+        ) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.updateStatusItem()
+            }
+        }
         updateStatusItem()
         button.target = self
         button.action = #selector(statusItemClicked)
@@ -7464,7 +7481,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         guard let button = statusItem?.button else { return }
         let presentation = currentStatusItemPresentation()
         statusItem?.length = presentation.itemLength
-        button.image = statusItemRenderer.render(presentation)
+        button.image = statusItemRenderer.render(
+            presentation,
+            appearance: button.effectiveAppearance
+        )
         button.toolTip = presentation.tooltip
         button.setAccessibilityLabel("codexU")
         button.setAccessibilityValue(presentation.accessibilityValue)

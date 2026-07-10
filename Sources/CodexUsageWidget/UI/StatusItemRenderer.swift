@@ -32,7 +32,22 @@ private extension RingRGBColor {
 }
 
 struct StatusItemRenderer {
-    func render(_ presentation: StatusItemPresentation) -> NSImage {
+    func render(
+        _ presentation: StatusItemPresentation,
+        appearance: NSAppearance? = nil
+    ) -> NSImage {
+        guard let appearance else {
+            return renderImage(presentation)
+        }
+
+        var image: NSImage?
+        appearance.performAsCurrentDrawingAppearance {
+            image = renderImage(presentation)
+        }
+        return image ?? renderImage(presentation)
+    }
+
+    private func renderImage(_ presentation: StatusItemPresentation) -> NSImage {
         let image = NSImage(size: presentation.imageSize)
         image.lockFocus()
         defer {
@@ -152,12 +167,11 @@ struct StatusItemRenderer {
         showsReset: Bool,
         quotaMode: QuotaDisplayMode
     ) {
-        let palette = StatusItemQuotaPalette.palette(for: metric.paletteRole)
         drawText(
             metric.label,
             in: NSRect(x: 22, y: y - 1, width: 17, height: 11),
             font: .monospacedDigitSystemFont(ofSize: 8.2, weight: .semibold),
-            color: metric.isAvailable ? palette.end : mutedTextColor,
+            color: metric.isAvailable ? secondaryTextColor : mutedTextColor,
             alignment: .right
         )
         drawLinearProgress(
@@ -190,16 +204,9 @@ struct StatusItemRenderer {
         width: CGFloat
     ) {
         drawText(
-            "T",
-            in: NSRect(x: x + 3, y: 10.2, width: width - 6, height: 8),
-            font: .systemFont(ofSize: 6.2, weight: .semibold),
-            color: secondaryTextColor,
-            alignment: .center
-        )
-        drawText(
             metric.compactValue,
-            in: NSRect(x: x + 2, y: 3.1, width: width - 4, height: 9),
-            font: .monospacedDigitSystemFont(ofSize: 7.8, weight: .bold),
+            in: NSRect(x: x + 2, y: 5.2, width: width - 4, height: 11),
+            font: .monospacedDigitSystemFont(ofSize: 8.6, weight: .semibold),
             color: metric.isAvailable ? primaryTextColor : mutedTextColor,
             alignment: .center
         )
@@ -351,8 +358,9 @@ struct StatusItemRenderer {
     }
 
     private func drawRuntimeLogo(_ scope: RuntimeScope, in rect: NSRect) {
-        if let image = runtimeLogo(for: scope) {
-            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        if let template = runtimeTemplate(for: scope) {
+            tintedImage(template, color: primaryTextColor, size: rect.size)
+                .draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
             return
         }
         drawText(
@@ -364,12 +372,41 @@ struct StatusItemRenderer {
         )
     }
 
-    private func runtimeLogo(for scope: RuntimeScope) -> NSImage? {
-        let name = scope == .codex ? "codex-color" : "claudecode-color"
-        guard let url = Bundle.main.url(forResource: name, withExtension: "png") else {
-            return nil
+    private func runtimeTemplate(for scope: RuntimeScope) -> NSImage? {
+        let resourceName: String
+        switch scope {
+        case .codex:
+            resourceName = "codex-template"
+        case .claudeCode:
+            resourceName = "claudecode-template"
         }
-        return NSImage(contentsOf: url)
+        if let url = Bundle.main.url(forResource: resourceName, withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            return image
+        }
+
+        let fallbackName = scope == .codex
+            ? "apple.terminal.fill"
+            : "curlybraces.square.fill"
+        let configuration = NSImage.SymbolConfiguration(pointSize: 18, weight: .medium)
+        return NSImage(systemSymbolName: fallbackName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+    }
+
+    private func tintedImage(_ source: NSImage, color: NSColor, size: NSSize) -> NSImage {
+        let image = NSImage(size: size)
+        image.lockFocus()
+        source.draw(
+            in: NSRect(origin: .zero, size: size),
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        color.setFill()
+        NSRect(origin: .zero, size: size).fill(using: .sourceIn)
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
     }
 
     private func drawText(
