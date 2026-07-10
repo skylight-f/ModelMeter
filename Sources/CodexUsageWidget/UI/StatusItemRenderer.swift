@@ -41,7 +41,6 @@ struct StatusItemRenderer {
         }
 
         NSGraphicsContext.current?.imageInterpolation = .high
-        drawBackground(in: NSRect(origin: .zero, size: presentation.imageSize))
 
         switch presentation.mode {
         case .minimal:
@@ -55,18 +54,9 @@ struct StatusItemRenderer {
         return image
     }
 
-    private func drawBackground(in rect: NSRect) {
-        NSColor.black.withAlphaComponent(0.24).setFill()
-        NSBezierPath(
-            roundedRect: rect.insetBy(dx: 1, dy: 1),
-            xRadius: rect.height / 2,
-            yRadius: rect.height / 2
-        ).fill()
-    }
-
     private func drawMinimal(_ presentation: StatusItemPresentation) {
         let quotaMetrics = presentation.quotaMetrics
-        drawRuntimeLogo(presentation.runtime, in: NSRect(x: 8, y: 6, width: 10, height: 10))
+        drawRuntimeLogo(presentation.runtime, in: NSRect(x: 6, y: 4, width: 14, height: 14))
 
         for (index, metric) in quotaMetrics.prefix(2).enumerated() {
             let rect: NSRect
@@ -82,13 +72,14 @@ struct StatusItemRenderer {
                 in: rect,
                 fraction: metric.fraction,
                 role: metric.paletteRole,
+                quotaMode: presentation.quotaMode,
                 lineWidth: lineWidth
             )
         }
     }
 
     private func drawClassic(_ presentation: StatusItemPresentation) {
-        drawRuntimeLogo(presentation.runtime, in: NSRect(x: 4, y: 4, width: 14, height: 14))
+        drawRuntimeLogo(presentation.runtime, in: NSRect(x: 2, y: 2, width: 18, height: 18))
         var x = StatusItemLayoutMetrics.leadingContentWidth
 
         for metric in presentation.quotaMetrics {
@@ -97,20 +88,13 @@ struct StatusItemRenderer {
                 in: ringRect,
                 fraction: metric.fraction,
                 role: metric.paletteRole,
+                quotaMode: presentation.quotaMode,
                 lineWidth: 1.5
-            )
-            let palette = StatusItemQuotaPalette.palette(for: metric.paletteRole)
-            drawText(
-                metric.label,
-                in: NSRect(x: x + 3, y: 10.7, width: 16, height: 7),
-                font: .systemFont(ofSize: 5.2, weight: .semibold),
-                color: metric.isAvailable ? palette.end : mutedTextColor,
-                alignment: .center
             )
             drawText(
                 metric.compactValue,
-                in: NSRect(x: x + 2, y: 4.0, width: 18, height: 8),
-                font: .monospacedDigitSystemFont(ofSize: 6.5, weight: .bold),
+                in: NSRect(x: x + 2, y: 5.2, width: 18, height: 11),
+                font: .monospacedDigitSystemFont(ofSize: 8.6, weight: .bold),
                 color: metric.isAvailable ? primaryTextColor : mutedTextColor,
                 alignment: .center
             )
@@ -123,14 +107,29 @@ struct StatusItemRenderer {
     }
 
     private func drawRich(_ presentation: StatusItemPresentation) {
-        drawRuntimeLogo(presentation.runtime, in: NSRect(x: 5, y: 4, width: 14, height: 14))
+        drawRuntimeLogo(presentation.runtime, in: NSRect(x: 2, y: 2, width: 18, height: 18))
         let quotaMetrics = presentation.quotaMetrics
 
         if quotaMetrics.count >= 2 {
-            drawRichQuotaRow(quotaMetrics[0], y: 11.3, showsReset: presentation.showsResetCountdown)
-            drawRichQuotaRow(quotaMetrics[1], y: 1.2, showsReset: presentation.showsResetCountdown)
+            drawRichQuotaRow(
+                quotaMetrics[0],
+                y: 11.3,
+                showsReset: presentation.showsResetCountdown,
+                quotaMode: presentation.quotaMode
+            )
+            drawRichQuotaRow(
+                quotaMetrics[1],
+                y: 1.2,
+                showsReset: presentation.showsResetCountdown,
+                quotaMode: presentation.quotaMode
+            )
         } else if let metric = quotaMetrics.first {
-            drawRichQuotaRow(metric, y: 6.2, showsReset: presentation.showsResetCountdown)
+            drawRichQuotaRow(
+                metric,
+                y: 6.2,
+                showsReset: presentation.showsResetCountdown,
+                quotaMode: presentation.quotaMode
+            )
         }
 
         guard let today = presentation.todayMetric else { return }
@@ -141,7 +140,7 @@ struct StatusItemRenderer {
             tokenX = presentation.showsResetCountdown
                 ? StatusItemLayoutMetrics.richQuotaWidthWithReset
                 : StatusItemLayoutMetrics.richQuotaWidthWithoutReset
-            NSColor.white.withAlphaComponent(0.14).setFill()
+            NSColor.separatorColor.withAlphaComponent(0.36).setFill()
             NSBezierPath(rect: NSRect(x: tokenX - 1, y: 4, width: 1, height: 14)).fill()
         }
         drawCompactToken(today, x: tokenX, width: StatusItemLayoutMetrics.richTokenExtensionWidth)
@@ -150,7 +149,8 @@ struct StatusItemRenderer {
     private func drawRichQuotaRow(
         _ metric: StatusItemMetricPresentation,
         y: CGFloat,
-        showsReset: Bool
+        showsReset: Bool,
+        quotaMode: QuotaDisplayMode
     ) {
         let palette = StatusItemQuotaPalette.palette(for: metric.paletteRole)
         drawText(
@@ -163,7 +163,8 @@ struct StatusItemRenderer {
         drawLinearProgress(
             in: NSRect(x: 45, y: y + 2.2, width: 23, height: 4),
             fraction: metric.fraction,
-            role: metric.paletteRole
+            role: metric.paletteRole,
+            quotaMode: quotaMode
         )
         drawText(
             metric.value,
@@ -208,6 +209,7 @@ struct StatusItemRenderer {
         in rect: NSRect,
         fraction: CGFloat?,
         role: StatusItemQuotaPaletteRole?,
+        quotaMode: QuotaDisplayMode,
         lineWidth: CGFloat
     ) {
         let center = CGPoint(x: rect.midX, y: rect.midY)
@@ -230,6 +232,7 @@ struct StatusItemRenderer {
         guard progress > 0.001 else { return }
         let palette = StatusItemQuotaPalette.palette(for: role)
         let segmentCount = max(12, Int(ceil(progress * 72)))
+        let direction: CGFloat = quotaMode.drawsClockwise ? -1 : 1
         for index in 0..<segmentCount {
             let startFraction = CGFloat(index) / CGFloat(segmentCount) * progress
             let endFraction = CGFloat(index + 1) / CGFloat(segmentCount) * progress
@@ -237,9 +240,9 @@ struct StatusItemRenderer {
             path.appendArc(
                 withCenter: center,
                 radius: radius,
-                startAngle: 90 - startFraction * 360,
-                endAngle: 90 - endFraction * 360,
-                clockwise: true
+                startAngle: 90 + direction * startFraction * 360,
+                endAngle: 90 + direction * endFraction * 360,
+                clockwise: quotaMode.drawsClockwise
             )
             path.lineWidth = lineWidth
             path.lineCapStyle = .butt
@@ -261,7 +264,7 @@ struct StatusItemRenderer {
         drawArcCap(
             center: center,
             radius: radius,
-            angle: 90 - progress * 360,
+            angle: 90 + direction * progress * 360,
             diameter: lineWidth,
             color: palette.end
         )
@@ -270,7 +273,8 @@ struct StatusItemRenderer {
     private func drawLinearProgress(
         in rect: NSRect,
         fraction: CGFloat?,
-        role: StatusItemQuotaPaletteRole?
+        role: StatusItemQuotaPaletteRole?,
+        quotaMode: QuotaDisplayMode
     ) {
         trackColor.setFill()
         NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
@@ -279,7 +283,8 @@ struct StatusItemRenderer {
         let progress = max(0, min(1, fraction))
         guard progress > 0.001 else { return }
         let fillWidth = max(rect.height, rect.width * progress)
-        let fillRect = NSRect(x: rect.minX, y: rect.minY, width: fillWidth, height: rect.height)
+        let fillX = quotaMode.startsAtLeadingEdge ? rect.minX : rect.maxX - fillWidth
+        let fillRect = NSRect(x: fillX, y: rect.minY, width: fillWidth, height: rect.height)
         let palette = StatusItemQuotaPalette.palette(for: role)
         guard let context = NSGraphicsContext.current?.cgContext,
               let gradient = CGGradient(
@@ -297,8 +302,14 @@ struct StatusItemRenderer {
         NSBezierPath(roundedRect: fillRect, xRadius: rect.height / 2, yRadius: rect.height / 2).addClip()
         context.drawLinearGradient(
             gradient,
-            start: CGPoint(x: rect.minX, y: rect.midY),
-            end: CGPoint(x: rect.maxX, y: rect.midY),
+            start: CGPoint(
+                x: quotaMode.startsAtLeadingEdge ? rect.minX : rect.maxX,
+                y: rect.midY
+            ),
+            end: CGPoint(
+                x: quotaMode.startsAtLeadingEdge ? rect.maxX : rect.minX,
+                y: rect.midY
+            ),
             options: []
         )
         context.restoreGState()
@@ -383,14 +394,14 @@ struct StatusItemRenderer {
     }
 
     private var primaryTextColor: NSColor {
-        NSColor.white.withAlphaComponent(0.94)
+        NSColor.labelColor.withAlphaComponent(0.94)
     }
 
     private var secondaryTextColor: NSColor {
-        NSColor.white.withAlphaComponent(0.64)
+        NSColor.secondaryLabelColor
     }
 
     private var mutedTextColor: NSColor {
-        NSColor.white.withAlphaComponent(0.42)
+        NSColor.tertiaryLabelColor
     }
 }

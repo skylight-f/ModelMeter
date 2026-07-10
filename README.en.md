@@ -18,8 +18,9 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 
 - Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times.
 - Adds a menu bar runtime menu with separate Codex and Claude Code cards, 5-hour/7-day remaining quota, today's token usage, and total tokens today.
-- Offers Minimal, Classic, and Rich menu bar modes: Minimal wraps the runtime logo with two quota rings, Classic places each quota number inside its own progress ring, and Rich keeps full labels, bars, and reset times.
+- Offers transparent Minimal, Classic, and Rich menu bar modes: Minimal wraps the runtime logo with two quota rings, Classic keeps only the quota number inside each progress ring, and Rich keeps full labels, bars, and reset times.
 - Lets you switch menu bar quotas between used and remaining, choose 5-hour, 7-day, today tokens, and reset countdown, and keeps 5h/7d progress colors aligned with the main blue-purple quota rings.
+- Uses progress direction instead of extra labels: used runs clockwise/left-to-right, while remaining runs counterclockwise/right-to-left.
 - Adds a top-level `Codex | Claude Code` switch in the main widget so all panels can switch runtime scope manually.
 - Supports Claude Code local transcript usage, 7-day trends, project rankings, top tools/Skills, and a basic task board.
 - Summarizes token usage for today, the last 7 days, and lifetime totals with uncached input, cached input, and output splits.

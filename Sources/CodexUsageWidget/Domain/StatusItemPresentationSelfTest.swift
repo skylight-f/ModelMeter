@@ -21,6 +21,10 @@ enum StatusItemPresentationSelfTest {
 
         let defaultPreferences = StatusItemPreferencesStore.load(defaults: defaults)
         expect(defaultPreferences == .default, "missing keys should load the current rich defaults")
+        expect(QuotaDisplayMode.used.drawsClockwise, "used quota should draw clockwise")
+        expect(!QuotaDisplayMode.remaining.drawsClockwise, "remaining quota should draw counterclockwise")
+        expect(QuotaDisplayMode.used.startsAtLeadingEdge, "used linear bar should start at the leading edge")
+        expect(!QuotaDisplayMode.remaining.startsAtLeadingEdge, "remaining linear bar should start at the trailing edge")
 
         defaults.set("unknown-mode", forKey: StatusItemPreferencesStore.displayModeKey)
         defaults.set("unknown-direction", forKey: StatusItemPreferencesStore.quotaModeKey)
