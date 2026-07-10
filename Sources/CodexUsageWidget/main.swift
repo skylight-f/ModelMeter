@@ -3904,7 +3904,13 @@ private struct DualQuotaRingParticles: NSViewRepresentable {
         ParticleStyle(phase: 0.34, speed: 0.068, radialOffset: 1.7, diameter: 0.9, opacity: 0.38),
         ParticleStyle(phase: 0.74, speed: 0.154, radialOffset: -1.2, diameter: 2.0, opacity: 0.72),
         ParticleStyle(phase: 0.94, speed: 0.111, radialOffset: 2.1, diameter: 1.1, opacity: 0.58),
-        ParticleStyle(phase: 0.51, speed: 0.126, radialOffset: -2.4, diameter: 1.7, opacity: 0.64)
+        ParticleStyle(phase: 0.51, speed: 0.126, radialOffset: -2.4, diameter: 1.7, opacity: 0.64),
+        ParticleStyle(phase: 0.09, speed: 0.142, radialOffset: 1.4, diameter: 1.5, opacity: 0.62),
+        ParticleStyle(phase: 0.19, speed: 0.091, radialOffset: -1.8, diameter: 1.0, opacity: 0.44),
+        ParticleStyle(phase: 0.29, speed: 0.182, radialOffset: 2.7, diameter: 1.8, opacity: 0.70),
+        ParticleStyle(phase: 0.62, speed: 0.073, radialOffset: -0.8, diameter: 2.3, opacity: 0.76),
+        ParticleStyle(phase: 0.81, speed: 0.133, radialOffset: -2.6, diameter: 1.2, opacity: 0.54),
+        ParticleStyle(phase: 0.99, speed: 0.108, radialOffset: 1.9, diameter: 1.6, opacity: 0.60)
     ]
 
     let primaryProgress: CGFloat?
@@ -3976,14 +3982,14 @@ private struct DualQuotaRingParticles: NSViewRepresentable {
                 center: center,
                 radius: 64.5,
                 progress: primaryProgress,
-                maximumCount: 11,
+                maximumCount: 17,
                 phaseOffset: 0
             )
             addParticles(
                 center: center,
                 radius: 45.5,
                 progress: secondaryProgress,
-                maximumCount: 8,
+                maximumCount: 12,
                 phaseOffset: 0.31
             )
             CATransaction.commit()
@@ -4001,40 +4007,111 @@ private struct DualQuotaRingParticles: NSViewRepresentable {
                 maximumCount,
                 max(1, Int(ceil(Double(maximumCount) * min(1, Double(progress) * 1.5))))
             )
+            let activeStyles = Array(DualQuotaRingParticles.styles.prefix(activeCount))
+            let fastParticleCount = max(1, Int((Double(activeCount) * 0.3).rounded()))
+            let fastParticleIndexes = Set(
+                activeStyles.indices
+                    .sorted {
+                        actualSpeed(for: activeStyles[$0], progress: progress)
+                            > actualSpeed(for: activeStyles[$1], progress: progress)
+                    }
+                    .prefix(fastParticleCount)
+            )
 
-            for style in DualQuotaRingParticles.styles.prefix(activeCount) {
-                let particle = CALayer()
-                particle.bounds = CGRect(x: 0, y: 0, width: style.diameter, height: style.diameter)
-                particle.cornerRadius = style.diameter / 2
-                particle.backgroundColor = WidgetPalette.dataFlowParticle.cgColor
-                particle.opacity = 0
-                particle.contentsScale = particleContainer.contentsScale
-
+            for (index, style) in activeStyles.enumerated() {
                 let particleRadius = radius + style.radialOffset
                 let path = particlePath(center: center, radius: particleRadius, progress: progress)
-                particle.position = arcPoint(center: center, radius: particleRadius, progress: progress)
-                particleContainer.addSublayer(particle)
-
-                let position = CAKeyframeAnimation(keyPath: "position")
-                position.path = path
-                position.calculationMode = .paced
-
-                let opacity = CAKeyframeAnimation(keyPath: "opacity")
-                opacity.values = [0, style.opacity, style.opacity, 0]
-                opacity.keyTimes = [0, 0.08, 0.88, 1]
-
+                let startPosition = arcPoint(center: center, radius: particleRadius, progress: progress)
                 let duration = max(1.6, Double(progress) / style.speed)
                 let phase = (style.phase + phaseOffset).truncatingRemainder(dividingBy: 1)
-                let animation = CAAnimationGroup()
-                animation.animations = [position, opacity]
-                animation.duration = duration
-                animation.repeatCount = .infinity
-                animation.timingFunction = CAMediaTimingFunction(name: .linear)
-                animation.beginTime = CACurrentMediaTime()
-                animation.timeOffset = duration * phase
-                animation.isRemovedOnCompletion = false
-                particle.add(animation, forKey: "quota-flow")
+
+                if fastParticleIndexes.contains(index) {
+                    addAnimatedParticle(
+                        style: style,
+                        path: path,
+                        startPosition: startPosition,
+                        duration: duration,
+                        phase: phase,
+                        diameterScale: 0.40,
+                        opacityScale: 0.12,
+                        lag: 0.135
+                    )
+                    addAnimatedParticle(
+                        style: style,
+                        path: path,
+                        startPosition: startPosition,
+                        duration: duration,
+                        phase: phase,
+                        diameterScale: 0.58,
+                        opacityScale: 0.24,
+                        lag: 0.090
+                    )
+                    addAnimatedParticle(
+                        style: style,
+                        path: path,
+                        startPosition: startPosition,
+                        duration: duration,
+                        phase: phase,
+                        diameterScale: 0.78,
+                        opacityScale: 0.42,
+                        lag: 0.045
+                    )
+                }
+
+                addAnimatedParticle(
+                    style: style,
+                    path: path,
+                    startPosition: startPosition,
+                    duration: duration,
+                    phase: phase
+                )
             }
+        }
+
+        private func addAnimatedParticle(
+            style: ParticleStyle,
+            path: CGPath,
+            startPosition: CGPoint,
+            duration: Double,
+            phase: Double,
+            diameterScale: CGFloat = 1,
+            opacityScale: Double = 1,
+            lag: Double = 0
+        ) {
+            let diameter = style.diameter * diameterScale
+            let particle = CALayer()
+            particle.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
+            particle.cornerRadius = diameter / 2
+            particle.backgroundColor = WidgetPalette.dataFlowParticle.cgColor
+            particle.opacity = 0
+            particle.position = startPosition
+            particle.contentsScale = particleContainer.contentsScale
+            particleContainer.addSublayer(particle)
+
+            let position = CAKeyframeAnimation(keyPath: "position")
+            position.path = path
+            position.calculationMode = .paced
+
+            let opacity = CAKeyframeAnimation(keyPath: "opacity")
+            let visibleOpacity = style.opacity * opacityScale
+            opacity.values = [0, visibleOpacity, visibleOpacity, 0]
+            opacity.keyTimes = [0, 0.08, 0.88, 1]
+
+            let animation = CAAnimationGroup()
+            animation.animations = [position, opacity]
+            animation.duration = duration
+            animation.repeatCount = .infinity
+            animation.timingFunction = CAMediaTimingFunction(name: .linear)
+            animation.beginTime = CACurrentMediaTime()
+            let rawOffset = (duration * phase - lag).truncatingRemainder(dividingBy: duration)
+            animation.timeOffset = rawOffset >= 0 ? rawOffset : rawOffset + duration
+            animation.isRemovedOnCompletion = false
+            particle.add(animation, forKey: "quota-flow")
+        }
+
+        private func actualSpeed(for style: ParticleStyle, progress: CGFloat) -> Double {
+            let duration = max(1.6, Double(progress) / style.speed)
+            return Double(progress) / duration
         }
 
         private func particlePath(center: CGPoint, radius: CGFloat, progress: CGFloat) -> CGPath {
