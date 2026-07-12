@@ -7250,6 +7250,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private var cancellables = Set<AnyCancellable>()
     private let statusItemPresentationBuilder = StatusItemPresentationBuilder()
     private let statusItemRenderer = StatusItemRenderer()
+    private var lastRenderedStatusItemPresentation: StatusItemPresentation?
+    private var lastRenderedStatusItemAppearanceName: NSAppearance.Name?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -7707,10 +7709,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private func updateStatusItem() {
         guard let button = statusItem?.button else { return }
         let presentation = currentStatusItemPresentation()
+        let appearance = button.effectiveAppearance
+
+        // Skip redundant redraws. Mutating `button.image`/`length` triggers a
+        // status-bar relayout, which re-fires the `effectiveAppearance` KVO
+        // observer and calls back into this method. Without this guard the icon
+        // repaints in a tight feedback loop, pinning a CPU core.
+        if presentation == lastRenderedStatusItemPresentation,
+           appearance.name == lastRenderedStatusItemAppearanceName {
+            return
+        }
+        lastRenderedStatusItemPresentation = presentation
+        lastRenderedStatusItemAppearanceName = appearance.name
+
         statusItem?.length = presentation.itemLength
         button.image = statusItemRenderer.render(
             presentation,
-            appearance: button.effectiveAppearance
+            appearance: appearance
         )
         button.toolTip = presentation.tooltip
         button.setAccessibilityLabel("codexU")
