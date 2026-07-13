@@ -2702,6 +2702,10 @@ final class AppSettings: ObservableObject {
     }
 
     @Published private(set) var statusItemPreferences: StatusItemPreferences
+    @Published private(set) var globalShortcut: GlobalShortcut?
+    @Published private(set) var globalShortcutError: GlobalShortcutError?
+    var globalShortcutRegistration: ((GlobalShortcut) -> Result<Void, GlobalShortcutRegistrationFailure>)?
+    var globalShortcutUnregistration: (() -> Result<Void, GlobalShortcutRegistrationFailure>)?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -2721,6 +2725,14 @@ final class AppSettings: ObservableObject {
         skippedUpdateVersion = defaults.string(forKey: Self.skippedUpdateVersionKey)
         visibleRuntimeScopes = Self.storedVisibleRuntimeScopes(defaults: defaults)
         statusItemPreferences = StatusItemPreferencesStore.load(defaults: defaults)
+        let storedShortcut = GlobalShortcut.load(defaults: defaults)
+        if let storedShortcut, storedShortcut.validationError != nil {
+            globalShortcut = .default
+            GlobalShortcut.default.save(defaults: defaults)
+        } else {
+            globalShortcut = storedShortcut
+        }
+        globalShortcutError = nil
     }
 
     func isRuntimeVisible(_ scope: RuntimeScope) -> Bool {
@@ -2774,6 +2786,66 @@ final class AppSettings: ObservableObject {
     func resetStatusItemPreferences() {
         StatusItemPreferencesStore.reset(defaults: defaults)
         statusItemPreferences = .default
+    }
+
+    @discardableResult
+    func requestGlobalShortcut(_ shortcut: GlobalShortcut) -> Bool {
+        if let current = globalShortcut, shortcut.matchesRegistration(of: current) {
+            globalShortcut = shortcut
+            shortcut.save(defaults: defaults)
+            globalShortcutError = nil
+            return true
+        }
+        if let error = shortcut.validationError {
+            globalShortcutError = .invalid(error)
+            return false
+        }
+        guard let result = globalShortcutRegistration?(shortcut) else {
+            globalShortcutError = .registrationFailed
+            return false
+        }
+        switch result {
+        case .success:
+            break
+        case .failure(.occupied):
+            globalShortcutError = .occupied
+            return false
+        case .failure(.failed):
+            globalShortcutError = .registrationFailed
+            return false
+        }
+        globalShortcut = shortcut
+        shortcut.save(defaults: defaults)
+        globalShortcutError = nil
+        return true
+    }
+
+    func resetGlobalShortcut() {
+        requestGlobalShortcut(.default)
+    }
+
+    func clearGlobalShortcut() {
+        guard let globalShortcutUnregistration else {
+            globalShortcutError = .unregistrationFailed
+            return
+        }
+        guard case .success = globalShortcutUnregistration() else {
+            globalShortcutError = .unregistrationFailed
+            return
+        }
+        globalShortcut = nil
+        GlobalShortcut.clear(defaults: defaults)
+        globalShortcutError = nil
+    }
+
+    func handleInitialGlobalShortcutFailure(defaultRegistered: Bool) {
+        if defaultRegistered {
+            globalShortcut = .default
+            globalShortcutError = .savedShortcutUnavailableUsingDefault
+        } else {
+            globalShortcut = nil
+            globalShortcutError = .noShortcutAvailable
+        }
     }
 
     func skipUpdateVersion(_ version: String) {
@@ -3034,9 +3106,11 @@ struct UsageWidgetView: View {
             Text("\(language.text("刷新", "Refreshed")) \(timeOnly(snapshot.refreshedAt, language: language))")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
-            Text("⌘U")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.tertiary)
+            if let shortcut = settings.globalShortcut {
+                Text(shortcut.displayName)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 
@@ -3517,11 +3591,45 @@ struct SettingsPanelView: View {
                         SettingsSwitchToggle(isOn: $settings.keepRunningWhenMainWindowClosed)
                     }
 
-                    SettingsValueRow(
+                    SettingsPickerRow(
                         title: language.text("快捷键", "Shortcut"),
-                        detail: language.text("显示或隐藏主窗口", "Show or hide the main window"),
-                        value: "⌘U"
-                    )
+                        detail: language.text(
+                            "默认 ⌘U；自定义需两个修饰键（含 ⌘ 或 ⌃）；仅能检测独占冲突",
+                            "Default: ⌘U. Custom: two modifiers including ⌘ or ⌃; only exclusive conflicts are detected"
+                        )
+                    ) {
+                        HStack(spacing: settingsShortcutControlSpacing) {
+                            ShortcutRecorderView(
+                                shortcut: settings.globalShortcut,
+                                language: language,
+                                onRecord: settings.requestGlobalShortcut,
+                                onClear: settings.clearGlobalShortcut
+                            )
+                            .frame(
+                                width: settingsShortcutRecorderWidth,
+                                height: settingsSegmentHeight
+                            )
+
+                            Button(language.text("恢复默认", "Restore Default")) {
+                                settings.resetGlobalShortcut()
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(
+                                settings.globalShortcut == .default
+                                    && settings.globalShortcutError == nil
+                            )
+                        }
+                    }
+
+                    if let error = settings.globalShortcutError {
+                        SettingsErrorRow(
+                            title: language.text("快捷键不可用", "Shortcut unavailable"),
+                            message: error.message(language: language),
+                            currentValue: settings.globalShortcut.map {
+                                language.text("当前仍使用 \($0.displayName)", "Still using \($0.displayName)")
+                            } ?? language.text("当前未设置全局快捷键", "No global shortcut is currently set")
+                        )
+                    }
                 }
 
                 settingsSection(
@@ -3824,6 +3932,51 @@ struct SettingsValueRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
         }
+    }
+}
+
+struct SettingsErrorRow: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let title: String
+    let message: String
+    let currentValue: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(WidgetPalette.statusDanger)
+                .frame(width: 18, height: 18)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(WidgetPalette.statusDanger)
+                Text(message)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(currentValue)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                .fill(WidgetPalette.statusDangerFill(colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                        .strokeBorder(WidgetPalette.statusDangerStroke(colorScheme), lineWidth: 0.8)
+                )
+        )
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -6518,6 +6671,14 @@ enum WidgetPalette {
     static func controlStroke(_ colorScheme: ColorScheme) -> Color {
         colorScheme == .dark ? Color.white.opacity(0.070) : Color.black.opacity(0.050)
     }
+
+    static func statusDangerFill(_ colorScheme: ColorScheme) -> Color {
+        statusDanger.opacity(colorScheme == .dark ? 0.14 : 0.08)
+    }
+
+    static func statusDangerStroke(_ colorScheme: ColorScheme) -> Color {
+        statusDanger.opacity(colorScheme == .dark ? 0.34 : 0.24)
+    }
 }
 
 private let quotaPrimaryStartColor = WidgetPalette.brandPrimaryLightRGB
@@ -6552,6 +6713,8 @@ private let settingsAccessoryColumnWidth: CGFloat = 220
 private let settingsControlCornerRadius: CGFloat = 8
 private let settingsSegmentHeight: CGFloat = 30
 private let settingsSwitchWidth: CGFloat = 56
+private let settingsShortcutControlSpacing: CGFloat = 8
+private let settingsShortcutRecorderWidth: CGFloat = 132
 private let usageTrendCardHeight: CGFloat = 214
 private let usageTrendCardSpacing: CGFloat = dashboardGridSpacing
 private let usageSevenDayMinimumCardWidth: CGFloat = 260
@@ -7267,6 +7430,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private var cancellables = Set<AnyCancellable>()
     private let statusItemPresentationBuilder = StatusItemPresentationBuilder()
     private let statusItemRenderer = StatusItemRenderer()
+    private var lastRenderedStatusItemPresentation: StatusItemPresentation?
+    private var lastRenderedStatusItemAppearanceName: NSAppearance.Name?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -7278,7 +7443,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         setupStatusItemIfNeeded()
         observeStatusItemUsage()
         observeSettings()
-        registerGlobalHotKey()
+        settings.globalShortcutRegistration = { [weak self] shortcut in
+            self?.replaceGlobalHotKey(with: shortcut) ?? .failure(.failed)
+        }
+        settings.globalShortcutUnregistration = { [weak self] in
+            self?.unregisterGlobalHotKeyReference() ?? .failure(.failed)
+        }
+        if let shortcut = settings.globalShortcut,
+           !registerGlobalHotKey(shortcut) {
+            let defaultRegistered = shortcut == .default
+                ? false
+                : registerGlobalHotKey(.default)
+            settings.handleInitialGlobalShortcutFailure(defaultRegistered: defaultRegistered)
+        } else if settings.globalShortcut == nil {
+            _ = installGlobalHotKeyHandler()
+        }
         store.updateVisibleRuntimeScopes(settings.visibleRuntimeScopes)
         store.start()
         maintainerStore.start()
@@ -7561,6 +7740,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             }
             .store(in: &cancellables)
 
+        settings.$globalShortcut
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateStatusItem()
+            }
+            .store(in: &cancellables)
+
     }
 
     @objc private func statusItemClicked() {
@@ -7727,10 +7913,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private func updateStatusItem() {
         guard let button = statusItem?.button else { return }
         let presentation = currentStatusItemPresentation()
+        let appearance = button.effectiveAppearance
+
+        // Skip redundant redraws. Mutating `button.image`/`length` triggers a
+        // status-bar relayout, which re-fires the `effectiveAppearance` KVO
+        // observer and calls back into this method. Without this guard the icon
+        // repaints in a tight feedback loop, pinning a CPU core.
+        if presentation == lastRenderedStatusItemPresentation,
+           appearance.name == lastRenderedStatusItemAppearanceName {
+            return
+        }
+        lastRenderedStatusItemPresentation = presentation
+        lastRenderedStatusItemAppearanceName = appearance.name
+
         statusItem?.length = presentation.itemLength
         button.image = statusItemRenderer.render(
             presentation,
-            appearance: button.effectiveAppearance
+            appearance: appearance
         )
         button.toolTip = presentation.tooltip
         button.setAccessibilityLabel("codexU")
@@ -7747,12 +7946,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         return statusItemPresentationBuilder.build(
             source: source,
             preferences: settings.statusItemPreferences,
-            language: settings.language
+            language: settings.language,
+            shortcutName: settings.globalShortcut?.displayName
         )
     }
 
-    private func registerGlobalHotKey() {
-        debugLog("register global hotkey command+u")
+    @discardableResult
+    private func registerGlobalHotKey(_ shortcut: GlobalShortcut) -> Bool {
+        debugLog("register global hotkey \(shortcut.displayName)")
+        guard installGlobalHotKeyHandler() else { return false }
+        let status = registerHotKeyReference(shortcut, id: 1, reference: &globalHotKeyRef)
+        if status == noErr {
+            debugLog("global hotkey registered")
+        } else {
+            debugLog("RegisterEventHotKey failed status=\(status)")
+        }
+        return status == noErr
+    }
+
+    @discardableResult
+    private func installGlobalHotKeyHandler() -> Bool {
+        guard globalHotKeyHandler == nil else { return true }
         var eventSpec = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
@@ -7775,40 +7989,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         )
         guard handlerStatus == noErr else {
             debugLog("InstallEventHandler failed status=\(handlerStatus)")
-            return
+            return false
         }
 
-        let hotKeyID = EventHotKeyID(signature: fourCharCode("CDXU"), id: 1)
-        let hotKeyStatus = RegisterEventHotKey(
-            UInt32(kVK_ANSI_U),
-            UInt32(cmdKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &globalHotKeyRef
-        )
-        if hotKeyStatus == noErr {
-            debugLog("global hotkey registered")
-        } else {
-            debugLog("RegisterEventHotKey failed status=\(hotKeyStatus)")
+        return true
+    }
+
+    private func replaceGlobalHotKey(
+        with shortcut: GlobalShortcut
+    ) -> Result<Void, GlobalShortcutRegistrationFailure> {
+        guard installGlobalHotKeyHandler() else { return .failure(.failed) }
+        let replacement: Result<EventHotKeyRef, GlobalShortcutRegistrationFailure> =
+            GlobalShortcutRegistrationTransaction.replace(
+                current: globalHotKeyRef,
+                registerCandidate: {
+                    var candidateRef: EventHotKeyRef?
+                    let status = registerHotKeyReference(
+                        shortcut,
+                        id: 2,
+                        reference: &candidateRef
+                    )
+                    guard status == noErr, let candidateRef else {
+                        debugLog("replacement hotkey registration failed status=\(status)")
+                        return .failure(status == eventHotKeyExistsErr ? .occupied : .failed)
+                    }
+                    return .success(candidateRef)
+                },
+                unregister: { reference in
+                    let status = UnregisterEventHotKey(reference)
+                    guard status == noErr else {
+                        debugLog("old hotkey unregistration failed status=\(status)")
+                        return .failure(.failed)
+                    }
+                    return .success(())
+                },
+                rollbackCandidate: { reference in
+                    let status = UnregisterEventHotKey(reference)
+                    if status != noErr {
+                        debugLog("candidate hotkey rollback failed status=\(status)")
+                    }
+                }
+            )
+        switch replacement {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let candidateRef):
+            globalHotKeyRef = candidateRef
+            debugLog("global hotkey replaced with \(shortcut.displayName)")
+            return .success(())
         }
     }
 
+    private func registerHotKeyReference(
+        _ shortcut: GlobalShortcut,
+        id: UInt32,
+        reference: inout EventHotKeyRef?
+    ) -> OSStatus {
+        let hotKeyID = EventHotKeyID(signature: fourCharCode("CDXU"), id: id)
+        // Carbon can report conflicts only when the existing registration is
+        // also exclusive. macOS does not expose other apps' nonexclusive
+        // registrations for preflight inspection.
+        return RegisterEventHotKey(
+            shortcut.keyCode,
+            shortcut.carbonModifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            UInt32(kEventHotKeyExclusive),
+            &reference
+        )
+    }
+
     private func unregisterGlobalHotKey() {
-        if let globalHotKeyRef {
-            UnregisterEventHotKey(globalHotKeyRef)
-        }
+        _ = unregisterGlobalHotKeyReference()
         if let globalHotKeyHandler {
             RemoveEventHandler(globalHotKeyHandler)
         }
-        globalHotKeyRef = nil
         globalHotKeyHandler = nil
+    }
+
+    private func unregisterGlobalHotKeyReference() -> Result<Void, GlobalShortcutRegistrationFailure> {
+        guard let reference = globalHotKeyRef else { return .success(()) }
+        let status = UnregisterEventHotKey(reference)
+        guard status == noErr else {
+            debugLog("global hotkey unregistration failed status=\(status)")
+            return .failure(.failed)
+        }
+        globalHotKeyRef = nil
+        return .success(())
     }
 }
 
 @main
 struct codexUMain {
     static func main() {
+        if CommandLine.arguments.contains("--self-test-global-shortcut") {
+            exit(GlobalShortcutSelfTest.run() ? 0 : 1)
+        }
+
+        if let helperIndex = CommandLine.arguments.firstIndex(of: "--hold-exclusive-hotkey"),
+           CommandLine.arguments.indices.contains(helperIndex + 1) {
+            GlobalShortcutSelfTest.holdExclusiveShortcut(
+                readyFile: CommandLine.arguments[helperIndex + 1]
+            )
+        }
+
         if CommandLine.arguments.contains("--self-test-status-item") {
             exit(StatusItemPresentationSelfTest.run() ? 0 : 1)
         }

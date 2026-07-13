@@ -149,6 +149,7 @@ struct StatusItemPresentationBuilder {
         source: StatusItemSourceSnapshot,
         preferences: StatusItemPreferences,
         language: WidgetLanguage,
+        shortcutName: String? = GlobalShortcut.default.displayName,
         now: Date = Date()
     ) -> StatusItemPresentation {
         let preferences = preferences.normalized()
@@ -168,10 +169,15 @@ struct StatusItemPresentationBuilder {
             metrics: metrics,
             language: language
         )
-        let action = language.text(
-            "点击查看 Runtime 用量菜单，快捷键 ⌘U",
-            "Click for the runtime usage menu, shortcut ⌘U"
-        )
+        let action: String
+        if let shortcutName {
+            action = language.text(
+                "点击查看 Runtime 用量菜单，快捷键 \(shortcutName)",
+                "Click for the runtime usage menu, shortcut \(shortcutName)"
+            )
+        } else {
+            action = language.text("点击查看 Runtime 用量菜单", "Click for the runtime usage menu")
+        }
 
         return StatusItemPresentation(
             mode: preferences.displayMode,

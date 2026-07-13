@@ -35,7 +35,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Shows recent and all-time project rankings with tokens, estimated value, thread counts, and recent activity.
 - Shows top tool calls and top Skill usage to explain the structure of local Codex work.
 - Runs as a standard macOS window with Dock, system window controls, minimization, and optional background running after the main window is closed. Closing the main window hides the Dock icon and keeps the menu bar item.
-- Supports `Command + U` to show or hide the main window. The menu bar runtime menu can also open the main window, open settings, or quit.
+- Uses `Command + U` by default to show or hide the main window, and the shortcut can be customized in Settings. The menu bar runtime menu can also open the main window, open settings, or quit.
 - Includes a Settings window for Chinese/English UI text, system/light/dark appearance, menu bar content with live preview, always-on-top behavior, close-window behavior, system status, and update check configuration.
 - Checks GitHub Releases for newer versions by default, including beta releases, and offers the DMG that matches the current Mac architecture. It does not silently download or install updates, and automatic checks can be turned off.
 - Reads data locally and does not upload usage, threads, or account data to a third-party service.
@@ -48,7 +48,10 @@ Phase 1 can review and publish an approved GitHub comment. It does not edit code
 
 ## Keyboard Shortcuts
 
-- `Command + U`: show or hide the main window. If the window is minimized, the shortcut restores it and brings it forward.
+- `Command + U`: shows or hides the main window by default and can be customized in Settings. If the window is minimized, the shortcut restores it and brings it forward.
+- Custom combinations require at least two modifiers, including Command or Control; known high-risk system and accessibility shortcuts are rejected.
+- Press Backspace while recording to clear the shortcut, or Escape to cancel; you can restore the default or record another shortcut later.
+- The app detects conflicts with other exclusive hotkey registrations. macOS does not provide a complete query for nonexclusive registrations, so choose another combination if another app still conflicts.
 - Menu bar gauge icon: opens the runtime menu. Clicking a Codex or Claude Code card opens the main widget with that runtime selected.
 - Menu bar runtime menu: shows quick Codex / Claude Code status and provides Open, Settings, and Quit actions.
 - Settings window: configure language, appearance, menu bar mode/quota direction/visible metrics, always-on-top and close-window behavior, and control automatic checks or manually check GitHub Releases from the System section.
