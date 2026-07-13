@@ -41,7 +41,6 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 - 汇总今日、近 7 天和累计 token 用量，并细分未缓存输入、命中缓存输入和输出。
 - 按 OpenAI API token 价格估算本月 API 等效价值，并在 Plus、Pro 100、Pro 200 和满额月价值之间展示进度刻度。
 - 下方仪表盘支持今日任务、用量趋势、项目排行和 Skill 使用视图。
-- 新增本地 GitHub Maintainer 审批中心：轮询带指定标签的 Issue/PR，使用本机 ChatGPT/Codex 登录完成只读审查，并且只在用户点击“批准并发布”后写回一条幂等评论。
 - 从本机 Codex 线程和启用中的 automations 生成今日任务看板，按进行中、待处理、定时、完成四类组织任务。
 - 展示最近半年的每日 token 热力图、最近 7 日趋势摘要和同周期变化。
 - 展示最近 7 天与全部项目排行，包含 token、估算价值、线程数和最近活跃时间。
@@ -114,13 +113,6 @@ codexU 需要读取本机 `~/.codex/` 下的 Codex 数据；如果启用 Claude 
 - Codex 至少使用过一次，以便生成 `~/.codex/state_5.sqlite`。
 - Claude Code 统计为可选能力；历史 token 来自 `~/.claude/projects/**/*.jsonl`，额度需要本地 statusLine snapshot cache。
 - 从源码构建时需要 Xcode Command Line Tools。
-- 使用 GitHub Maintainer 时需要已安装并登录 `gh` CLI，并选择对应仓库的本地 Git 工作目录。
-
-## GitHub Maintainer（第一阶段）
-
-在主窗口打开“维护”标签，填写 `owner/repo`、触发标签和本地仓库目录后启用。codexU 默认每 60 秒增量检查一次；匹配对象会进入本地队列并通过 `codex app-server` 创建可恢复的 Codex thread。审查期间使用仓库范围只读 Permission Profile，禁用命令网络并拒绝 `.env`；Issue、评论和 diff 都按不可信输入处理。
-
-第一阶段只支持审查与审批后发布 GitHub 评论，不会自动改代码、push、merge、关闭 Issue 或创建 Release。GitHub 凭据由 `gh` 管理，Codex 凭据由 App Server 管理，codexU 不读取或保存 token。
 
 ## 从源码构建
 

@@ -29,7 +29,6 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Summarizes token usage for today, the last 7 days, and lifetime totals with uncached input, cached input, and output splits.
 - Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value. The bar uses a segmented nonlinear scale, so movement past Pro 200 remains visible and is not a linear dollar ratio.
 - Adds lower dashboard tabs for today's tasks, usage trend, project ranking, and Skill usage.
-- Adds a local GitHub Maintainer approval center that polls labeled issues and pull requests, reviews them with the signed-in local Codex account, and posts one idempotent comment only after explicit approval.
 - Builds a daily task board from local Codex threads and enabled Codex automations, grouped into active, pending, scheduled, and done columns.
 - Shows a six-month daily token heatmap, a last-7-day trend summary, and previous-period comparison.
 - Shows recent and all-time project rankings with tokens, estimated value, thread counts, and recent activity.
@@ -39,12 +38,6 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Includes a Settings window for Chinese/English UI text, system/light/dark appearance, menu bar content with live preview, always-on-top behavior, close-window behavior, system status, and update check configuration.
 - Checks GitHub Releases for newer versions by default, including beta releases, and offers the DMG that matches the current Mac architecture. It does not silently download or install updates, and automatic checks can be turned off.
 - Reads data locally and does not upload usage, threads, or account data to a third-party service.
-
-## GitHub Maintainer (Phase 1)
-
-Open the **Maintain** tab, configure `owner/repo`, a trigger label, and the local Git checkout, then enable the watcher. codexU checks incrementally every 60 seconds and creates a resumable App Server thread for each matching item. Reviews run with a repository-scoped read-only permission profile, command network access disabled, and `.env` denied. Issue text, comments, and diffs are treated as untrusted input.
-
-Phase 1 can review and publish an approved GitHub comment. It does not edit code, push, merge, close issues, or create releases. GitHub credentials remain in `gh`; Codex credentials remain in App Server.
 
 ## Keyboard Shortcuts
 

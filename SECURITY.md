@@ -27,7 +27,6 @@ codexU reads:
 - `~/.claude/tasks/**/*.json` task status/title metadata
 - optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`
 - optional `~/Library/Caches/codexU/update-check.json` for cached GitHub Release update metadata
-- optional `~/Library/Application Support/codexU/maintainer-tasks.json` containing GitHub object metadata, Codex thread ids, review results, and approval state
 
 It should not upload local usage, transcript, task, thread, account, or path data to a third-party service. Claude Code transcript parsing must not store prompt text, assistant response text, tool arguments, or tool output.
 
@@ -38,5 +37,3 @@ codexU is local-first. The update checker may request public GitHub Release meta
 Update requests must not include local usage, transcript, task, thread, account, path, prompt, response, tool argument, or tool output data. The update checker may send standard HTTPS headers such as `User-Agent` and `If-None-Match` for ETag caching.
 
 codexU must not silently download, install, replace, or relaunch the app as part of the GitHub Release check. It may open the user's default browser to a matching DMG asset or the Release page.
-
-When GitHub Maintainer is enabled, codexU uses the locally authenticated `gh` CLI to read explicitly configured repositories and to publish a review only after an explicit approval action. It does not store the GitHub token. GitHub titles, bodies, comments, and diffs are untrusted input. Codex review turns use a repository-scoped read-only permission profile with command network disabled and `.env` denied; interactive, dynamic-tool, or MCP elicitation requests fail closed.
