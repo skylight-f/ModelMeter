@@ -266,8 +266,8 @@ struct UsageSnapshot: Equatable {
     let account: AccountInfo?
     let limitId: String?
     let limitName: String?
-    let primary: RateWindow?
-    let secondary: RateWindow?
+    let fiveHourQuota: RateWindow?
+    let sevenDayQuota: RateWindow?
     let credits: CreditsInfo?
     let cloudLifetimeTokens: Int64?
     let local: LocalUsage?
@@ -279,8 +279,8 @@ struct UsageSnapshot: Equatable {
         account: nil,
         limitId: nil,
         limitName: nil,
-        primary: nil,
-        secondary: nil,
+        fiveHourQuota: nil,
+        sevenDayQuota: nil,
         credits: nil,
         cloudLifetimeTokens: nil,
         local: nil,
@@ -294,8 +294,8 @@ struct UsageSnapshot: Equatable {
             account: account,
             limitId: limitId,
             limitName: limitName,
-            primary: primary,
-            secondary: secondary,
+            fiveHourQuota: fiveHourQuota,
+            sevenDayQuota: sevenDayQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
@@ -814,8 +814,8 @@ final class CodexUsageReader {
             account: appServer.account,
             limitId: appServer.limitId,
             limitName: appServer.limitName,
-            primary: appServer.primary,
-            secondary: appServer.secondary,
+            fiveHourQuota: appServer.fiveHourQuota,
+            sevenDayQuota: appServer.sevenDayQuota,
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
             local: local,
@@ -833,8 +833,9 @@ final class CodexUsageReader {
         var account: AccountInfo?
         var limitId: String?
         var limitName: String?
-        var primary: RateWindow?
-        var secondary: RateWindow?
+        var fiveHourQuota: RateWindow?
+        var sevenDayQuota: RateWindow?
+        var rateLimitDiagnostics: [String] = []
         var credits: CreditsInfo?
         var cloudLifetimeTokens: Int64?
     }
@@ -992,9 +993,12 @@ final class CodexUsageReader {
         }
 
         lock.lock()
-        messages.append(contentsOf: appServerMessages)
         let finalSnapshot = snapshot
+        let finalAppServerMessages = appServerMessages
         lock.unlock()
+
+        messages.append(contentsOf: finalAppServerMessages)
+        messages.append(contentsOf: finalSnapshot.rateLimitDiagnostics)
 
         return finalSnapshot
     }
@@ -1022,8 +1026,13 @@ final class CodexUsageReader {
         guard let limits = selected else { return }
         snapshot.limitId = limits["limitId"] as? String
         snapshot.limitName = limits["limitName"] as? String
-        snapshot.primary = parseRateWindow(limits["primary"])
-        snapshot.secondary = parseRateWindow(limits["secondary"])
+        let normalized = CodexRateLimitNormalizer.normalize([
+            parseRateWindow(limits["primary"]),
+            parseRateWindow(limits["secondary"])
+        ])
+        snapshot.fiveHourQuota = normalized.fiveHour
+        snapshot.sevenDayQuota = normalized.sevenDay
+        snapshot.rateLimitDiagnostics = rateLimitDiagnostics(for: normalized)
 
         var resetCredits: Int?
         if let reset = result["rateLimitResetCredits"] as? [String: Any] {
@@ -1059,6 +1068,32 @@ final class CodexUsageReader {
             windowDurationMins: intValue(object["windowDurationMins"]),
             resetsAt: resetDate
         )
+    }
+
+    private func rateLimitDiagnostics(for windows: CodexNormalizedRateWindows) -> [String] {
+        var messages: [String] = []
+
+        if windows.fiveHourMatchCount > 1 {
+            messages.append("Codex 返回了重复的 5 小时额度窗口，已停止显示该窗口")
+        }
+        if windows.sevenDayMatchCount > 1 {
+            messages.append("Codex 返回了重复的 7 天额度窗口，已停止显示该窗口")
+        }
+
+        let missingDurationCount = windows.unclassified.filter {
+            $0.windowDurationMins == nil
+        }.count
+        if missingDurationCount > 0 {
+            messages.append("Codex 返回了缺少时长的额度窗口，未将其标注为 5 小时或 7 天")
+        }
+
+        let unknownDurations = Set(windows.unclassified.compactMap(\.windowDurationMins)).sorted()
+        if !unknownDurations.isEmpty {
+            let values = unknownDurations.map(String.init).joined(separator: "、")
+            messages.append("Codex 返回了未识别的额度窗口（\(values) 分钟），未将其标注为 5 小时或 7 天")
+        }
+
+        return messages
     }
 
     private func parseCloudLifetimeTokens(_ result: [String: Any]) -> Int64? {
@@ -2945,7 +2980,6 @@ struct UsageWidgetView: View {
     static let windowCornerRadius: CGFloat = 18
 
     private var snapshot: UsageSnapshot { store.snapshot }
-    private var primary: RateWindow? { snapshot.primary }
     private var language: WidgetLanguage { settings.language }
     private var themeMode: WidgetThemeMode { settings.themeMode }
     private var effectiveColorScheme: ColorScheme {
@@ -3054,15 +3088,15 @@ struct UsageWidgetView: View {
         HStack(alignment: .center, spacing: 26) {
             VStack(spacing: 8) {
                 DualQuotaRing(
-                    primary: snapshot.primary,
-                    secondary: snapshot.secondary,
+                    fiveHourQuota: snapshot.fiveHourQuota,
+                    sevenDayQuota: snapshot.sevenDayQuota,
                     language: language
                 )
                 .frame(width: 145, height: 145)
 
                 QuotaResetSummary(
-                    primary: snapshot.primary,
-                    secondary: snapshot.secondary,
+                    fiveHourQuota: snapshot.fiveHourQuota,
+                    sevenDayQuota: snapshot.sevenDayQuota,
                     language: language
                 )
                 .frame(width: 154)
@@ -3209,7 +3243,9 @@ struct UsageWidgetView: View {
 
     private var shouldShowEnvironmentChecklist: Bool {
         if snapshot.messages.contains("正在读取 codexU 数据") { return false }
-        return (!snapshot.messages.isEmpty && (snapshot.primary == nil || snapshot.local == nil))
+        let quotaUnavailable = snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil
+        let hasQuotaProtocolWarning = snapshot.messages.contains { $0.contains("额度窗口") }
+        return (!snapshot.messages.isEmpty && (quotaUnavailable || hasQuotaProtocolWarning || snapshot.local == nil))
             || snapshot.account == nil
             || snapshot.local == nil
     }
@@ -3219,7 +3255,7 @@ struct UsageWidgetView: View {
         let messages = snapshot.messages.joined(separator: "\n")
 
         if store.selectedRuntimeScope == .claudeCode {
-            if snapshot.primary == nil || snapshot.secondary == nil {
+            if snapshot.fiveHourQuota == nil || snapshot.sevenDayQuota == nil {
                 let isStale = messages.contains("快照已过期")
                 items.append(DiagnosticItem(
                     id: isStale ? "claude-statusline-stale" : "claude-statusline-missing",
@@ -3259,7 +3295,7 @@ struct UsageWidgetView: View {
             return items
         }
 
-        if snapshot.primary == nil || snapshot.account == nil {
+        if (snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil) || snapshot.account == nil {
             if messages.contains("未找到 codex") {
                 items.append(DiagnosticItem(
                     id: "codex-missing",
@@ -4204,8 +4240,8 @@ struct GaugeRing: View {
 }
 
 struct DualQuotaRing: View {
-    let primary: RateWindow?
-    let secondary: RateWindow?
+    let fiveHourQuota: RateWindow?
+    let sevenDayQuota: RateWindow?
     let language: WidgetLanguage
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
@@ -4213,8 +4249,8 @@ struct DualQuotaRing: View {
     var body: some View {
         ZStack {
             QuotaRingSegment(
-                percent: primary?.remainingPercent ?? 0,
-                available: primary != nil,
+                percent: fiveHourQuota?.remainingPercent ?? 0,
+                available: fiveHourQuota != nil,
                 startColor: quotaPrimaryStartColor,
                 endColor: quotaPrimaryEndColor,
                 trackColor: quotaPrimaryTrackColor,
@@ -4223,8 +4259,8 @@ struct DualQuotaRing: View {
             .frame(width: 145, height: 145)
 
             QuotaRingSegment(
-                percent: secondary?.remainingPercent ?? 0,
-                available: secondary != nil,
+                percent: sevenDayQuota?.remainingPercent ?? 0,
+                available: sevenDayQuota != nil,
                 startColor: quotaSecondaryStartColor,
                 endColor: quotaSecondaryEndColor,
                 trackColor: quotaSecondaryTrackColor,
@@ -4233,10 +4269,10 @@ struct DualQuotaRing: View {
             .frame(width: 107, height: 107)
 
             if !accessibilityReduceMotion,
-               primary != nil || secondary != nil {
+               fiveHourQuota != nil || sevenDayQuota != nil {
                 DualQuotaRingParticles(
-                    primaryProgress: progress(primary),
-                    secondaryProgress: progress(secondary)
+                    primaryProgress: progress(fiveHourQuota),
+                    secondaryProgress: progress(sevenDayQuota)
                 )
                 .frame(width: 145, height: 145)
                 .allowsHitTesting(false)
@@ -4250,12 +4286,12 @@ struct DualQuotaRing: View {
             VStack(spacing: 4) {
                 QuotaRingLabel(
                     title: "5h",
-                    value: remainingText(primary),
+                    value: remainingText(fiveHourQuota),
                     color: quotaPrimaryColor
                 )
                 QuotaRingLabel(
                     title: "7d",
-                    value: remainingText(secondary),
+                    value: remainingText(sevenDayQuota),
                     color: quotaSecondaryColor
                 )
                 Text(language.text("剩余", "left"))
@@ -4687,21 +4723,21 @@ struct QuotaRingLabel: View {
 }
 
 struct QuotaResetSummary: View {
-    let primary: RateWindow?
-    let secondary: RateWindow?
+    let fiveHourQuota: RateWindow?
+    let sevenDayQuota: RateWindow?
     let language: WidgetLanguage
 
     var body: some View {
         VStack(spacing: 4) {
             QuotaResetLine(
                 title: "5h",
-                window: primary,
+                window: fiveHourQuota,
                 color: quotaPrimaryColor,
                 language: language
             )
             QuotaResetLine(
                 title: "7d",
-                window: secondary,
+                window: sevenDayQuota,
                 color: quotaSecondaryColor,
                 language: language
             )
@@ -7138,6 +7174,20 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
     if message.contains("未找到 Codex session 日志") { return "Codex session logs not found" }
     if message.contains("未找到 Codex token_count 事件") { return "Codex token_count events not found" }
     if message.contains("任务看板未找到 SQLite 数据源") { return "Task board SQLite data source not found" }
+    if message.contains("重复的 5 小时额度窗口") { return "Codex returned duplicate 5-hour quota windows, so that quota is hidden" }
+    if message.contains("重复的 7 天额度窗口") { return "Codex returned duplicate 7-day quota windows, so that quota is hidden" }
+    if message.contains("缺少时长的额度窗口") { return "Codex returned a quota window without a duration, so it was not labeled as 5h or 7d" }
+    if message.contains("未识别的额度窗口") {
+        return message
+            .replacingOccurrences(
+                of: "Codex 返回了未识别的额度窗口（",
+                with: "Codex returned an unknown quota window ("
+            )
+            .replacingOccurrences(
+                of: " 分钟），未将其标注为 5 小时或 7 天",
+                with: " minutes), so it was not labeled as 5h or 7d"
+            )
+    }
     if message.contains("app-server") { return message.replacingOccurrences(of: "未知错误", with: "Unknown error") }
     return message
 }
@@ -7242,7 +7292,7 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         ] as [String: Any]
     }
 
-    if let primary = snapshot.primary {
+    if let primary = snapshot.fiveHourQuota {
         object["primary"] = [
             "usedPercent": primary.usedPercent,
             "remainingPercent": primary.remainingPercent,
@@ -7251,7 +7301,7 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         ] as [String: Any]
     }
 
-    if let secondary = snapshot.secondary {
+    if let secondary = snapshot.sevenDayQuota {
         object["secondary"] = [
             "usedPercent": secondary.usedPercent,
             "remainingPercent": secondary.remainingPercent,
@@ -8156,6 +8206,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-status-item") {
             exit(StatusItemPresentationSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-rate-limits") {
+            exit(CodexRateLimitNormalizerSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--self-test-updates") {

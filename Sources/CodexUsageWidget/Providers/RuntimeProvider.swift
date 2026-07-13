@@ -64,7 +64,7 @@ struct CodexRuntimeProvider: RuntimeUsageProvider {
     func loadSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
         let snapshot = CodexUsageReader().load(context: context)
         let status: RuntimeMenuStatus
-        if snapshot.primary != nil || snapshot.secondary != nil {
+        if snapshot.fiveHourQuota != nil || snapshot.sevenDayQuota != nil {
             status = .available
         } else if snapshot.local != nil {
             status = .localOnly

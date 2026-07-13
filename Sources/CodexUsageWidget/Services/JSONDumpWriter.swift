@@ -52,11 +52,11 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
         ] as [String: Any]
     }
 
-    if let primary = snapshot.primary {
+    if let primary = snapshot.fiveHourQuota {
         object["primary"] = runtimeJSONObject(primary)
     }
 
-    if let secondary = snapshot.secondary {
+    if let secondary = snapshot.sevenDayQuota {
         object["secondary"] = runtimeJSONObject(secondary)
     }
 

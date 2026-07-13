@@ -91,10 +91,10 @@ struct RuntimeUsageSnapshot: Identifiable, Equatable {
             scope: scope,
             displayName: displayName,
             status: status,
-            fiveHourRemainingPercent: snapshot.primary?.remainingPercent,
-            fiveHourResetsAt: snapshot.primary?.resetsAt,
-            sevenDayRemainingPercent: snapshot.secondary?.remainingPercent,
-            sevenDayResetsAt: snapshot.secondary?.resetsAt,
+            fiveHourRemainingPercent: snapshot.fiveHourQuota?.remainingPercent,
+            fiveHourResetsAt: snapshot.fiveHourQuota?.resetsAt,
+            sevenDayRemainingPercent: snapshot.sevenDayQuota?.remainingPercent,
+            sevenDayResetsAt: snapshot.sevenDayQuota?.resetsAt,
             todayTokens: todayTokens,
             sourceLabel: quotaSourceLabel
         )
