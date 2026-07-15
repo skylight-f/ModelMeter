@@ -116,6 +116,39 @@ struct RuntimeUsageSnapshot: Identifiable, Equatable {
     }
 }
 
+enum RuntimeQuotaContinuity {
+    static func reconcile(
+        previous: [RuntimeUsageSnapshot],
+        incoming: [RuntimeUsageSnapshot]
+    ) -> [RuntimeUsageSnapshot] {
+        let previousByScope = Dictionary(uniqueKeysWithValues: previous.map { ($0.scope, $0) })
+
+        return incoming.map { next in
+            guard !next.snapshot.quotaReadSucceeded,
+                  let last = previousByScope[next.scope],
+                  last.status == .available || last.status == .stale,
+                  last.snapshot.fiveHourQuota != nil || last.snapshot.sevenDayQuota != nil
+            else {
+                return next
+            }
+
+            return RuntimeUsageSnapshot(
+                scope: next.scope,
+                snapshot: next.snapshot.replacingQuotaWindows(
+                    fiveHourQuota: last.snapshot.fiveHourQuota,
+                    sevenDayQuota: last.snapshot.sevenDayQuota,
+                    quotaReadSucceeded: false
+                ),
+                status: .stale,
+                quotaSourceLabel: last.quotaSourceLabel.hasSuffix(" · stale")
+                    ? last.quotaSourceLabel
+                    : "\(last.quotaSourceLabel) · stale",
+                usageSourceLabel: next.usageSourceLabel
+            )
+        }
+    }
+}
+
 func preferredRuntimeTodayTokens(detailed: Int64?, fallback: Int64?) -> Int64? {
     detailed ?? fallback
 }

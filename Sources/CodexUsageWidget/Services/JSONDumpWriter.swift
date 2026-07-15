@@ -37,6 +37,7 @@ private func runtimeJSONObject(_ runtime: RuntimeUsageSnapshot) -> [String: Any]
 private func runtimeJSONObject(_ snapshot: UsageSnapshot) -> [String: Any] {
     var object = runtimeLegacyJSONObject(snapshot)
     object["refreshedAt"] = runtimeISOString(snapshot.refreshedAt) ?? ""
+    object["quotaReadSucceeded"] = snapshot.quotaReadSucceeded
     object["messages"] = snapshot.messages
     return object
 }

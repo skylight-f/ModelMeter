@@ -33,4 +33,16 @@ enum CodexRateLimitNormalizer {
             sevenDayMatchCount: sevenDayMatches.count
         )
     }
+
+    static func isAuthoritative(
+        hasWindowFields: Bool,
+        hasMalformedWindow: Bool,
+        normalized: CodexNormalizedRateWindows
+    ) -> Bool {
+        hasWindowFields
+            && !hasMalformedWindow
+            && normalized.fiveHourMatchCount <= 1
+            && normalized.sevenDayMatchCount <= 1
+            && normalized.unclassified.isEmpty
+    }
 }

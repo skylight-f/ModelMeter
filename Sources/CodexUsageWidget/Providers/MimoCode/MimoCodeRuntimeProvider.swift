@@ -19,6 +19,7 @@ struct MimoCodeRuntimeProvider: RuntimeUsageProvider {
             account: account,
             limitId: scope.runtimeId,
             limitName: "MimoCode local",
+            quotaReadSucceeded: false,
             fiveHourQuota: nil,
             sevenDayQuota: nil,
             credits: nil,

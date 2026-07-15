@@ -13,6 +13,7 @@ struct AgentUsageAggregator {
             account: nil,
             limitId: "all-runtimes",
             limitName: "All runtimes",
+            quotaReadSucceeded: false,
             fiveHourQuota: nil,
             sevenDayQuota: nil,
             credits: nil,
