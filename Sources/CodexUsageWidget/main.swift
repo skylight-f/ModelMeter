@@ -185,9 +185,41 @@ struct ModelUsageItem: Identifiable, Equatable, Codable {
     let cachedInputTokens: Int64
     let outputTokens: Int64
     let estimatedCostUSD: Double?
+    let inputPricePerMillion: Double
+    let cachedInputPricePerMillion: Double
+    let outputPricePerMillion: Double
+    let currency: ModelTokenCurrency
     let endToEndTokensPerSecond: Double?
 
     var id: String { "\(provider)|\(model)" }
+
+    init(
+        model: String,
+        provider: String,
+        tokens: Int64,
+        uncachedInputTokens: Int64,
+        cachedInputTokens: Int64,
+        outputTokens: Int64,
+        estimatedCostUSD: Double?,
+        inputPricePerMillion: Double = 0,
+        cachedInputPricePerMillion: Double = 0,
+        outputPricePerMillion: Double = 0,
+        currency: ModelTokenCurrency = .usd,
+        endToEndTokensPerSecond: Double?
+    ) {
+        self.model = model
+        self.provider = provider
+        self.tokens = tokens
+        self.uncachedInputTokens = uncachedInputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.outputTokens = outputTokens
+        self.estimatedCostUSD = estimatedCostUSD
+        self.inputPricePerMillion = inputPricePerMillion
+        self.cachedInputPricePerMillion = cachedInputPricePerMillion
+        self.outputPricePerMillion = outputPricePerMillion
+        self.currency = currency
+        self.endToEndTokensPerSecond = endToEndTokensPerSecond
+    }
 }
 
 struct ModelUsageTrendSegment: Identifiable, Equatable, Codable {
@@ -365,17 +397,38 @@ struct DiagnosticItem: Identifiable {
     let tint: Color
 }
 
-private struct ModelTokenPrice {
+enum ModelTokenCurrency: String, Equatable, Codable {
+    case usd = "$"
+    case cny = "¥"
+}
+
+struct ModelTokenPrice {
     let model: String
     let inputPerMillion: Double
     let cachedInputPerMillion: Double
     let outputPerMillion: Double
+    let currency: ModelTokenCurrency
+
+    init(
+        model: String,
+        inputPerMillion: Double,
+        cachedInputPerMillion: Double,
+        outputPerMillion: Double,
+        currency: ModelTokenCurrency = .usd
+    ) {
+        self.model = model
+        self.inputPerMillion = inputPerMillion
+        self.cachedInputPerMillion = cachedInputPerMillion
+        self.outputPerMillion = outputPerMillion
+        self.currency = currency
+    }
 }
 
 private struct SessionUsageSource {
     let threadId: String
     let rolloutPath: String
     let model: String?
+    let modelProvider: String?
     let cwd: String
     let updatedAt: Date?
 }
@@ -383,6 +436,9 @@ private struct SessionUsageSource {
 private struct SessionUsageDelta: Codable {
     let date: Date
     let tokens: TokenBreakdown
+    let model: String?
+    let modelProvider: String?
+    var endToEndDurationMs: Double?
 }
 
 private struct SkillLoadEvent: Codable {
@@ -861,8 +917,8 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
-    private let localAnalyticsCacheVersion = 9
-    private let sessionUsageCacheVersion = 4
+    private let localAnalyticsCacheVersion = 10
+    private let sessionUsageCacheVersion = 5
     private static let sessionUsageCacheLimit = 1_024
     private static var sessionUsageCache: [String: SessionUsageCacheEntry] = [:]
     private static var sessionUsageCacheOrder: [String] = []
@@ -1310,7 +1366,7 @@ final class CodexUsageReader {
         let calendar = statistics.calendar
         let trendStart = calendar.date(byAdding: .day, value: -190, to: dayStart) ?? sevenDayStart
         let sourceQuery = """
-        SELECT id, rollout_path AS rolloutPath, model, cwd, updated_at AS updatedAt
+        SELECT id, rollout_path AS rolloutPath, model, model_provider AS modelProvider, cwd, updated_at AS updatedAt
         FROM threads
         WHERE rollout_path IS NOT NULL
           AND rollout_path <> ''
@@ -1327,6 +1383,7 @@ final class CodexUsageReader {
                 threadId: object["id"] as? String ?? path,
                 rolloutPath: path,
                 model: object["model"] as? String,
+                modelProvider: object["modelProvider"] as? String,
                 cwd: object["cwd"] as? String ?? "",
                 updatedAt: dateFromEpoch(object["updatedAt"])
             )
@@ -1400,6 +1457,28 @@ final class CodexUsageReader {
         var thirtyDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayTrendByDay: [String: (date: Date, models: [String: PricedTokenUsage])] = [:]
+        var todayThroughputTokens: [String: Int64] = [:]
+        var todayThroughputTimeMs: [String: Double] = [:]
+        var twentyFourHourThroughputTokens: [String: Int64] = [:]
+        var twentyFourHourThroughputTimeMs: [String: Double] = [:]
+        var sevenDayThroughputTokens: [String: Int64] = [:]
+        var sevenDayThroughputTimeMs: [String: Double] = [:]
+        var thirtyDayThroughputTokens: [String: Int64] = [:]
+        var thirtyDayThroughputTimeMs: [String: Double] = [:]
+        var lifetimeThroughputTokens: [String: Int64] = [:]
+        var lifetimeThroughputTimeMs: [String: Double] = [:]
+
+        func recordThroughput(
+            key: String,
+            delta: SessionUsageDelta,
+            tokens: inout [String: Int64],
+            timeMs: inout [String: Double]
+        ) {
+            let outputTokens = delta.tokens.outputTokens + delta.tokens.reasoningOutputTokens
+            guard outputTokens > 0, let duration = delta.endToEndDurationMs, duration > 0 else { return }
+            tokens[key, default: 0] += outputTokens
+            timeMs[key, default: 0] += duration
+        }
         for source in sources {
             guard let entry = cachedSessionUsage(
                 source: source,
@@ -1412,10 +1491,13 @@ final class CodexUsageReader {
                 accumulator.tokenEventCount += entry.tokenEventCount
             }
 
-            let price = modelTokenPrice(for: source.model)
-            let modelName = normalizedModelName(source.model, fallback: price.model)
             var sessionUsage = PricedTokenUsage.zero
             for delta in entry.deltas {
+                let eventModel = delta.model ?? source.model
+                let eventProvider = delta.modelProvider ?? source.modelProvider
+                let price = modelTokenPrice(for: eventModel)
+                let modelName = normalizedModelName(eventModel, fallback: price.model)
+                let modelKey = modelUsageBucketKey(model: modelName, provider: eventProvider)
                 let cost = estimatedCostUSD(tokens: delta.tokens, price: price)
                 sessionUsage.add(tokens: delta.tokens, costUSD: cost)
                 accumulator.add(
@@ -1430,25 +1512,30 @@ final class CodexUsageReader {
                 )
 
                 if delta.date >= dayStart {
-                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &todayUsageByModel)
+                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelKey, to: &todayUsageByModel)
+                    recordThroughput(key: modelKey, delta: delta, tokens: &todayThroughputTokens, timeMs: &todayThroughputTimeMs)
                 }
                 if delta.date >= twentyFourHourStart {
-                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &twentyFourHourUsageByModel)
+                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelKey, to: &twentyFourHourUsageByModel)
+                    recordThroughput(key: modelKey, delta: delta, tokens: &twentyFourHourThroughputTokens, timeMs: &twentyFourHourThroughputTimeMs)
                 }
                 if delta.date >= sevenDayStart {
-                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &sevenDayUsageByModel)
+                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelKey, to: &sevenDayUsageByModel)
+                    recordThroughput(key: modelKey, delta: delta, tokens: &sevenDayThroughputTokens, timeMs: &sevenDayThroughputTimeMs)
                     let key = statistics.dayKey(for: delta.date)
                     var trendDay = sevenDayTrendByDay[key] ?? (calendar.startOfDay(for: delta.date), [:])
-                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &trendDay.models)
+                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelKey, to: &trendDay.models)
                     sevenDayTrendByDay[key] = trendDay
                 }
                 if delta.date >= monthStart {
-                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &monthUsageByModel)
+                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelKey, to: &monthUsageByModel)
                 }
                 if delta.date >= thirtyDayStart {
-                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &thirtyDayUsageByModel)
+                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelKey, to: &thirtyDayUsageByModel)
+                    recordThroughput(key: modelKey, delta: delta, tokens: &thirtyDayThroughputTokens, timeMs: &thirtyDayThroughputTimeMs)
                 }
-                addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &lifetimeUsageByModel)
+                addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelKey, to: &lifetimeUsageByModel)
+                recordThroughput(key: modelKey, delta: delta, tokens: &lifetimeThroughputTokens, timeMs: &lifetimeThroughputTimeMs)
 
                 if delta.date >= trendStart {
                     let key = statistics.dayKey(for: delta.date)
@@ -1541,12 +1628,12 @@ final class CodexUsageReader {
                 .sorted { $0.callCount == $1.callCount ? $0.name < $1.name : $0.callCount > $1.callCount },
             skillUsages: skillUsages,
             modelUsage: ModelUsageBreakdown(
-                today: sortedModelUsageItems(todayUsageByModel),
-                twentyFourHour: sortedModelUsageItems(twentyFourHourUsageByModel),
-                sevenDay: sortedModelUsageItems(sevenDayUsageByModel),
+                today: sortedModelUsageItems(todayUsageByModel, throughput: calculateModelThroughput(todayThroughputTokens, todayThroughputTimeMs)),
+                twentyFourHour: sortedModelUsageItems(twentyFourHourUsageByModel, throughput: calculateModelThroughput(twentyFourHourThroughputTokens, twentyFourHourThroughputTimeMs)),
+                sevenDay: sortedModelUsageItems(sevenDayUsageByModel, throughput: calculateModelThroughput(sevenDayThroughputTokens, sevenDayThroughputTimeMs)),
                 month: sortedModelUsageItems(monthUsageByModel),
-                thirtyDay: sortedModelUsageItems(thirtyDayUsageByModel),
-                lifetime: sortedModelUsageItems(lifetimeUsageByModel),
+                thirtyDay: sortedModelUsageItems(thirtyDayUsageByModel, throughput: calculateModelThroughput(thirtyDayThroughputTokens, thirtyDayThroughputTimeMs)),
+                lifetime: sortedModelUsageItems(lifetimeUsageByModel, throughput: calculateModelThroughput(lifetimeThroughputTokens, lifetimeThroughputTimeMs)),
                 sevenDayTrend: makeModelUsageTrendDays(
                     usageByDay: sevenDayTrendByDay,
                     dayStart: dayStart,
@@ -1877,16 +1964,22 @@ final class CodexUsageReader {
             return cached
         }
 
-        let eventPattern = #""type":"(token_count|function_call|custom_tool_call)""#
+        let eventPattern = #""type":"(token_count|task_complete|function_call|custom_tool_call)"|"(model|provider)[A-Za-z_]*":"#
         let tokenCountNeedle = Data(#""type":"token_count""#.utf8)
+        let taskCompleteNeedle = Data(#""type":"task_complete""#.utf8)
         let functionCallNeedle = Data(#""type":"function_call""#.utf8)
         let customToolCallNeedle = Data(#""type":"custom_tool_call""#.utf8)
+        let modelNeedle = Data(#""model""#.utf8)
+        let providerNeedle = Data(#""provider""#.utf8)
         if let parsed = parseSessionUsageWithGrep(
             url: url,
             eventPattern: eventPattern,
             tokenCountNeedle: tokenCountNeedle,
+            taskCompleteNeedle: taskCompleteNeedle,
             functionCallNeedle: functionCallNeedle,
             customToolCallNeedle: customToolCallNeedle,
+            modelNeedle: modelNeedle,
+            providerNeedle: providerNeedle,
             fractionalFormatter: fractionalFormatter,
             plainFormatter: plainFormatter
         ) {
@@ -1908,11 +2001,14 @@ final class CodexUsageReader {
 
         var buffer = Data()
         var previous = TokenBreakdown.zero
+        var currentModel = source.model
+        var currentProvider = source.modelProvider
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
         var toolCalls: [String: Int] = [:]
         var skillLoads: [SkillLoadEvent] = []
+        var pendingDurationDeltaIndex: Int?
 
         while true {
             let chunk = try? handle.read(upToCount: 64 * 1024)
@@ -1927,16 +2023,22 @@ final class CodexUsageReader {
                 processSessionLine(
                     lineData,
                     tokenCountNeedle: tokenCountNeedle,
+                    taskCompleteNeedle: taskCompleteNeedle,
                     functionCallNeedle: functionCallNeedle,
                     customToolCallNeedle: customToolCallNeedle,
+                    modelNeedle: modelNeedle,
+                    providerNeedle: providerNeedle,
                     fractionalFormatter: fractionalFormatter,
                     plainFormatter: plainFormatter,
                     previous: &previous,
+                    currentModel: &currentModel,
+                    currentProvider: &currentProvider,
                     sawTokenEvent: &sawTokenEvent,
                     tokenEventCount: &tokenEventCount,
                     deltas: &deltas,
                     toolCalls: &toolCalls,
-                    skillLoads: &skillLoads
+                    skillLoads: &skillLoads,
+                    pendingDurationDeltaIndex: &pendingDurationDeltaIndex
                 )
             }
         }
@@ -1945,16 +2047,22 @@ final class CodexUsageReader {
             processSessionLine(
                 buffer,
                 tokenCountNeedle: tokenCountNeedle,
+                taskCompleteNeedle: taskCompleteNeedle,
                 functionCallNeedle: functionCallNeedle,
                 customToolCallNeedle: customToolCallNeedle,
+                modelNeedle: modelNeedle,
+                providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 previous: &previous,
+                currentModel: &currentModel,
+                currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
                 deltas: &deltas,
                 toolCalls: &toolCalls,
-                skillLoads: &skillLoads
+                skillLoads: &skillLoads,
+                pendingDurationDeltaIndex: &pendingDurationDeltaIndex
             )
         }
 
@@ -1992,8 +2100,11 @@ final class CodexUsageReader {
         url: URL,
         eventPattern: String,
         tokenCountNeedle: Data,
+        taskCompleteNeedle: Data,
         functionCallNeedle: Data,
         customToolCallNeedle: Data,
+        modelNeedle: Data,
+        providerNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
         plainFormatter: ISO8601DateFormatter
     ) -> (hasTokenEvents: Bool, tokenEventCount: Int, deltas: [SessionUsageDelta], toolCalls: [String: Int], skillLoads: [SkillLoadEvent])? {
@@ -2023,11 +2134,14 @@ final class CodexUsageReader {
 
         var buffer = data
         var previous = TokenBreakdown.zero
+        var currentModel: String?
+        var currentProvider: String?
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
         var toolCalls: [String: Int] = [:]
         var skillLoads: [SkillLoadEvent] = []
+        var pendingDurationDeltaIndex: Int?
 
         while let newline = buffer.firstIndex(of: 10) {
             let lineData = buffer.subdata(in: buffer.startIndex..<newline)
@@ -2035,16 +2149,22 @@ final class CodexUsageReader {
             processSessionLine(
                 lineData,
                 tokenCountNeedle: tokenCountNeedle,
+                taskCompleteNeedle: taskCompleteNeedle,
                 functionCallNeedle: functionCallNeedle,
                 customToolCallNeedle: customToolCallNeedle,
+                modelNeedle: modelNeedle,
+                providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 previous: &previous,
+                currentModel: &currentModel,
+                currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
                 deltas: &deltas,
                 toolCalls: &toolCalls,
-                skillLoads: &skillLoads
+                skillLoads: &skillLoads,
+                pendingDurationDeltaIndex: &pendingDurationDeltaIndex
             )
         }
 
@@ -2052,16 +2172,22 @@ final class CodexUsageReader {
             processSessionLine(
                 buffer,
                 tokenCountNeedle: tokenCountNeedle,
+                taskCompleteNeedle: taskCompleteNeedle,
                 functionCallNeedle: functionCallNeedle,
                 customToolCallNeedle: customToolCallNeedle,
+                modelNeedle: modelNeedle,
+                providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 previous: &previous,
+                currentModel: &currentModel,
+                currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
                 deltas: &deltas,
                 toolCalls: &toolCalls,
-                skillLoads: &skillLoads
+                skillLoads: &skillLoads,
+                pendingDurationDeltaIndex: &pendingDurationDeltaIndex
             )
         }
 
@@ -2071,25 +2197,34 @@ final class CodexUsageReader {
     private func processSessionLine(
         _ lineData: Data,
         tokenCountNeedle: Data,
+        taskCompleteNeedle: Data,
         functionCallNeedle: Data,
         customToolCallNeedle: Data,
+        modelNeedle: Data,
+        providerNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
         plainFormatter: ISO8601DateFormatter,
         previous: inout TokenBreakdown,
+        currentModel: inout String?,
+        currentProvider: inout String?,
         sawTokenEvent: inout Bool,
         tokenEventCount: inout Int,
         deltas: inout [SessionUsageDelta],
         toolCalls: inout [String: Int],
-        skillLoads: inout [SkillLoadEvent]
+        skillLoads: inout [SkillLoadEvent],
+        pendingDurationDeltaIndex: inout Int?
     ) {
         let isTokenEvent = lineData.range(of: tokenCountNeedle) != nil
+        let isTaskComplete = lineData.range(of: taskCompleteNeedle) != nil
         let isToolEvent = lineData.range(of: functionCallNeedle) != nil || lineData.range(of: customToolCallNeedle) != nil
-        guard isTokenEvent || isToolEvent,
-              let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-              let payload = object["payload"] as? [String: Any],
-              let payloadType = payload["type"] as? String
+        let hasModelHint = lineData.range(of: modelNeedle) != nil
+        let hasProviderHint = lineData.range(of: providerNeedle) != nil
+        guard isTokenEvent || isTaskComplete || isToolEvent || hasModelHint || hasProviderHint,
+              let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
         else { return }
 
+        let payload = object["payload"] as? [String: Any] ?? [:]
+        let payloadType = payload["type"] as? String
         if payloadType == "function_call" || payloadType == "custom_tool_call" {
             if let name = payload["name"] as? String, !name.isEmpty {
                 toolCalls[name, default: 0] += 1
@@ -2103,10 +2238,27 @@ final class CodexUsageReader {
             return
         }
 
-        guard payloadType == "token_count",
+        if isTaskComplete, payloadType == "task_complete" {
+            if let index = pendingDurationDeltaIndex,
+               deltas.indices.contains(index),
+               let duration = doubleValue(payload["duration_ms"]),
+               duration > 0 {
+                deltas[index].endToEndDurationMs = duration
+            }
+            pendingDurationDeltaIndex = nil
+            return
+        }
+
+        let info = payload["info"] as? [String: Any] ?? [:]
+        let totalUsage = info["total_token_usage"] as? [String: Any] ?? [:]
+        let detectedModel = tokenEventModel(object: object, payload: payload, info: info, totalUsage: totalUsage)
+        let detectedProvider = tokenEventProvider(object: object, payload: payload, info: info, totalUsage: totalUsage)
+        if let detectedModel { currentModel = detectedModel }
+        if let detectedProvider { currentProvider = detectedProvider }
+
+        guard isTokenEvent, payloadType == "token_count",
               let timestamp = object["timestamp"] as? String,
-              let info = payload["info"] as? [String: Any],
-              let totalUsage = info["total_token_usage"] as? [String: Any],
+              !totalUsage.isEmpty,
               let date = fractionalFormatter.date(from: timestamp) ?? plainFormatter.date(from: timestamp)
         else { return }
 
@@ -2128,7 +2280,74 @@ final class CodexUsageReader {
         previous = current
 
         guard !delta.isZero else { return }
-        deltas.append(SessionUsageDelta(date: date, tokens: delta))
+        deltas.append(SessionUsageDelta(
+            date: date,
+            tokens: delta,
+            model: detectedModel ?? currentModel,
+            modelProvider: detectedProvider ?? currentProvider,
+            endToEndDurationMs: nil
+        ))
+        pendingDurationDeltaIndex = deltas.count - 1
+    }
+
+    private func tokenEventModel(
+        object: [String: Any],
+        payload: [String: Any],
+        info: [String: Any],
+        totalUsage: [String: Any]
+    ) -> String? {
+        firstTokenEventString(
+            keys: ["model", "model_slug", "model_id", "modelId", "modelID", "model_name", "modelName"],
+            dictionaries: [info, totalUsage, payload, object]
+        )
+    }
+
+    private func tokenEventProvider(
+        object: [String: Any],
+        payload: [String: Any],
+        info: [String: Any],
+        totalUsage: [String: Any]
+    ) -> String? {
+        firstTokenEventString(
+            keys: ["model_provider", "modelProvider", "provider", "provider_id", "providerId", "providerID"],
+            dictionaries: [info, totalUsage, payload, object]
+        )
+    }
+
+    private func firstTokenEventString(keys: [String], dictionaries: [[String: Any]]) -> String? {
+        for dictionary in dictionaries {
+            if let value = firstStringValue(keys: keys, in: dictionary) { return value }
+        }
+        for dictionary in dictionaries {
+            if let value = firstNestedStringValue(keys: keys, in: dictionary, depth: 2) { return value }
+        }
+        return nil
+    }
+
+    private func firstStringValue(keys: [String], in dictionary: [String: Any]) -> String? {
+        for key in keys {
+            if let value = stringValue(dictionary[key])?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private func firstNestedStringValue(keys: [String], in dictionary: [String: Any], depth: Int) -> String? {
+        guard depth > 0 else { return nil }
+        for value in dictionary.values {
+            if let nested = value as? [String: Any] {
+                if let found = firstStringValue(keys: keys, in: nested) { return found }
+                if let found = firstNestedStringValue(keys: keys, in: nested, depth: depth - 1) { return found }
+            } else if let nestedArray = value as? [[String: Any]] {
+                for nested in nestedArray {
+                    if let found = firstStringValue(keys: keys, in: nested) { return found }
+                    if let found = firstNestedStringValue(keys: keys, in: nested, depth: depth - 1) { return found }
+                }
+            }
+        }
+        return nil
     }
 
     private func readTaskBoard(context: RuntimeLoadContext, messages: inout [String]) -> TaskBoard? {
@@ -2440,6 +2659,7 @@ final class CodexUsageReader {
             components.append(source.threadId)
             components.append(source.rolloutPath)
             components.append(source.model ?? "")
+            components.append(source.modelProvider ?? "")
             components.append(source.cwd)
             guard let attributes = try? fileManager.attributesOfItem(atPath: source.rolloutPath) else {
                 components.append("missing")
@@ -2664,6 +2884,62 @@ private func modelTokenPrice(for model: String?) -> ModelTokenPrice {
     return ModelTokenPrice(model: "gpt-5.5", inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30)
 }
 
+func modelUsageTokenPrice(for model: String?) -> ModelTokenPrice {
+    let normalized = (model ?? "").lowercased()
+
+    if normalized.contains("mimo-auto") || normalized.contains("mimo-v2.5") || normalized.contains("mimo") {
+        return ModelTokenPrice(model: "mimo", inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8, currency: .cny)
+    }
+    if normalized.contains("deepseek-v4-pro") || normalized.contains("deepseek-v4") || normalized.contains("ds-v4") {
+        return ModelTokenPrice(model: "deepseek-v4-pro", inputPerMillion: 4, cachedInputPerMillion: 1, outputPerMillion: 16, currency: .cny)
+    }
+    if normalized.contains("deepseek") || normalized.contains("ds-") {
+        return ModelTokenPrice(model: "deepseek", inputPerMillion: 1, cachedInputPerMillion: 0.2, outputPerMillion: 4, currency: .cny)
+    }
+    if normalized.contains("qwen3.7-max") || normalized.contains("qwen-max") {
+        return ModelTokenPrice(model: "qwen-max", inputPerMillion: 4, cachedInputPerMillion: 1, outputPerMillion: 16, currency: .cny)
+    }
+    if normalized.contains("qwen3.7-plus") || normalized.contains("qwen-plus") || normalized.contains("qwen") {
+        return ModelTokenPrice(model: "qwen", inputPerMillion: 0.8, cachedInputPerMillion: 0.2, outputPerMillion: 4, currency: .cny)
+    }
+    if normalized.contains("glm-5.2") || normalized.contains("glm-5.1") || normalized.contains("glm-5") {
+        return ModelTokenPrice(model: "glm-5", inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8, currency: .cny)
+    }
+    if normalized.contains("glm") {
+        return ModelTokenPrice(model: "glm", inputPerMillion: 0.5, cachedInputPerMillion: 0.15, outputPerMillion: 2, currency: .cny)
+    }
+    if normalized.contains("kimi") || normalized.contains("moonshot") {
+        return ModelTokenPrice(model: "kimi", inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8, currency: .cny)
+    }
+    if normalized.contains("minimax") {
+        return ModelTokenPrice(model: "minimax", inputPerMillion: 1, cachedInputPerMillion: 0.2, outputPerMillion: 4, currency: .cny)
+    }
+    if normalized.contains("opus") {
+        return ModelTokenPrice(model: "claude-opus", inputPerMillion: 15, cachedInputPerMillion: 1.5, outputPerMillion: 75)
+    }
+    if normalized.contains("sonnet") {
+        return ModelTokenPrice(model: "claude-sonnet", inputPerMillion: 3, cachedInputPerMillion: 0.3, outputPerMillion: 15)
+    }
+    if normalized.contains("haiku") {
+        return ModelTokenPrice(model: "claude-haiku", inputPerMillion: 0.8, cachedInputPerMillion: 0.08, outputPerMillion: 4)
+    }
+    if normalized.contains("gpt-5.5-pro") || normalized.contains("gpt-5.5") || normalized == "chat-latest"
+        || normalized.contains("gpt-5.4-mini") || normalized.contains("gpt-5.4-nano")
+        || normalized.contains("gpt-5.4-pro") || normalized.contains("gpt-5.4")
+        || normalized.contains("gpt-5.3-codex") || normalized.contains("gpt-5.2-codex")
+        || normalized.contains("gpt-5.3-chat") || normalized.contains("chatgpt") {
+        return modelTokenPrice(for: model)
+    }
+    if normalized.contains("github-copilot") || normalized.contains("copilot") {
+        return ModelTokenPrice(model: "copilot", inputPerMillion: 2.5, cachedInputPerMillion: 0.25, outputPerMillion: 15)
+    }
+    return ModelTokenPrice(model: "unknown", inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0)
+}
+
+func estimatedModelUsageCost(tokens: TokenBreakdown, price: ModelTokenPrice) -> Double {
+    estimatedCostUSD(tokens: tokens, price: price)
+}
+
 private func estimatedCostUSD(tokens: TokenBreakdown, price: ModelTokenPrice) -> Double {
     let uncachedInputCost = Double(tokens.uncachedInputTokens) / 1_000_000 * price.inputPerMillion
     let cachedInputCost = Double(tokens.billableCachedInputTokens) / 1_000_000 * price.cachedInputPerMillion
@@ -2678,22 +2954,39 @@ private func normalizedModelName(_ model: String?, fallback: String) -> String {
     return String(candidate.prefix(25)) + "..."
 }
 
+private let modelUsageKeySeparator = "||provider||"
+
+func modelUsageBucketKey(model: String, provider: String?) -> String {
+    let provider = (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return provider.isEmpty ? model : "\(model)\(modelUsageKeySeparator)\(provider)"
+}
+
+private func modelUsageModelName(from key: String) -> String {
+    key.components(separatedBy: modelUsageKeySeparator).first ?? key
+}
+
+private func modelUsageProviderName(from key: String) -> String? {
+    let parts = key.components(separatedBy: modelUsageKeySeparator)
+    guard parts.count > 1, !parts[1].isEmpty else { return nil }
+    return parts[1]
+}
+
 func modelProviderName(for model: String) -> String {
     let normalized = model.lowercased()
-    if normalized.contains("claude") { return "Anthropic" }
-    if normalized.contains("gemini") || normalized.contains("gemma") || normalized.contains("palm") { return "Google" }
-    if normalized.contains("deepseek") { return "DeepSeek" }
-    if normalized.contains("mimo") { return "MimoCode" }
-    if normalized.contains("glm") { return "Zhipu AI" }
-    if normalized.contains("qwen") { return "Alibaba" }
-    if normalized.contains("llama") { return "Meta" }
-    if normalized.contains("mistral") || normalized.contains("mixtral") { return "Mistral" }
-    if normalized.contains("command-r") || normalized.contains("cohere") { return "Cohere" }
-    if normalized.contains("grok") { return "xAI" }
-    if normalized.contains("yi-") { return "01.AI" }
-    if normalized.contains("kimi") || normalized.contains("moonshot") { return "Moonshot" }
+    if normalized.hasPrefix("claude") || normalized.contains("anthropic") { return "Anthropic" }
+    if normalized.hasPrefix("gemini") || normalized.hasPrefix("gemma") || normalized.hasPrefix("palm") || normalized.contains("google") { return "Google" }
+    if normalized.hasPrefix("deepseek") || normalized.hasPrefix("ds-") || normalized.contains("deepseek") { return "DeepSeek" }
+    if normalized.hasPrefix("mimo") || normalized.contains("mimocode") { return "MimoCode" }
+    if normalized.hasPrefix("glm") || normalized.contains("zhipu") { return "Zhipu AI" }
+    if normalized.hasPrefix("qwen") || normalized.contains("alibaba") || normalized.contains("tongyi") { return "Alibaba" }
+    if normalized.hasPrefix("llama") || normalized.hasPrefix("codellama") || normalized.contains("llama") { return "Meta" }
+    if normalized.hasPrefix("mistral") || normalized.hasPrefix("mixtral") || normalized.contains("mistral") { return "Mistral" }
+    if normalized.hasPrefix("command") || normalized.hasPrefix("c4ai") || normalized.contains("cohere") { return "Cohere" }
+    if normalized.hasPrefix("grok") { return "xAI" }
+    if normalized.hasPrefix("yi-") { return "01.AI" }
+    if normalized.hasPrefix("kimi") || normalized.hasPrefix("moonshot") { return "Moonshot" }
     if normalized.contains("minimax") { return "MiniMax" }
-    if normalized.contains("gpt") || normalized.contains("o1") || normalized.contains("o3")
+    if normalized.hasPrefix("gpt-") || normalized.hasPrefix("o1") || normalized.hasPrefix("o3")
         || normalized.contains("chatgpt") || normalized.contains("codex") {
         return "OpenAI"
     }
@@ -2711,17 +3004,27 @@ private func addModelUsage(
     usageByModel[model] = usage
 }
 
-private func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage]) -> [ModelUsageItem] {
-    usageByModel.map { model, usage in
-        ModelUsageItem(
+private func sortedModelUsageItems(
+    _ usageByModel: [String: PricedTokenUsage],
+    throughput: [String: Double] = [:]
+) -> [ModelUsageItem] {
+    usageByModel.map { key, usage in
+        let model = modelUsageModelName(from: key)
+        let provider = modelUsageProviderName(from: key) ?? modelProviderName(for: model)
+        let price = modelUsageTokenPrice(for: model)
+        return ModelUsageItem(
             model: model,
-            provider: modelProviderName(for: model),
+            provider: provider,
             tokens: usage.tokens.visibleTotalTokens,
             uncachedInputTokens: usage.tokens.uncachedInputTokens,
             cachedInputTokens: usage.tokens.billableCachedInputTokens,
             outputTokens: usage.tokens.outputTokens,
-            estimatedCostUSD: usage.estimatedCostUSD,
-            endToEndTokensPerSecond: nil
+            estimatedCostUSD: estimatedModelUsageCost(tokens: usage.tokens, price: price),
+            inputPricePerMillion: price.inputPerMillion,
+            cachedInputPricePerMillion: price.cachedInputPerMillion,
+            outputPricePerMillion: price.outputPerMillion,
+            currency: price.currency,
+            endToEndTokensPerSecond: throughput[key]
         )
     }
     .sorted { lhs, rhs in
@@ -2730,6 +3033,15 @@ private func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage]) -
         }
         return lhs.tokens > rhs.tokens
     }
+}
+
+private func calculateModelThroughput(_ tokens: [String: Int64], _ timeMs: [String: Double]) -> [String: Double] {
+    var result: [String: Double] = [:]
+    for (key, outputTokens) in tokens {
+        guard let duration = timeMs[key], duration > 0 else { continue }
+        result[key] = Double(outputTokens) * 1_000 / duration
+    }
+    return result
 }
 
 private func makeModelUsageTrendDays(
@@ -2742,10 +3054,11 @@ private func makeModelUsageTrendDays(
         guard let date = calendar.date(byAdding: .day, value: offset - 6, to: dayStart) else { return nil }
         let key = statistics.dayKey(for: date)
         let models: [String: PricedTokenUsage] = usageByDay[key]?.models ?? [:]
-        let segments: [ModelUsageTrendSegment] = models.map { model, usage in
+        let segments: [ModelUsageTrendSegment] = models.map { key, usage in
+            let model = modelUsageModelName(from: key)
             return ModelUsageTrendSegment(
                 model: model,
-                provider: modelProviderName(for: model),
+                provider: modelUsageProviderName(from: key) ?? modelProviderName(for: model),
                 tokens: usage.tokens.visibleTotalTokens
             )
         }
@@ -3297,21 +3610,24 @@ struct UsageWidgetView: View {
     }
 
     private var usageOverviewSection: some View {
-        HStack(alignment: .center, spacing: 26) {
-            VStack(spacing: 8) {
-                DualQuotaRing(
-                    fiveHourQuota: snapshot.fiveHourQuota,
-                    sevenDayQuota: snapshot.sevenDayQuota,
-                    language: language
-                )
-                .frame(width: 145, height: 145)
+        let hasQuotaData = snapshot.fiveHourQuota != nil || snapshot.sevenDayQuota != nil
+        return HStack(alignment: .center, spacing: 26) {
+            if hasQuotaData {
+                VStack(spacing: 8) {
+                    DualQuotaRing(
+                        fiveHourQuota: snapshot.fiveHourQuota,
+                        sevenDayQuota: snapshot.sevenDayQuota,
+                        language: language
+                    )
+                    .frame(width: 145, height: 145)
 
-                QuotaResetSummary(
-                    fiveHourQuota: snapshot.fiveHourQuota,
-                    sevenDayQuota: snapshot.sevenDayQuota,
-                    language: language
-                )
-                .frame(width: 154)
+                    QuotaResetSummary(
+                        fiveHourQuota: snapshot.fiveHourQuota,
+                        sevenDayQuota: snapshot.sevenDayQuota,
+                        language: language
+                    )
+                    .frame(width: 154)
+                }
             }
 
             VStack(alignment: .leading, spacing: 13) {
@@ -3321,32 +3637,38 @@ struct UsageWidgetView: View {
                         systemName: "sun.max.fill",
                         usage: snapshot.local?.detailedUsage?.today,
                         fallbackTokens: snapshot.local?.todayTokens,
-                        language: language
+                        language: language,
+                        showsEstimatedCost: store.selectedRuntimeScope != .mimoCode
                     )
                     DetailedTokenMetricCard(
                         title: language.text("近 7 天", "Last 7 days"),
                         systemName: "calendar",
                         usage: snapshot.local?.detailedUsage?.sevenDay,
                         fallbackTokens: snapshot.local?.sevenDayTokens,
-                        language: language
+                        language: language,
+                        showsEstimatedCost: store.selectedRuntimeScope != .mimoCode
                     )
                     DetailedTokenMetricCard(
                         title: language.text("本月", "This month"),
                         systemName: "calendar.badge.clock",
                         usage: snapshot.local?.detailedUsage?.month,
                         fallbackTokens: snapshot.local?.modelUsage.month.reduce(Int64(0)) { $0 + $1.tokens },
-                        language: language
+                        language: language,
+                        showsEstimatedCost: store.selectedRuntimeScope != .mimoCode
                     )
                     DetailedTokenMetricCard(
                         title: language.text("累计", "Lifetime"),
                         systemName: "sum",
                         usage: snapshot.local?.detailedUsage?.lifetime,
                         fallbackTokens: snapshot.local?.lifetimeTokens,
-                        language: language
+                        language: language,
+                        showsEstimatedCost: store.selectedRuntimeScope != .mimoCode
                     )
                 }
 
-                WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language)
+                if store.selectedRuntimeScope != .mimoCode {
+                    WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language)
+                }
             }
             .frame(maxWidth: .infinity)
         }
@@ -5084,10 +5406,9 @@ struct DailyTokenBar: View {
 }
 
 private enum ModelUsagePeriod: String, CaseIterable, Identifiable {
-    case today
     case twentyFourHour
+    case today
     case sevenDay
-    case month
     case thirtyDay
     case lifetime
 
@@ -5095,24 +5416,21 @@ private enum ModelUsagePeriod: String, CaseIterable, Identifiable {
 
     func label(_ language: WidgetLanguage) -> String {
         switch self {
+        case .twentyFourHour:
+            return language.text("24小时", "24h")
         case .today:
             return language.text("今日", "Today")
-        case .twentyFourHour:
-            return "24H"
         case .sevenDay:
-            return language.text("近 7 天", "7 days")
-        case .month:
-            return language.text("本月", "This month")
+            return language.text("7天", "7d")
         case .thirtyDay:
-            return language.text("近 30 天", "30 days")
+            return language.text("30天", "30 Days")
         case .lifetime:
-            return language.text("累计", "All time")
+            return language.text("累计", "All")
         }
     }
 }
 
 struct ModelUsagePanel: View {
-    @Environment(\.colorScheme) private var colorScheme
     @State private var period: ModelUsagePeriod = .today
     @State private var searchText = ""
     let modelUsage: ModelUsageBreakdown
@@ -5126,12 +5444,26 @@ struct ModelUsagePanel: View {
             return modelUsage.twentyFourHour
         case .sevenDay:
             return modelUsage.sevenDay
-        case .month:
-            return modelUsage.month
         case .thirtyDay:
             return modelUsage.thirtyDay
         case .lifetime:
             return modelUsage.lifetime
+        }
+    }
+
+    private var emptyStateText: String {
+        if !searchText.isEmpty { return language.text("无匹配结果", "No matches") }
+        switch period {
+        case .today:
+            return language.text("今天暂时还没有模型使用数据", "No model usage yet today")
+        case .twentyFourHour:
+            return language.text("最近 24 小时暂无模型使用数据", "No model usage in the last 24 hours")
+        case .sevenDay:
+            return language.text("最近 7 天暂无模型使用数据", "No model usage in the last 7 days")
+        case .thirtyDay:
+            return language.text("最近 30 天暂无模型使用数据", "No model usage in the last 30 days")
+        case .lifetime:
+            return language.text("暂无模型使用数据", "No model usage data")
         }
     }
 
@@ -5148,66 +5480,68 @@ struct ModelUsagePanel: View {
         DashboardCard {
             VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
                 HStack(spacing: dashboardCardHeaderSpacing) {
-                    Image(systemName: "cpu")
-                        .font(.system(size: dashboardCardIconSize, weight: .semibold))
-                        .foregroundStyle(.secondary)
                     Text(language.text("模型用量", "Model usage"))
                         .font(.system(size: dashboardCardTitleSize, weight: .semibold))
-                    Spacer(minLength: 8)
-                    TextField(language.text("搜索模型或厂商", "Search model or provider"), text: $searchText)
-                        .textFieldStyle(.roundedBorder)
+                    compactSearchField
+                    Text(language.text("\(items.count) 个模型", "\(items.count) models"))
                         .font(.system(size: 10, weight: .medium))
-                        .frame(width: 150)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
                     periodPicker
                 }
                 .frame(height: dashboardCardHeaderHeight)
-
-                if periodItems.isEmpty {
-                    AnalyticsEmptyState(
-                        systemName: "chart.bar.doc.horizontal",
-                        title: language.text("暂无模型明细", "No model details"),
-                        detail: language.text("完成一次包含 token 记录的会话后再刷新。", "Refresh after a session with token records.")
-                    )
-                } else if items.isEmpty {
-                    AnalyticsEmptyState(
-                        systemName: "magnifyingglass",
-                        title: language.text("没有匹配的模型", "No matching models"),
-                        detail: language.text("可按模型名或厂商搜索。", "Search by model or provider.")
-                    )
-                } else {
-                    if period == .sevenDay, !modelUsage.sevenDayTrend.isEmpty {
-                        ModelUsageStackedTrend(days: modelUsage.sevenDayTrend, language: language)
-                    }
-                    modelTable
-                }
+                modelTable
             }
         }
     }
 
+    private var compactSearchField: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+            TextField(language.text("搜索", "Search"), text: $searchText)
+                .font(.system(size: 9))
+                .textFieldStyle(.plain)
+                .frame(width: 60)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack)
+        )
+    }
+
     private var periodPicker: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 1) {
             ForEach(ModelUsagePeriod.allCases) { item in
                 Button {
                     period = item
                 } label: {
                     Text(item.label(language))
-                        .font(.system(size: 10, weight: period == item ? .semibold : .medium))
+                        .font(.system(size: 9, weight: period == item ? .semibold : .regular))
                         .foregroundStyle(period == item ? .primary : .secondary)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
                         .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(period == item ? WidgetPalette.controlSelectedFill(colorScheme) : Color.clear)
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(period == item ? WidgetPalette.surfaceTrack : Color.clear)
                         )
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(2)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(WidgetPalette.controlFill(colorScheme))
-        )
         .accessibilityLabel(language.text("模型统计周期", "Model usage period"))
     }
 
@@ -5215,14 +5549,22 @@ struct ModelUsagePanel: View {
         VStack(spacing: 0) {
             ModelUsageHeader(language: language)
             Divider()
-            ForEach(items) { item in
-                ModelUsageRow(item: item, language: language)
-                if item.id != items.last?.id {
-                    Divider()
+            if items.isEmpty {
+                Text(emptyStateText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 40)
+            } else {
+                let maxTokens = items.map(\.tokens).max() ?? 1
+                ForEach(items) { item in
+                    ModelUsageRow(item: item, language: language, maxTokens: maxTokens)
+                    if item.id != items.last?.id {
+                        Divider()
+                    }
                 }
             }
         }
-        .cardBackground(cornerRadius: dashboardCardCornerRadius)
+        .cardBackground(cornerRadius: 10)
     }
 }
 
@@ -5231,15 +5573,16 @@ private struct ModelUsageHeader: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            header(language.text("模型", "Model"), width: nil, alignment: .leading)
+            header(language.text("模型", "Model"), width: 160, alignment: .leading)
+            Color.clear.frame(width: 120, height: 1)
             Spacer(minLength: 4)
-            header(language.text("未缓存", "Input"), width: 66, alignment: .trailing, color: uncachedInputColor)
-            header(language.text("缓存", "Cached"), width: 66, alignment: .trailing, color: cachedInputColor)
-            header(language.text("输出", "Output"), width: 66, alignment: .trailing, color: outputTokenColor)
-            header(language.text("总消耗", "Total"), width: 70, alignment: .trailing)
-            header(language.text("缓存率", "Hit rate"), width: 58, alignment: .trailing)
-            header(language.text("估算速度", "Est. TPS"), width: 68, alignment: .trailing)
-            header(language.text("估算价值", "Est. value"), width: 72, alignment: .trailing)
+            header(language.text("速度", "TPS"), width: 40, alignment: .trailing, color: WidgetPalette.statusNeutral)
+            header(language.text("未缓存", "Unc"), width: 42, alignment: .trailing, color: uncachedInputColor)
+            header(language.text("缓存", "Cache"), width: 42, alignment: .trailing, color: cachedInputColor)
+            header(language.text("输出", "Out"), width: 42, alignment: .trailing, color: WidgetPalette.statusSuccess)
+            header(language.text("总消耗", "Total"), width: 46, alignment: .trailing, color: .primary)
+            header(language.text("缓存率", "Hit"), width: 36, alignment: .trailing)
+            header(language.text("费用", "Cost"), width: 46, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -5262,50 +5605,87 @@ private struct ModelUsageHeader: View {
 private struct ModelUsageRow: View {
     let item: ModelUsageItem
     let language: WidgetLanguage
+    let maxTokens: Int64
 
-    private var cacheHitRate: Double? {
+    private var cacheHitRate: Double {
         let input = item.uncachedInputTokens + item.cachedInputTokens
-        guard input > 0 else { return nil }
-        return Double(item.cachedInputTokens) / Double(input)
+        guard input > 0 else { return 0 }
+        return Double(item.cachedInputTokens) / Double(input) * 100
+    }
+
+    private var providerColor: Color {
+        let model = item.model.lowercased()
+        if model.contains("mimo") { return WidgetPalette.statusWarning }
+        if model.contains("gpt") || model.contains("codex") || model.hasPrefix("o1") || model.hasPrefix("o3") { return WidgetPalette.statusSuccess }
+        if model.contains("claude") { return WidgetPalette.brandSecondary }
+        if model.contains("qwen") { return WidgetPalette.statusInfo }
+        if model.contains("glm") { return WidgetPalette.brandPrimaryLight }
+        if model.contains("deepseek") { return WidgetPalette.statusDanger }
+        if model.contains("gemini") { return WidgetPalette.statusSuccess }
+        return WidgetPalette.statusNeutral
+    }
+
+    private var hasPriceData: Bool {
+        item.inputPricePerMillion > 0 || item.outputPricePerMillion > 0
+    }
+
+    private var priceText: String {
+        let symbol = item.currency.rawValue
+        return "\(symbol)\(String(format: "%.2f", item.inputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.cachedInputPricePerMillion))/\(symbol)\(String(format: "%.2f", item.outputPricePerMillion))"
     }
 
     var body: some View {
         HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(item.model)
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
-                Text(item.provider)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(item.provider)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(providerColor)
+                    if hasPriceData {
+                        Text(priceText)
+                            .font(.system(size: 7, weight: .medium, design: .rounded))
+                            .foregroundStyle(modelCurrencyColor(item.currency).opacity(0.6))
+                            .lineLimit(1)
+                    }
+                }
             }
+            .frame(width: 160, alignment: .leading)
+
+            ModelUsageProgressBar(value: item.tokens, maxValue: maxTokens, color: providerColor)
+                .frame(width: 120, height: 4)
+
             Spacer(minLength: 4)
-            value(item.uncachedInputTokens, width: 66, color: uncachedInputColor)
-            value(item.cachedInputTokens, width: 66, color: cachedInputColor)
-            value(item.outputTokens, width: 66, color: outputTokenColor)
-            value(item.tokens, width: 70, color: .primary, weight: .semibold)
-            Text(cacheHitRate.map { "\(Int(($0 * 100).rounded()))%" } ?? "--")
+
+            Text(item.endToEndTokensPerSecond.map { String(format: "%.0f/s", $0) } ?? "-")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(item.endToEndTokensPerSecond.map(modelSpeedColor) ?? Color.secondary.opacity(0.55))
+                .lineLimit(1)
+                .frame(width: 40, alignment: .trailing)
+
+            value(item.uncachedInputTokens, width: 42, color: uncachedInputColor)
+            value(item.cachedInputTokens, width: 42, color: cachedInputColor)
+            value(item.outputTokens, width: 42, color: WidgetPalette.statusSuccess)
+            value(item.tokens, width: 46, color: .primary, weight: .semibold)
+            Text(cacheHitRate > 0 ? "\(Int(cacheHitRate))%" : "-")
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: 58, alignment: .trailing)
-            Text(item.endToEndTokensPerSecond.map { String(format: "%.1f", $0) } ?? "--")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: 68, alignment: .trailing)
-            Text(formatUSD(item.estimatedCostUSD))
+                .foregroundStyle(cacheHitRate >= 50 ? WidgetPalette.brandSecondary : .secondary)
+                .frame(width: 36, alignment: .trailing)
+            Text(formatModelUsageCost(item.estimatedCostUSD, currency: item.currency))
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: 72, alignment: .trailing)
+                .foregroundStyle(modelCurrencyColor(item.currency))
+                .frame(width: 46, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .help(language.text(
-            "\(item.provider) · \(item.model) · 总计 \(formatTokens(item.tokens)) · 速度为端到端估算，费用为本地估算",
-            "\(item.provider) · \(item.model) · \(formatTokens(item.tokens)) total · speed is an end-to-end estimate; value is estimated locally"
+            "\(item.provider) \(item.model)：总计 \(formatTokens(item.tokens))，缓存命中 \(Int(cacheHitRate))%",
+            "\(item.provider) \(item.model): total \(formatTokens(item.tokens)), cache hit \(Int(cacheHitRate))%"
         ))
     }
 
@@ -5325,75 +5705,40 @@ private struct ModelUsageRow: View {
     }
 }
 
-private struct ModelUsageStackedTrend: View {
-    let days: [ModelUsageTrendDay]
-    let language: WidgetLanguage
-
-    private var maxTokens: Int64 { max(days.map(\.tokens).max() ?? 0, 1) }
-
-    private var rankedModelIDs: [String] {
-        var totals: [String: Int64] = [:]
-        for segment in days.flatMap(\.segments) {
-            totals[segment.id, default: 0] += segment.tokens
-        }
-        return totals.keys.sorted {
-            totals[$0, default: 0] == totals[$1, default: 0]
-                ? $0 < $1
-                : totals[$0, default: 0] > totals[$1, default: 0]
-        }
-    }
+private struct ModelUsageProgressBar: View {
+    let value: Int64
+    let maxValue: Int64
+    let color: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(language.text("近 7 天模型构成", "7-day model mix"))
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-            HStack(alignment: .bottom, spacing: 8) {
-                ForEach(days) { day in
-                    VStack(spacing: 4) {
-                        ZStack(alignment: .bottom) {
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(WidgetPalette.surfaceTrack)
-                            VStack(spacing: 1) {
-                                ForEach(day.segments) { segment in
-                                    RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                        .fill(color(for: segment.id))
-                                        .frame(height: max(2, 62 * CGFloat(Double(segment.tokens) / Double(maxTokens))))
-                                }
-                            }
-                        }
-                        .frame(height: 64)
-                        .help(dayHelp(day))
-                        Text(dayLabel(day.date))
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
+        GeometryReader { geometry in
+            let ratio = maxValue > 0 ? min(1, CGFloat(value) / CGFloat(maxValue)) : 0
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack)
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(color)
+                        .frame(width: geometry.size.width * ratio)
                 }
-            }
         }
-        .padding(10)
-        .cardBackground(cornerRadius: dashboardCardCornerRadius)
     }
+}
 
-    private func color(for id: String) -> Color {
-        let index = rankedModelIDs.firstIndex(of: id) ?? 0
-        let opacities = [0.95, 0.78, 0.62, 0.48, 0.36]
-        return WidgetPalette.brandPrimary.opacity(opacities[index % opacities.count])
-    }
+private func modelSpeedColor(_ tokensPerSecond: Double) -> Color {
+    if tokensPerSecond >= 80 { return WidgetPalette.statusSuccess }
+    if tokensPerSecond >= 40 { return WidgetPalette.statusInfo }
+    if tokensPerSecond >= 20 { return WidgetPalette.statusWarning }
+    return WidgetPalette.statusDanger
+}
 
-    private func dayLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = language.isChinese ? Locale(identifier: "zh_CN") : Locale(identifier: "en_US")
-        formatter.dateFormat = "M/d"
-        return formatter.string(from: date)
-    }
+private func modelCurrencyColor(_ currency: ModelTokenCurrency) -> Color {
+    currency == .cny ? WidgetPalette.statusDanger : WidgetPalette.statusSuccess
+}
 
-    private func dayHelp(_ day: ModelUsageTrendDay) -> String {
-        let details = day.segments.prefix(5).map { "\($0.provider) \($0.model): \(formatTokens($0.tokens))" }
-        return ([dayLabel(day.date), language.text("总计 \(formatTokens(day.tokens))", "Total \(formatTokens(day.tokens))")] + details)
-            .joined(separator: "\n")
-    }
+private func formatModelUsageCost(_ value: Double?, currency: ModelTokenCurrency) -> String {
+    guard let value else { return "--" }
+    if abs(value) >= 1_000 { return String(format: "\(currency.rawValue)%.0f", value) }
+    return String(format: "\(currency.rawValue)%.2f", value)
 }
 
 struct DetailedTokenMetricCard: View {
@@ -5402,6 +5747,7 @@ struct DetailedTokenMetricCard: View {
     let usage: PricedTokenUsage?
     let fallbackTokens: Int64?
     let language: WidgetLanguage
+    let showsEstimatedCost: Bool
 
     private var displayTokens: Int64? {
         usage?.tokens.visibleTotalTokens ?? fallbackTokens
@@ -5428,7 +5774,7 @@ struct DetailedTokenMetricCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                Text(formatUSD(usage?.estimatedCostUSD))
+                Text(showsEstimatedCost ? formatUSD(usage?.estimatedCostUSD) : "--")
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)

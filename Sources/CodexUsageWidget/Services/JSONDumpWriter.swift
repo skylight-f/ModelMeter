@@ -169,6 +169,10 @@ private func runtimeJSONObject(_ item: ModelUsageItem) -> [String: Any] {
         "cachedInputTokens": item.cachedInputTokens,
         "outputTokens": item.outputTokens,
         "estimatedCostUSD": runtimeJSONValue(item.estimatedCostUSD),
+        "inputPricePerMillion": item.inputPricePerMillion,
+        "cachedInputPricePerMillion": item.cachedInputPricePerMillion,
+        "outputPricePerMillion": item.outputPricePerMillion,
+        "currency": item.currency.rawValue,
         "endToEndTokensPerSecond": runtimeJSONValue(item.endToEndTokensPerSecond)
     ] as [String: Any]
 }

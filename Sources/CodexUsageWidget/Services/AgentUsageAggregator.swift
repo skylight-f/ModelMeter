@@ -89,6 +89,10 @@ struct AgentUsageAggregator {
                 cachedInputTokens: (current?.cachedInputTokens ?? 0) + item.cachedInputTokens,
                 outputTokens: (current?.outputTokens ?? 0) + item.outputTokens,
                 estimatedCostUSD: aggregateEstimatedCost(current?.estimatedCostUSD, item.estimatedCostUSD),
+                inputPricePerMillion: item.inputPricePerMillion,
+                cachedInputPricePerMillion: item.cachedInputPricePerMillion,
+                outputPricePerMillion: item.outputPricePerMillion,
+                currency: item.currency,
                 endToEndTokensPerSecond: weightedTPS
             )
         }

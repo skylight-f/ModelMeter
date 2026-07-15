@@ -25,6 +25,14 @@ enum ModelUsageSelfTest {
             expect(modelProviderName(for: model) == expected, "\(model) should resolve to \(expected)")
         }
 
+        let mimoPrice = modelUsageTokenPrice(for: "mimo-v2.5")
+        expect(mimoPrice.currency == .cny, "Mimo price should use CNY")
+        expect(mimoPrice.inputPerMillion == 2 && mimoPrice.cachedInputPerMillion == 0.5 && mimoPrice.outputPerMillion == 8,
+               "Mimo price should match the develop model-usage table")
+        let unknownPrice = modelUsageTokenPrice(for: "gpt-5.6-sol")
+        expect(unknownPrice.inputPerMillion == 0 && unknownPrice.outputPerMillion == 0,
+               "unknown models must not inherit another model's price")
+
         let openAIItem = sampleItem(model: "shared", provider: "OpenAI")
         let anthropicItem = sampleItem(model: "shared", provider: "Anthropic")
         expect(openAIItem.id != anthropicItem.id, "model identity must include provider")

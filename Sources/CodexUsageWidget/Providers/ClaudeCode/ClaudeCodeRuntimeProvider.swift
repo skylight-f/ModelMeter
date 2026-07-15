@@ -985,14 +985,19 @@ private func claudeAddModelUsage(
 
 private func claudeModelUsageItems(_ values: [String: PricedTokenUsage]) -> [ModelUsageItem] {
     values.map { model, usage in
-        ModelUsageItem(
+        let price = modelUsageTokenPrice(for: model)
+        return ModelUsageItem(
             model: model,
             provider: modelProviderName(for: model),
             tokens: usage.tokens.visibleTotalTokens,
             uncachedInputTokens: usage.tokens.uncachedInputTokens,
             cachedInputTokens: usage.tokens.billableCachedInputTokens,
             outputTokens: usage.tokens.outputTokens,
-            estimatedCostUSD: usage.estimatedCostUSD,
+            estimatedCostUSD: estimatedModelUsageCost(tokens: usage.tokens, price: price),
+            inputPricePerMillion: price.inputPerMillion,
+            cachedInputPricePerMillion: price.cachedInputPerMillion,
+            outputPricePerMillion: price.outputPerMillion,
+            currency: price.currency,
             endToEndTokensPerSecond: nil
         )
     }
