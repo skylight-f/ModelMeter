@@ -100,7 +100,11 @@ private final class MimoCodeLocalReader {
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: context.now)) ?? dayStart
         let thirtyDayStart = calendar.date(byAdding: .day, value: -29, to: dayStart) ?? dayStart
         let trendStart = calendar.date(byAdding: .day, value: -190, to: dayStart) ?? sevenDayStart
+        let sessions = loadSessions(sqlite: sqlite, database: database)
         var sessionTokens: [String: Int64] = [:]
+        var sessionLastTokenAt: [String: Date] = [:]
+        var recentSessionTokens: [String: Int64] = [:]
+        var recentSessionLastTokenAt: [String: Date] = [:]
         var dailyTokens: [String: Int64] = [:]
         var trendDailyUsage: [String: PricedTokenUsage] = [:]
         var todayModels: [String: MimoModelAccumulator] = [:]
@@ -148,6 +152,7 @@ private final class MimoCodeLocalReader {
             tokenEventCount += 1
             lifetimeTokens += visibleTokens
             sessionTokens[sessionId, default: 0] += visibleTokens
+            sessionLastTokenAt[sessionId] = maxDate(sessionLastTokenAt[sessionId], date)
             lifetimeDetailed.add(tokens: current, costUSD: 0)
             add(tokens: current, cost: estimatedCost, model: model, provider: provider, duration: duration, key: key, to: &lifetimeModels)
             if date >= trendStart {
@@ -160,6 +165,8 @@ private final class MimoCodeLocalReader {
             }
             if date >= sevenDayStart {
                 sevenDayTokens += visibleTokens
+                recentSessionTokens[sessionId, default: 0] += visibleTokens
+                recentSessionLastTokenAt[sessionId] = maxDate(recentSessionLastTokenAt[sessionId], date)
                 dailyTokens[context.statistics.dayKey(for: date), default: 0] += visibleTokens
                 sevenDayDetailed.add(tokens: current, costUSD: 0)
                 add(tokens: current, cost: estimatedCost, model: model, provider: provider, duration: duration, key: key, to: &sevenDayModels)
@@ -188,7 +195,6 @@ private final class MimoCodeLocalReader {
             lastUpdatedAt = maxDate(lastUpdatedAt, date)
         }
 
-        let sessions = loadSessions(sqlite: sqlite, database: database)
         let recentThreads = sessions.prefix(5).map { session in
             LocalThread(
                 id: session.id,
@@ -200,6 +206,19 @@ private final class MimoCodeLocalReader {
                 archived: session.archivedAt != nil
             )
         }
+        let projectBoard = makeProjectBoard(
+            sessions: sessions,
+            sessionTokens: sessionTokens,
+            sessionLastTokenAt: sessionLastTokenAt,
+            recentSessionTokens: recentSessionTokens,
+            recentSessionLastTokenAt: recentSessionLastTokenAt
+        )
+        let toolUsages = loadToolUsages(
+            sqlite: sqlite,
+            database: database,
+            sessionTokens: sessionTokens
+        )
+        let skillUsages = loadSkillUsages(sqlite: sqlite, database: database)
 
         return LocalUsage(
             lifetimeTokens: lifetimeTokens,
@@ -233,9 +252,9 @@ private final class MimoCodeLocalReader {
                 calendar: calendar,
                 statistics: context.statistics
             ),
-            projectBoard: nil,
-            toolUsages: [],
-            skillUsages: [],
+            projectBoard: projectBoard,
+            toolUsages: toolUsages,
+            skillUsages: skillUsages,
             modelUsage: ModelUsageBreakdown(
                 today: makeModelItems(todayModels),
                 twentyFourHour: makeModelItems(twentyFourHourModels),
@@ -253,6 +272,158 @@ private final class MimoCodeLocalReader {
         )
     }
 
+    private func makeProjectBoard(
+        sessions: [MimoSession],
+        sessionTokens: [String: Int64],
+        sessionLastTokenAt: [String: Date],
+        recentSessionTokens: [String: Int64],
+        recentSessionLastTokenAt: [String: Date]
+    ) -> ProjectBoard {
+        ProjectBoard(
+            recentProjects: makeProjects(
+                sessions: sessions,
+                tokensBySession: recentSessionTokens,
+                lastTokenAtBySession: recentSessionLastTokenAt
+            ),
+            allProjects: makeProjects(
+                sessions: sessions,
+                tokensBySession: sessionTokens,
+                lastTokenAtBySession: sessionLastTokenAt
+            )
+        )
+    }
+
+    private func makeProjects(
+        sessions: [MimoSession],
+        tokensBySession: [String: Int64],
+        lastTokenAtBySession: [String: Date]
+    ) -> [ProjectUsage] {
+        var projects: [String: MimoProjectAccumulator] = [:]
+        for session in sessions {
+            let tokens = tokensBySession[session.id] ?? 0
+            guard tokens > 0 else { continue }
+            let path = session.projectPath.isEmpty ? session.directory : session.projectPath
+            let projectID = session.projectID.isEmpty ? (path.isEmpty ? "uncategorized" : path) : session.projectID
+            let name = path.isEmpty ? "未归类" : URL(fileURLWithPath: path).lastPathComponent
+            var project = projects[projectID] ?? MimoProjectAccumulator(
+                id: projectID,
+                name: name.isEmpty ? "未归类" : name,
+                fullPath: path
+            )
+            project.add(
+                sessionID: session.id,
+                tokens: tokens,
+                lastActiveAt: lastTokenAtBySession[session.id] ?? session.updatedAt
+            )
+            projects[projectID] = project
+        }
+        return projects.values
+            .map { $0.makeUsage() }
+            .sorted {
+                if $0.tokens != $1.tokens { return $0.tokens > $1.tokens }
+                return ($0.lastActiveAt ?? .distantPast) > ($1.lastActiveAt ?? .distantPast)
+            }
+    }
+
+    private func loadToolUsages(
+        sqlite: URL,
+        database: URL,
+        sessionTokens: [String: Int64]
+    ) -> [ToolUsage] {
+        let query = """
+        SELECT
+          session_id AS sessionId,
+          json_extract(data, '$.tool') AS tool,
+          COUNT(*) AS callCount
+        FROM part
+        WHERE json_valid(data)
+          AND json_extract(data, '$.type') = 'tool'
+          AND json_extract(data, '$.tool') IS NOT NULL
+        GROUP BY session_id, json_extract(data, '$.tool');
+        """
+        let rows = runSQLite(sqlite: sqlite, database: database, query: query)
+        var callsBySession: [String: [(name: String, count: Int)]] = [:]
+        for row in rows {
+            guard let sessionID = mimoString(row["sessionId"]),
+                  let name = mimoString(row["tool"]),
+                  !name.isEmpty
+            else { continue }
+            let count = max(0, Int(mimoInt64(row["callCount"]) ?? 0))
+            guard count > 0 else { continue }
+            callsBySession[sessionID, default: []].append((name, count))
+        }
+
+        var tools: [String: MimoToolAccumulator] = [:]
+        for (sessionID, calls) in callsBySession {
+            let totalCalls = calls.reduce(0) { $0 + $1.count }
+            let tokens = sessionTokens[sessionID] ?? 0
+            for call in calls {
+                var tool = tools[call.name] ?? MimoToolAccumulator(name: call.name)
+                let estimatedTokens: Int64
+                if totalCalls > 0, tokens > 0 {
+                    estimatedTokens = Int64(
+                        (Double(tokens) * Double(call.count) / Double(totalCalls)).rounded()
+                    )
+                } else {
+                    estimatedTokens = 0
+                }
+                tool.add(callCount: call.count, estimatedTokens: estimatedTokens)
+                tools[call.name] = tool
+            }
+        }
+        return tools.values
+            .map { $0.makeUsage() }
+            .sorted {
+                if $0.callCount != $1.callCount { return $0.callCount > $1.callCount }
+                return $0.name < $1.name
+            }
+    }
+
+    private func loadSkillUsages(sqlite: URL, database: URL) -> [SkillUsage] {
+        let query = """
+        SELECT
+          session_id AS sessionId,
+          time_created AS timeCreated,
+          json_extract(data, '$.state.input.name') AS skillName,
+          json_extract(data, '$.state.metadata.dir') AS skillDirectory
+        FROM part
+        WHERE json_valid(data)
+          AND json_extract(data, '$.type') = 'tool'
+          AND json_extract(data, '$.tool') = 'skill'
+        ORDER BY time_created ASC;
+        """
+        let rows = runSQLite(sqlite: sqlite, database: database, query: query)
+        var skills: [String: MimoSkillAccumulator] = [:]
+        for row in rows {
+            guard let sessionID = mimoString(row["sessionId"]) else { continue }
+            let directory = mimoString(row["skillDirectory"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let rawName = mimoString(row["skillName"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let path: String
+            if directory.isEmpty {
+                path = rawName
+            } else if URL(fileURLWithPath: directory).pathExtension.lowercased() == "md" {
+                path = directory
+            } else {
+                path = URL(fileURLWithPath: directory).appendingPathComponent("SKILL.md").path
+            }
+            let fallbackName = directory.isEmpty ? "Skill" : URL(fileURLWithPath: directory).lastPathComponent
+            let name = rawName.isEmpty ? fallbackName : rawName
+            let key = path.isEmpty ? name : path
+            var skill = skills[key] ?? MimoSkillAccumulator(name: name, path: path)
+            skill.add(sessionID: sessionID, at: mimoDate(row["timeCreated"]))
+            skills[key] = skill
+        }
+        return skills.values
+            .map { $0.makeUsage() }
+            .sorted {
+                if $0.loadCount != $1.loadCount { return $0.loadCount > $1.loadCount }
+                if ($0.staticTokenEstimate ?? -1) != ($1.staticTokenEstimate ?? -1) {
+                    return ($0.staticTokenEstimate ?? -1) > ($1.staticTokenEstimate ?? -1)
+                }
+                return $0.name < $1.name
+            }
+    }
+
     func loadTaskBoard(context: RuntimeLoadContext, messages: inout [String]) -> TaskBoard? {
         guard let database = databaseURL(context: context), let sqlite = sqliteURL() else {
             messages.append("任务看板未找到 MimoCode SQLite 数据源")
@@ -262,9 +433,61 @@ private final class MimoCodeLocalReader {
         let sessions = loadSessions(sqlite: sqlite, database: database)
         let dayStart = context.statistics.calendar.startOfDay(for: context.now)
         let activeCutoff = context.now.addingTimeInterval(-2 * 60 * 60)
+        let dayStartMilliseconds = Int64(dayStart.timeIntervalSince1970 * 1_000)
+        let taskQuery = """
+        WITH token_totals AS (
+          SELECT
+            session_id,
+            CAST(SUM(COALESCE(json_extract(data, '$.tokens.total'), 0)) AS INTEGER) AS tokens
+          FROM message
+          WHERE json_valid(data)
+            AND json_extract(data, '$.tokens.total') IS NOT NULL
+          GROUP BY session_id
+        )
+        SELECT
+          t.id AS taskId,
+          t.session_id AS sessionId,
+          t.status,
+          t.summary,
+          t.last_event_at AS updatedAt,
+          s.title AS sessionTitle,
+          s.directory,
+          COALESCE(NULLIF(p.worktree, ''), s.directory) AS projectPath,
+          COALESCE(token_totals.tokens, 0) AS tokens
+        FROM task t
+        JOIN session s ON s.id = t.session_id
+        LEFT JOIN project p ON p.id = s.project_id
+        LEFT JOIN token_totals ON token_totals.session_id = t.session_id
+        WHERE t.last_event_at >= \(dayStartMilliseconds)
+        ORDER BY t.last_event_at DESC;
+        """
+        let taskRows = runSQLite(sqlite: sqlite, database: database, query: taskQuery)
         var columns: [TaskColumnKind: [TaskItem]] = [:]
+        var representedSessionIDs = Set<String>()
 
-        for session in sessions where (session.updatedAt ?? .distantPast) >= dayStart || (session.archivedAt ?? .distantPast) >= dayStart {
+        for row in taskRows {
+            guard let taskID = mimoString(row["taskId"]),
+                  let sessionID = mimoString(row["sessionId"])
+            else { continue }
+            let status = mimoString(row["status"]) ?? "open"
+            let kind = mimoTaskKind(status)
+            representedSessionIDs.insert(sessionID)
+            columns[kind, default: []].append(makeTaskItem(
+                taskID: taskID,
+                sessionID: sessionID,
+                status: status,
+                summary: mimoString(row["summary"]),
+                sessionTitle: mimoString(row["sessionTitle"]),
+                projectPath: mimoString(row["projectPath"]) ?? mimoString(row["directory"]) ?? "",
+                updatedAt: mimoDate(row["updatedAt"]),
+                tokens: mimoInt64(row["tokens"]),
+                kind: kind
+            ))
+        }
+
+        let fallbackTokens = loadSessionTokenTotals(sqlite: sqlite, database: database)
+        for session in sessions where !representedSessionIDs.contains(session.id)
+            && ((session.updatedAt ?? .distantPast) >= dayStart || (session.archivedAt ?? .distantPast) >= dayStart) {
             let kind: TaskColumnKind
             if session.archivedAt != nil {
                 kind = .done
@@ -273,7 +496,11 @@ private final class MimoCodeLocalReader {
             } else {
                 kind = .pending
             }
-            columns[kind, default: []].append(makeTaskItem(session: session, kind: kind))
+            columns[kind, default: []].append(makeTaskItem(
+                session: session,
+                tokens: fallbackTokens[session.id],
+                kind: kind
+            ))
         }
 
         return TaskBoard(refreshedAt: context.now, columns: [
@@ -285,10 +512,11 @@ private final class MimoCodeLocalReader {
     }
 
     private func makeColumn(_ kind: TaskColumnKind, title: String, items: [TaskItem]) -> TaskColumn {
-        TaskColumn(id: kind, title: title, count: items.count, items: Array(items.prefix(3)))
+        let sorted = items.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+        return TaskColumn(id: kind, title: title, count: sorted.count, items: Array(sorted.prefix(3)))
     }
 
-    private func makeTaskItem(session: MimoSession, kind: TaskColumnKind) -> TaskItem {
+    private func makeTaskItem(session: MimoSession, tokens: Int64?, kind: TaskColumnKind) -> TaskItem {
         let compactId = session.id.replacingOccurrences(of: "-", with: "")
         let chip: String
         switch kind {
@@ -304,22 +532,78 @@ private final class MimoCodeLocalReader {
             detail: URL(fileURLWithPath: session.directory).lastPathComponent,
             chip: chip,
             updatedAt: session.updatedAt,
-            tokens: nil,
+            tokens: tokens,
             kind: kind
         )
     }
 
+    private func makeTaskItem(
+        taskID: String,
+        sessionID: String,
+        status: String,
+        summary: String?,
+        sessionTitle: String?,
+        projectPath: String,
+        updatedAt: Date?,
+        tokens: Int64?,
+        kind: TaskColumnKind
+    ) -> TaskItem {
+        let compactID = taskID.replacingOccurrences(of: "-", with: "")
+        let trimmedSummary = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTitle = sessionTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return TaskItem(
+            id: sessionID + taskID + kind.rawValue,
+            code: "MIMO-" + compactID.suffix(4).uppercased(),
+            title: trimmedSummary.flatMap { $0.isEmpty ? nil : $0 }
+                ?? trimmedTitle.flatMap { $0.isEmpty ? nil : $0 }
+                ?? "Untitled",
+            detail: projectPath.isEmpty ? "MimoCode" : URL(fileURLWithPath: projectPath).lastPathComponent,
+            chip: mimoTaskChip(status, kind: kind),
+            updatedAt: updatedAt,
+            tokens: tokens,
+            kind: kind
+        )
+    }
+
+    private func loadSessionTokenTotals(sqlite: URL, database: URL) -> [String: Int64] {
+        let query = """
+        SELECT
+          session_id AS sessionId,
+          CAST(SUM(COALESCE(json_extract(data, '$.tokens.total'), 0)) AS INTEGER) AS tokens
+        FROM message
+        WHERE json_valid(data)
+          AND json_extract(data, '$.tokens.total') IS NOT NULL
+        GROUP BY session_id;
+        """
+        return Dictionary(uniqueKeysWithValues: runSQLite(sqlite: sqlite, database: database, query: query).compactMap { row in
+            guard let sessionID = mimoString(row["sessionId"]),
+                  let tokens = mimoInt64(row["tokens"])
+            else { return nil }
+            return (sessionID, tokens)
+        })
+    }
+
     private func loadSessions(sqlite: URL, database: URL) -> [MimoSession] {
         let query = """
-        SELECT id, title, directory, time_updated AS updatedAt, time_archived AS archivedAt
-        FROM session
-        ORDER BY time_updated DESC;
+        SELECT
+          s.id,
+          s.project_id AS projectId,
+          COALESCE(NULLIF(p.worktree, ''), s.directory) AS projectPath,
+          s.title,
+          s.directory,
+          s.time_updated AS updatedAt,
+          s.time_archived AS archivedAt
+        FROM session s
+        LEFT JOIN project p ON p.id = s.project_id
+        ORDER BY s.time_updated DESC;
         """
         return runSQLite(sqlite: sqlite, database: database, query: query).compactMap { object in
             guard let id = mimoString(object["id"]) else { return nil }
             let rawTitle = mimoString(object["title"])?.trimmingCharacters(in: .whitespacesAndNewlines)
             return MimoSession(
                 id: id,
+                projectID: mimoString(object["projectId"]) ?? "",
+                projectPath: mimoString(object["projectPath"]) ?? "",
                 title: rawTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled",
                 directory: mimoString(object["directory"]) ?? "",
                 updatedAt: mimoDate(object["updatedAt"]),
@@ -591,10 +875,92 @@ private final class MimoCodeLocalReader {
 
 private struct MimoSession {
     let id: String
+    let projectID: String
+    let projectPath: String
     let title: String
     let directory: String
     let updatedAt: Date?
     let archivedAt: Date?
+}
+
+private struct MimoProjectAccumulator {
+    let id: String
+    let name: String
+    let fullPath: String
+    var tokens: Int64 = 0
+    var sessionIDs = Set<String>()
+    var lastActiveAt: Date?
+
+    mutating func add(sessionID: String, tokens addedTokens: Int64, lastActiveAt date: Date?) {
+        tokens += addedTokens
+        sessionIDs.insert(sessionID)
+        lastActiveAt = maxDate(lastActiveAt, date)
+    }
+
+    func makeUsage() -> ProjectUsage {
+        ProjectUsage(
+            id: id,
+            name: name,
+            fullPath: fullPath,
+            tokens: tokens,
+            estimatedCostUSD: nil,
+            threadCount: sessionIDs.count,
+            lastActiveAt: lastActiveAt,
+            sourceQuality: .detailed
+        )
+    }
+}
+
+private struct MimoToolAccumulator {
+    let name: String
+    var callCount: Int = 0
+    var estimatedTokens: Int64 = 0
+
+    mutating func add(callCount addedCalls: Int, estimatedTokens addedTokens: Int64) {
+        callCount += addedCalls
+        estimatedTokens += addedTokens
+    }
+
+    func makeUsage() -> ToolUsage {
+        ToolUsage(
+            id: name,
+            name: name,
+            category: toolCategory(for: name),
+            callCount: callCount,
+            estimatedTokens: estimatedTokens > 0 ? estimatedTokens : nil,
+            estimatedCostUSD: nil
+        )
+    }
+}
+
+private struct MimoSkillAccumulator {
+    let name: String
+    let path: String
+    var loadCount: Int = 0
+    var sessionIDs = Set<String>()
+    var lastLoadedAt: Date?
+
+    mutating func add(sessionID: String, at date: Date?) {
+        loadCount += 1
+        sessionIDs.insert(sessionID)
+        lastLoadedAt = maxDate(lastLoadedAt, date)
+    }
+
+    func makeUsage() -> SkillUsage {
+        let data = path.isEmpty ? nil : try? Data(contentsOf: URL(fileURLWithPath: path))
+        let text = data.map { String(data: $0, encoding: .utf8) ?? String(decoding: $0, as: UTF8.self) }
+        return SkillUsage(
+            id: path.isEmpty ? name : path,
+            name: name,
+            path: path,
+            sourceLabel: "MimoCode",
+            loadCount: loadCount,
+            threadCount: sessionIDs.count,
+            staticTokenEstimate: text.map(estimateStaticTokens),
+            staticByteCount: data.map { Int64($0.count) },
+            lastLoadedAt: lastLoadedAt
+        )
+    }
 }
 
 private struct MimoModelAccumulator {
@@ -616,6 +982,32 @@ private struct MimoModelAccumulator {
     var endToEndTokensPerSecond: Double? {
         guard durationSeconds > 0, generatedTokens > 0 else { return nil }
         return Double(generatedTokens) / durationSeconds
+    }
+}
+
+private func mimoTaskKind(_ status: String) -> TaskColumnKind {
+    switch status.lowercased() {
+    case "in_progress", "running", "active":
+        return .active
+    case "scheduled", "cron":
+        return .scheduled
+    case "done", "completed", "abandoned", "cancelled", "canceled":
+        return .done
+    default:
+        return .pending
+    }
+}
+
+private func mimoTaskChip(_ status: String, kind: TaskColumnKind) -> String {
+    let normalized = status.lowercased()
+    if normalized == "abandoned" || normalized == "cancelled" || normalized == "canceled" {
+        return "Stopped"
+    }
+    switch kind {
+    case .active: return "Active"
+    case .pending: return "Open"
+    case .scheduled: return "Cron"
+    case .done: return "Done"
     }
 }
 

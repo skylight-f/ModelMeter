@@ -2833,7 +2833,7 @@ private func displayHomePath(_ path: String) -> String {
     return path
 }
 
-private func estimateStaticTokens(_ text: String) -> Int64 {
+func estimateStaticTokens(_ text: String) -> Int64 {
     let scalars = Array(text.unicodeScalars)
     guard !scalars.isEmpty else { return 0 }
 
@@ -3678,9 +3678,11 @@ struct UsageWidgetView: View {
                     )
                 }
 
-                if store.selectedRuntimeScope != .mimoCode {
-                    WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language)
-                }
+                WoolProgressCard(
+                    usage: snapshot.local?.detailedUsage?.month,
+                    comparisonAvailable: store.selectedRuntimeScope != .mimoCode,
+                    language: language
+                )
             }
             .frame(maxWidth: .infinity)
         }
@@ -3732,12 +3734,14 @@ struct UsageWidgetView: View {
         case .projects:
             ProjectBoardPanel(
                 projectBoard: snapshot.local?.projectBoard,
+                runtimeScope: store.selectedRuntimeScope,
                 language: language
             )
         case .skills:
             SkillUsagePanel(
                 skillUsages: snapshot.local?.skillUsages ?? [],
                 toolUsages: snapshot.local?.toolUsages ?? [],
+                runtimeScope: store.selectedRuntimeScope,
                 language: language
             )
         }
@@ -5962,10 +5966,11 @@ private let quotaValueMonthlyMaxUSD = quotaValueMonthlyTokenLimit / 1_000_000 * 
 
 struct WoolProgressCard: View {
     let usage: PricedTokenUsage?
+    let comparisonAvailable: Bool
     let language: WidgetLanguage
 
     private var cost: Double {
-        usage?.estimatedCostUSD ?? 0
+        comparisonAvailable ? (usage?.estimatedCostUSD ?? 0) : 0
     }
 
     private var maxValue: Double {
@@ -5988,7 +5993,7 @@ struct WoolProgressCard: View {
                 Text(language.text("羊毛进度", "Value progress"))
                     .font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 8)
-                Text(formatUSD(usage?.estimatedCostUSD))
+                Text(comparisonAvailable ? formatUSD(usage?.estimatedCostUSD) : "--")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 Text("/ \(formatCompactUSD(maxValue))")
@@ -6024,6 +6029,9 @@ struct WoolProgressCard: View {
             }
 
         }
+        .help(comparisonAvailable
+            ? language.text("按美元 API 等效价值与订阅门槛比较。", "Compares USD API-equivalent value with subscription thresholds.")
+            : language.text("MimoCode 费用包含人民币和美元，暂不合并为美元订阅进度。", "MimoCode costs include CNY and USD and are not combined into a USD subscription progress value."))
         .padding(dashboardCardPadding)
         .cardBackground(cornerRadius: dashboardCardCornerRadius)
     }
@@ -6799,6 +6807,7 @@ enum ProjectTimeframe: String, CaseIterable, Identifiable {
 
 struct ProjectBoardPanel: View {
     let projectBoard: ProjectBoard?
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
     @State private var timeframe: ProjectTimeframe = .recent
 
@@ -6833,7 +6842,10 @@ struct ProjectBoardPanel: View {
                         AnalyticsEmptyState(
                             systemName: "folder.badge.questionmark",
                             title: language.text("暂无项目记录", "No project records"),
-                            detail: language.text("没有可归类的本机 Codex 项目用量。", "No local Codex project usage can be grouped yet.")
+                            detail: language.text(
+                                "没有可归类的本机 \(runtimeScope.displayName) 项目用量。",
+                                "No local \(runtimeScope.displayName) project usage can be grouped yet."
+                            )
                         )
                         .frame(minHeight: 214)
                     } else {
@@ -6843,7 +6855,11 @@ struct ProjectBoardPanel: View {
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
 
-            ProjectActivityOverview(projectBoard: projectBoard, language: language)
+            ProjectActivityOverview(
+                projectBoard: projectBoard,
+                runtimeScope: runtimeScope,
+                language: language
+            )
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
@@ -6851,6 +6867,7 @@ struct ProjectBoardPanel: View {
 
 struct ProjectActivityOverview: View {
     let projectBoard: ProjectBoard?
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
 
     private var recentProjects: [ProjectUsage] {
@@ -6902,7 +6919,10 @@ struct ProjectActivityOverview: View {
                 ) {
                     InfoChip(title: language.text("近 7 天", "7 days"), value: "\(recentProjects.count)")
                         .frame(height: dashboardHeaderControlHeight)
-                        .help(language.text("基于近 7 天本机 Codex 项目活动统计。", "Based on local Codex project activity in the last 7 days."))
+                        .help(language.text(
+                            "基于近 7 天本机 \(runtimeScope.displayName) 项目活动统计。",
+                            "Based on local \(runtimeScope.displayName) project activity in the last 7 days."
+                        ))
                 }
 
                 if recentProjects.isEmpty {
@@ -7101,6 +7121,7 @@ struct ProjectUsageRow: View {
 
 struct ToolUsageList: View {
     let toolUsages: [ToolUsage]
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
 
     private var maxCalls: Int {
@@ -7116,7 +7137,10 @@ struct ToolUsageList: View {
                 ) {
                     InfoChip(title: "Token", value: language.text("估算", "Est."))
                         .frame(height: dashboardHeaderControlHeight)
-                        .help(language.text("调用次数为事件计数；工具 token 按 session 内调用占比估算。", "Call counts are event counts. Tool tokens are estimated from each session's call share."))
+                        .help(language.text(
+                            "调用次数来自本机 \(runtimeScope.displayName) 工具事件；Token 按 session 内调用占比估算。",
+                            "Call counts come from local \(runtimeScope.displayName) tool events. Tokens are estimated from each session's call share."
+                        ))
                 }
 
                 if toolUsages.isEmpty {
@@ -7211,6 +7235,7 @@ struct ToolUsageRow: View {
 struct SkillUsagePanel: View {
     let skillUsages: [SkillUsage]
     let toolUsages: [ToolUsage]
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
 
     private var topSkills: [SkillUsage] {
@@ -7226,7 +7251,11 @@ struct SkillUsagePanel: View {
             skillUsageList
                 .frame(maxWidth: .infinity, alignment: .topLeading)
 
-            ToolUsageList(toolUsages: Array(toolUsages.prefix(20)), language: language)
+            ToolUsageList(
+                toolUsages: Array(toolUsages.prefix(20)),
+                runtimeScope: runtimeScope,
+                language: language
+            )
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
@@ -7241,8 +7270,8 @@ struct SkillUsagePanel: View {
                     InfoChip(title: "Token", value: language.text("Skill.md Token数", "Skill.md tokens"))
                         .frame(height: dashboardHeaderControlHeight)
                         .help(language.text(
-                            "调用次数按本地 session 中 SKILL.md 加载事件计数；Token 数来自本机 Skill.md 文件内容估算，不代表完整任务消耗。",
-                            "Load counts come from local session SKILL.md load events. Token counts are estimated from the local Skill.md file content, not from the full task."
+                            "调用次数按本机 \(runtimeScope.displayName) Skill 加载事件计数；Token 数来自本机 SKILL.md 文件内容估算，不代表完整任务消耗。",
+                            "Load counts come from local \(runtimeScope.displayName) Skill events. Token counts are estimated from local SKILL.md content, not from the full task."
                         ))
                 }
 
@@ -7250,7 +7279,10 @@ struct SkillUsagePanel: View {
                     AnalyticsEmptyState(
                         systemName: "puzzlepiece.extension",
                         title: language.text("暂无 Skill 加载", "No Skill loads"),
-                        detail: language.text("没有在本机 session 工具调用参数中发现 SKILL.md 加载事件。", "No SKILL.md load events were found in local session tool-call arguments.")
+                        detail: language.text(
+                            "没有在本机 \(runtimeScope.displayName) 记录中发现 Skill 加载事件。",
+                            "No Skill load events were found in local \(runtimeScope.displayName) records."
+                        )
                     )
                     .frame(minHeight: 214)
                 } else {
@@ -8037,7 +8069,7 @@ private func formatSignedPercent(_ value: Double) -> String {
     return String(format: "%+.0f%%", value)
 }
 
-private func toolCategory(for name: String) -> String {
+func toolCategory(for name: String) -> String {
     let normalized = name.lowercased()
     if normalized.contains("exec") || normalized.contains("shell") || normalized.contains("stdin") {
         return "terminal"

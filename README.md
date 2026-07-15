@@ -38,7 +38,7 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 - 今日总量使用系统菜单栏正文尺寸；5h/7d 标签与重置时间使用更易读、仍弱于主数值的动态辅助前景色。
 - 主界面顶部新增 Runtime 全局开关，可在 Codex、Claude Code 和 MimoCode 之间切换所有面板的数据范围。
 - 支持 Claude Code 本机 transcript 用量统计、最近 7 日趋势、项目排行、工具/Skill TOP 和任务看板基础能力。
-- 支持 MimoCode 本机数据库用量、半年用量趋势、分模型 token 明细和基础任务看板；总览估算按人民币/美元分别展示，无法确认的模型价格显示为不可用。
+- 支持 MimoCode 本机数据库用量、半年用量趋势、分模型 token 明细、项目排行、工具/Skill TOP 和任务看板；总览估算按人民币/美元分别展示，无法确认的模型价格显示为不可用。
 - 模型用量支持滚动 24H、今日、近 7 天、近 30 天和累计五个时间维度，并可按模型或厂商搜索。
 - 模型明细展示厂商、相对用量、输入/缓存/输出价格、端到端估算速度、token 拆分、缓存率和对应币种的本地估算费用；记录不足时保持不可用。
 - 总览保持今日、近 7 天、本月和累计四个核心维度，并细分未缓存输入、命中缓存输入和输出。
@@ -179,7 +179,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 - Claude Code 历史 token：`~/.claude/projects/**/*.jsonl` 中 assistant message 的 `message.usage` 字段。
 - Claude Code 工具、Skill 和任务：transcript 中的 `tool_use.name` / 显式 Skill attribution，以及 `~/.claude/tasks/**/*.json`。
 - Claude Code active 额度：可选读取 `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`；缺失时 5 小时/7 日额度显示为 `--`。
-- MimoCode 本机 token、趋势与任务：读取 `~/.local/share/mimocode/mimocode.db` 中的结构化 token 和 session 字段，按本地统计时区生成半年热力图与近 7 日摘要；未知模型价格保持不可用。
+- MimoCode 本机 token、趋势、项目、工具、Skill 与任务：读取 `~/.local/share/mimocode/mimocode.db` 中的 message、session、project、part 和 task 结构化字段；项目和趋势按消息 token 事件聚合，工具 Token 按 session 内调用占比估算，Skill 静态 Token 来自仍可读取的本机 `SKILL.md`。
 - 更新检测：默认访问 GitHub Releases API，读取 `shanggqm/codexU` 的公开 release 元数据，并把检查结果缓存到 `~/Library/Caches/codexU/update-check.json`。
 
 当前 Codex 额度 API 暴露的是滚动窗口百分比和重置时间，不暴露绝对配额数量；Claude Code 首版只读取本地历史记录和可选 active snapshot，不代表 Claude.ai 官方账单。更完整的数据口径和回退策略见 [RESEARCH.md](RESEARCH.md)。

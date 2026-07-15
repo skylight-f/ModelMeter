@@ -26,7 +26,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Uses the system menu bar body size for today's total and a higher-contrast supporting foreground for 5h/7d labels and reset times while preserving hierarchy beneath primary values.
 - Adds a top-level runtime switch in the main widget so all panels can switch between Codex, Claude Code, and MimoCode.
 - Supports Claude Code local transcript usage, 7-day trends, project rankings, top tools/Skills, and a basic task board.
-- Supports MimoCode local database usage, six-month usage trends, per-model token details, and a basic task board. Overview estimates keep CNY and USD separate, while unknown model prices remain unavailable.
+- Supports MimoCode local database usage, six-month usage trends, per-model token details, project rankings, top tools/Skills, and a task board. Overview estimates keep CNY and USD separate, while unknown model prices remain unavailable.
 - Adds five model-usage periods: rolling 24 hours, today, last 7 days, last 30 days, and all time, with search by model or provider.
 - Model details include provider, relative usage, input/cache/output prices, end-to-end estimated speed, token splits, cache hit rate, and locally estimated cost in the model's currency. Missing timing remains unavailable.
 - The overview keeps its four core periods—today, last 7 days, this month, and all time—with uncached input, cached input, and output splits.
@@ -152,7 +152,7 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 - Claude Code historical tokens: assistant `message.usage` fields in `~/.claude/projects/**/*.jsonl`.
 - Claude Code tools, Skills, and tasks: transcript `tool_use.name` / explicit Skill attribution, plus `~/.claude/tasks/**/*.json`.
 - Claude Code active quota: optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`; without it, 5-hour and 7-day quota show `--`.
-- MimoCode local tokens, trends, and tasks: structured token and session fields in `~/.local/share/mimocode/mimocode.db`, grouped in the local statistics time zone for the six-month heatmap and seven-day summary; unknown model prices remain unavailable.
+- MimoCode local tokens, trends, projects, tools, Skills, and tasks: structured message, session, project, part, and task fields in `~/.local/share/mimocode/mimocode.db`. Projects and trends aggregate message token events, tool tokens are estimated from each session's call share, and static Skill tokens come from locally readable `SKILL.md` files.
 - Update checks: default access to the GitHub Releases API for public `shanggqm/codexU` release metadata, cached in `~/Library/Caches/codexU/update-check.json`.
 
 Current Codex quota APIs expose rolling-window percentages and reset times, not absolute account quota sizes. Claude Code support reads local history and an optional active snapshot; it is not a Claude.ai official billing view. See [RESEARCH.md](RESEARCH.md) for the data model and fallback behavior.
