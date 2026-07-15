@@ -32,7 +32,16 @@ enum PaletteCatalogSelfTest {
         for paletteID in builtInPaletteIDs {
             expect(catalog.contains(paletteID), "\(paletteID) should load")
         }
-        expect(catalog.descriptors(language: "zh-Hans").count == builtInPaletteIDs.count, "all six built-in palettes should be discoverable")
+        let discoveredDescriptors = catalog.descriptors(language: "zh-Hans")
+        expect(Set(builtInPaletteIDs).isSubset(of: Set(discoveredDescriptors.map(\.id))), "required built-in palettes should remain discoverable")
+        for descriptor in discoveredDescriptors {
+            for appearance in PaletteAppearance.allCases {
+                let tokens = catalog.resolve(id: descriptor.id, appearance: appearance)
+                expect(tokens.identity.paletteID == descriptor.id, "\(descriptor.id) should resolve without Swift registration")
+                expect(tokens.identity.appearance == appearance, "\(descriptor.id) should resolve both appearances")
+                expect(tokens.data.series.count == 3 && tokens.data.heatmap.count == 5, "\(descriptor.id) should expose complete data roles")
+            }
+        }
         expect(elapsed < 0.5, "palette catalog should load in under 500ms during self-test")
 
         let defaultLight = catalog.resolve(id: PaletteCatalog.defaultPaletteID, appearance: .light)
@@ -123,12 +132,61 @@ enum PaletteCatalogSelfTest {
             try encoder.encode(contributedManifest).write(to: contributedManifestURL, options: .atomic)
             let contributedCatalog = PaletteCatalog.load(rootURL: invalidRoot, appVersion: "1.0.5", includeExperimental: true)
             expect(contributedCatalog.contains("community.test"), "a valid third package should load without Swift registration")
+            expect(contributedCatalog.descriptors(language: "en").contains(where: { $0.id == "community.test" }), "a valid contributed package should enter the settings catalog")
 
             let mismatched = invalidRoot.appendingPathComponent("community.wrong-name")
             try FileManager.default.copyItem(at: sourcePackage, to: mismatched)
+
+            let forbidden = invalidRoot.appendingPathComponent("community.forbidden")
+            try FileManager.default.copyItem(at: sourcePackage, to: forbidden)
+            let forbiddenManifestURL = forbidden.appendingPathComponent("manifest.json")
+            let forbiddenManifest = PaletteManifestDTO(
+                schemaVersion: originalManifest.schemaVersion,
+                id: "community.forbidden",
+                version: originalManifest.version,
+                minimumAppVersion: originalManifest.minimumAppVersion,
+                lifecycle: originalManifest.lifecycle,
+                defaultLocale: originalManifest.defaultLocale,
+                localizations: originalManifest.localizations,
+                variants: originalManifest.variants,
+                assetManifest: originalManifest.assetManifest,
+                author: originalManifest.author,
+                license: originalManifest.license,
+                source: originalManifest.source,
+                capabilities: originalManifest.capabilities
+            )
+            try encoder.encode(forbiddenManifest).write(to: forbiddenManifestURL, options: .atomic)
+            try Data("print(\"not allowed\")\n".utf8).write(to: forbidden.appendingPathComponent("forbidden.swift"), options: .atomic)
+
+            let missingDocs = invalidRoot.appendingPathComponent("community.missing-docs")
+            try FileManager.default.copyItem(at: sourcePackage, to: missingDocs)
+            let missingDocsManifestURL = missingDocs.appendingPathComponent("manifest.json")
+            let missingDocsManifest = PaletteManifestDTO(
+                schemaVersion: originalManifest.schemaVersion,
+                id: "community.missing-docs",
+                version: originalManifest.version,
+                minimumAppVersion: originalManifest.minimumAppVersion,
+                lifecycle: originalManifest.lifecycle,
+                defaultLocale: originalManifest.defaultLocale,
+                localizations: originalManifest.localizations,
+                variants: originalManifest.variants,
+                assetManifest: originalManifest.assetManifest,
+                author: originalManifest.author,
+                license: originalManifest.license,
+                source: originalManifest.source,
+                capabilities: originalManifest.capabilities
+            )
+            try encoder.encode(missingDocsManifest).write(to: missingDocsManifestURL, options: .atomic)
+            try FileManager.default.removeItem(at: missingDocs.appendingPathComponent("README.md"))
+            try FileManager.default.removeItem(at: missingDocs.appendingPathComponent("LICENSE"))
+
             let invalidCatalog = PaletteCatalog.load(rootURL: invalidRoot, appVersion: "1.0.5", includeExperimental: true)
             expect(!invalidCatalog.contains(PaletteCatalog.defaultPaletteID), "directory/id mismatch should isolate the package")
             expect(invalidCatalog.diagnostics.contains(where: { $0.ruleID == "PAL003" }), "directory/id mismatch should emit PAL003")
+            expect(!invalidCatalog.contains("community.forbidden"), "a package containing Swift should be isolated")
+            expect(invalidCatalog.diagnostics.contains(where: { $0.paletteID == "community.forbidden" && $0.ruleID == "PAL008" }), "forbidden files should emit PAL008")
+            expect(!invalidCatalog.contains("community.missing-docs"), "a package missing README and LICENSE should be isolated")
+            expect(invalidCatalog.diagnostics.contains(where: { $0.paletteID == "community.missing-docs" && $0.ruleID == "PAL010" }), "missing package documentation should emit PAL010")
         } catch {
             failures.append("could not construct invalid package fixture: \(error.localizedDescription)")
         }

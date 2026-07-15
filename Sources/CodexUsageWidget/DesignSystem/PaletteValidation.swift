@@ -51,6 +51,20 @@ enum PaletteValidator {
         }
         let paletteID = manifest.id
 
+        for requiredFile in ["README.md", "LICENSE"] {
+            guard let url = safeURL(relativePath: requiredFile, root: root),
+                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                  values.isRegularFile == true,
+                  let data = try? Data(contentsOf: url),
+                  !data.isEmpty else {
+                failure("PAL010", requiredFile, "Required package documentation is missing or empty.", paletteID: paletteID)
+                continue
+            }
+        }
+        for violation in packageContentViolations(root) {
+            failure(violation.ruleID, violation.relativePath, violation.message, paletteID: paletteID)
+        }
+
         if manifest.schemaVersion != 1 {
             failure("PAL002", "manifest.json", "Only schemaVersion 1 is supported.", paletteID: paletteID)
         }
@@ -195,6 +209,77 @@ enum PaletteValidator {
             if total > maximumPackageBytes { return total }
         }
         return total
+    }
+
+    private struct PackageContentViolation {
+        let ruleID: String
+        let relativePath: String
+        let message: String
+    }
+
+    private static func packageContentViolations(_ root: URL) -> [PackageContentViolation] {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: Array(keys),
+            options: []
+        ) else {
+            return [PackageContentViolation(ruleID: "PAL009", relativePath: ".", message: "Package contents cannot be enumerated.")]
+        }
+
+        var violations: [PackageContentViolation] = []
+        for case let url as URL in enumerator {
+            let path = relativePath(url, root: root)
+            guard let values = try? url.resourceValues(forKeys: keys), values.isSymbolicLink != true else {
+                violations.append(PackageContentViolation(ruleID: "PAL007", relativePath: path, message: "Symbolic links are forbidden in palette packages."))
+                continue
+            }
+            if values.isDirectory == true {
+                if !isAllowedPackageDirectory(path) {
+                    violations.append(PackageContentViolation(ruleID: "PAL008", relativePath: path, message: "Directory is outside the Palette Package v1 layout."))
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            guard values.isRegularFile == true else {
+                violations.append(PackageContentViolation(ruleID: "PAL008", relativePath: path, message: "Only regular declarative resource files are allowed."))
+                continue
+            }
+            if FileManager.default.isExecutableFile(atPath: url.path) {
+                violations.append(PackageContentViolation(ruleID: "PAL008", relativePath: path, message: "Executable files are forbidden in palette packages."))
+            } else if !isAllowedPackageFile(path) {
+                violations.append(PackageContentViolation(ruleID: "PAL008", relativePath: path, message: "File type or location is outside the Palette Package v1 whitelist."))
+            }
+        }
+        return violations
+    }
+
+    private static func isAllowedPackageDirectory(_ path: String) -> Bool {
+        [
+            "tokens",
+            "localizations",
+            "assets",
+            "assets/light",
+            "assets/dark",
+            "assets/shared"
+        ].contains(path)
+    }
+
+    private static func isAllowedPackageFile(_ path: String) -> Bool {
+        if ["manifest.json", "README.md", "LICENSE", "tokens/light.json", "tokens/dark.json", "assets/manifest.json"].contains(path) {
+            return true
+        }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        if components.count == 2, components[0] == "localizations", URL(fileURLWithPath: path).pathExtension == "json" {
+            return true
+        }
+        if components.count == 3,
+           components[0] == "assets",
+           ["light", "dark", "shared"].contains(String(components[1])),
+           URL(fileURLWithPath: path).pathExtension.lowercased() == "svg" {
+            return true
+        }
+        return false
     }
 
     private static func relativePath(_ url: URL, root: URL) -> String {
