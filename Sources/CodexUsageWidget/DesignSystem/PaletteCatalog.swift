@@ -54,9 +54,13 @@ struct PaletteCatalog {
         definitions[id] != nil
     }
 
-    func descriptors(language: String) -> [PaletteDescriptor] {
-        definitions.values.map { definition in
+    func descriptors(language: String, includingDeprecatedID: String? = nil) -> [PaletteDescriptor] {
+        definitions.values.compactMap { definition in
             let manifest = definition.manifest
+            guard manifest.lifecycle == .stable
+                    || (manifest.lifecycle == .deprecated && manifest.id == includingDeprecatedID) else {
+                return nil
+            }
             let preferredLocale = language.lowercased().hasPrefix("zh") ? "zh-Hans" : "en"
             let localization = definition.localizations[preferredLocale]
                 ?? definition.localizations[manifest.defaultLocale]
@@ -67,10 +71,15 @@ struct PaletteCatalog {
                 displayName: localization.displayName,
                 shortDescription: localization.shortDescription,
                 inspirationNote: localization.inspirationNote,
+                authorName: manifest.author.name,
+                sourceType: manifest.source.type,
+                lifecycle: manifest.lifecycle,
+                isOfficial: manifest.id.hasPrefix("codexu."),
                 isDefault: manifest.id == Self.defaultPaletteID
             )
         }.sorted {
             if $0.isDefault != $1.isDefault { return $0.isDefault }
+            if $0.isOfficial != $1.isOfficial { return $0.isOfficial }
             return $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
         }
     }

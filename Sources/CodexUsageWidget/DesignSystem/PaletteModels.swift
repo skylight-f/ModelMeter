@@ -223,6 +223,10 @@ struct PaletteDescriptor: Identifiable, Hashable {
     let displayName: String
     let shortDescription: String
     let inspirationNote: String
+    let authorName: String
+    let sourceType: String
+    let lifecycle: PaletteLifecycle
+    let isOfficial: Bool
     let isDefault: Bool
 }
 

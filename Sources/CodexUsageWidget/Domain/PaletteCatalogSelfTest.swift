@@ -180,6 +180,26 @@ enum PaletteCatalogSelfTest {
             try FileManager.default.removeItem(at: missingDocs.appendingPathComponent("README.md"))
             try FileManager.default.removeItem(at: missingDocs.appendingPathComponent("LICENSE"))
 
+            let deprecated = invalidRoot.appendingPathComponent("community.deprecated")
+            try FileManager.default.copyItem(at: sourcePackage, to: deprecated)
+            let deprecatedManifestURL = deprecated.appendingPathComponent("manifest.json")
+            let deprecatedManifest = PaletteManifestDTO(
+                schemaVersion: originalManifest.schemaVersion,
+                id: "community.deprecated",
+                version: originalManifest.version,
+                minimumAppVersion: originalManifest.minimumAppVersion,
+                lifecycle: .deprecated,
+                defaultLocale: originalManifest.defaultLocale,
+                localizations: originalManifest.localizations,
+                variants: originalManifest.variants,
+                assetManifest: originalManifest.assetManifest,
+                author: originalManifest.author,
+                license: originalManifest.license,
+                source: originalManifest.source,
+                capabilities: originalManifest.capabilities
+            )
+            try encoder.encode(deprecatedManifest).write(to: deprecatedManifestURL, options: .atomic)
+
             let invalidCatalog = PaletteCatalog.load(rootURL: invalidRoot, appVersion: "1.0.5", includeExperimental: true)
             expect(!invalidCatalog.contains(PaletteCatalog.defaultPaletteID), "directory/id mismatch should isolate the package")
             expect(invalidCatalog.diagnostics.contains(where: { $0.ruleID == "PAL003" }), "directory/id mismatch should emit PAL003")
@@ -187,6 +207,9 @@ enum PaletteCatalogSelfTest {
             expect(invalidCatalog.diagnostics.contains(where: { $0.paletteID == "community.forbidden" && $0.ruleID == "PAL008" }), "forbidden files should emit PAL008")
             expect(!invalidCatalog.contains("community.missing-docs"), "a package missing README and LICENSE should be isolated")
             expect(invalidCatalog.diagnostics.contains(where: { $0.paletteID == "community.missing-docs" && $0.ruleID == "PAL010" }), "missing package documentation should emit PAL010")
+            expect(invalidCatalog.contains("community.deprecated"), "deprecated packages should remain resolvable for existing preferences")
+            expect(!invalidCatalog.descriptors(language: "en").contains(where: { $0.id == "community.deprecated" }), "deprecated packages should not be offered for new selection")
+            expect(invalidCatalog.descriptors(language: "en", includingDeprecatedID: "community.deprecated").contains(where: { $0.id == "community.deprecated" }), "the currently selected deprecated package should remain visible")
         } catch {
             failures.append("could not construct invalid package fixture: \(error.localizedDescription)")
         }

@@ -7,7 +7,10 @@ struct PaletteSettingsView: View {
 
     private var selectedDescriptor: PaletteDescriptor {
         let descriptors = settings.paletteCatalog
-            .descriptors(language: settings.language == .zh ? "zh-Hans" : "en")
+            .descriptors(
+                language: settings.language == .zh ? "zh-Hans" : "en",
+                includingDeprecatedID: settings.paletteID
+            )
         return descriptors.first { $0.id == settings.paletteID }
             ?? descriptors.first { $0.isDefault }
             ?? PaletteDescriptor(
@@ -16,6 +19,10 @@ struct PaletteSettingsView: View {
                 displayName: settings.language.text("默认", "Default"),
                 shortDescription: settings.language.text("查看与选择配色", "Browse and choose palettes"),
                 inspirationNote: "",
+                authorName: "codexU contributors",
+                sourceType: "original",
+                lifecycle: .stable,
+                isOfficial: true,
                 isDefault: true
             )
     }
@@ -79,7 +86,10 @@ struct PaletteLibraryView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var descriptors: [PaletteDescriptor] {
-        settings.paletteCatalog.descriptors(language: settings.language == .zh ? "zh-Hans" : "en")
+        settings.paletteCatalog.descriptors(
+            language: settings.language == .zh ? "zh-Hans" : "en",
+            includingDeprecatedID: settings.paletteID
+        )
     }
 
     private let columns = [
@@ -183,6 +193,16 @@ private struct PaletteArtworkCard: View {
     private var lightTokens: ResolvedVisualTokens { catalog.resolve(id: descriptor.id, appearance: .light) }
     private var darkTokens: ResolvedVisualTokens { catalog.resolve(id: descriptor.id, appearance: .dark) }
 
+    private var sourceLabel: String {
+        let source = descriptor.isOfficial
+            ? language.text("codexU 精选", "codexU Curated")
+            : language.text("社区贡献 · \(descriptor.authorName)", "Community · \(descriptor.authorName)")
+        if descriptor.lifecycle == .deprecated {
+            return language.text("已弃用 · \(source)", "Deprecated · \(source)")
+        }
+        return source
+    }
+
     var body: some View {
         Button(action: onSelect) {
             ZStack {
@@ -197,12 +217,18 @@ private struct PaletteArtworkCard: View {
                         .blendMode(.overlay)
                 }
 
-                Text(descriptor.displayName)
-                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                    .tracking(0.20)
+                VStack(spacing: 1.5) {
+                    Text(descriptor.displayName)
+                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                        .tracking(0.20)
+                    Text(sourceLabel)
+                        .font(.system(size: 7.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.84))
+                        .lineLimit(1)
+                }
                     .foregroundStyle(Color.white)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4.5)
                     .background(Color.black.opacity(0.20), in: Capsule())
                     .overlay(Capsule().strokeBorder(Color.white.opacity(0.30), lineWidth: 0.7))
                     .shadow(color: Color.black.opacity(0.24), radius: 5, y: 2)
@@ -246,7 +272,7 @@ private struct PaletteArtworkCard: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: hovering)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: selected)
         .help(descriptor.shortDescription)
-        .accessibilityLabel(descriptor.displayName)
+        .accessibilityLabel("\(descriptor.displayName), \(sourceLabel)")
         .accessibilityValue(selected ? language.text("已选择", "Selected") : "")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
