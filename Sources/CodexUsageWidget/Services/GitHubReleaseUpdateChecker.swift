@@ -9,15 +9,15 @@ final class GitHubReleaseUpdateChecker {
     private let cacheSchemaVersion = 1
 
     init(
-        owner: String = "shanggqm",
-        repo: String = "codexU",
+        owner: String = AppBrand.updateOwner,
+        repo: String = AppBrand.updateRepository,
         cacheDirectory: URL = RuntimeLoadContext.live().cacheDirectory,
         session: URLSession = .shared,
         minimumAutomaticCheckInterval: TimeInterval = 24 * 60 * 60,
         now: @escaping () -> Date = Date.init
     ) {
         releasesURL = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases")!
-        cacheURL = cacheDirectory.appendingPathComponent("update-check.json", isDirectory: false)
+        cacheURL = cacheDirectory.appendingPathComponent(AppBrand.updateCacheFileName, isDirectory: false)
         self.session = session
         self.minimumAutomaticCheckInterval = minimumAutomaticCheckInterval
         self.now = now

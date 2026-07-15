@@ -233,7 +233,7 @@ struct StatusItemPresentationBuilder {
             itemLength: imageWidth + StatusItemLayoutMetrics.itemOuterPadding,
             showsNoActiveQuota: showsNoActiveQuota,
             metrics: metrics,
-            tooltip: "codexU · \(description) · \(action)",
+            tooltip: "\(AppBrand.displayName) · \(description) · \(action)",
             accessibilityValue: description
         )
     }

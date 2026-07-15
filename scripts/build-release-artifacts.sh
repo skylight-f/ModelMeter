@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+APP_NAME="${APP_NAME:-AgentDesk}"
+APP_EXECUTABLE="${APP_EXECUTABLE:-codexU}"
 
 VERSION="${1:-$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)}"
 PLIST_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)"
@@ -29,7 +31,7 @@ make release-all
 verify_asset() {
   local arch="$1"
   local expected_arch="$2"
-  local dmg="dist/codexU-${VERSION}-mac-${arch}.dmg"
+  local dmg="dist/${APP_NAME}-${VERSION}-mac-${arch}.dmg"
   local checksum="${dmg}.sha256"
   local mount_dir
 
@@ -40,8 +42,8 @@ verify_asset() {
 
   mount_dir="$(mktemp -d)"
   hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$dmg" >/dev/null
-  file "$mount_dir/codexU.app/Contents/MacOS/codexU" | grep -q "$expected_arch"
-  codesign --verify --deep --strict "$mount_dir/codexU.app"
+  file "$mount_dir/${APP_NAME}.app/Contents/MacOS/${APP_EXECUTABLE}" | grep -q "$expected_arch"
+  codesign --verify --deep --strict "$mount_dir/${APP_NAME}.app"
   hdiutil detach "$mount_dir" >/dev/null
   rmdir "$mount_dir"
 }
@@ -49,6 +51,6 @@ verify_asset() {
 verify_asset arm64 arm64
 verify_asset x86_64 x86_64
 
-echo "Release artifacts verified for codexU $VERSION"
-cat "dist/codexU-${VERSION}-mac-arm64.dmg.sha256"
-cat "dist/codexU-${VERSION}-mac-x86_64.dmg.sha256"
+echo "Release artifacts verified for ${APP_NAME} $VERSION"
+cat "dist/${APP_NAME}-${VERSION}-mac-arm64.dmg.sha256"
+cat "dist/${APP_NAME}-${VERSION}-mac-x86_64.dmg.sha256"

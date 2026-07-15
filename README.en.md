@@ -59,12 +59,12 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 
 codexU is distributed outside the Mac App Store. On first launch, macOS may block it until you manually allow it:
 
-1. Open `codexU.app` once. If macOS says it cannot be opened, cancel the dialog.
+1. Open `AgentDesk.app` once. If macOS says it cannot be opened, cancel the dialog.
 2. Open **System Settings > Privacy & Security**.
-3. In the **Security** section, click **Open Anyway** for `codexU.app`.
+3. In the **Security** section, click **Open Anyway** for `AgentDesk.app`.
 4. Confirm with Touch ID or your password, then click **Open**.
 
-You can also right-click `codexU.app` in Finder and choose **Open**, then confirm the same security prompt.
+You can also right-click `AgentDesk.app` in Finder and choose **Open**, then confirm the same security prompt.
 
 codexU needs access to local Codex data under `~/.codex/`. When Claude Code or MimoCode stats are used, it also reads local files under `~/.claude/` and `~/.local/share/mimocode/mimocode.db`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
 
@@ -72,12 +72,12 @@ codexU needs access to local Codex data under `~/.codex/`. When Claude Code or M
 
 Download the DMG for your Mac architecture from GitHub Releases:
 
-- Apple Silicon: `codexU-<version>-mac-arm64.dmg`
-- Intel: `codexU-<version>-mac-x86_64.dmg`
+- Apple Silicon: `AgentDesk-<version>-mac-arm64.dmg`
+- Intel: `AgentDesk-<version>-mac-x86_64.dmg`
 
 1. Open the DMG.
-2. Drag `codexU.app` into the `Applications` folder.
-3. Open codexU from `Applications`.
+2. Drag `AgentDesk.app` into the `Applications` folder.
+3. Open AgentDesk from `Applications`.
 4. Complete the **First Install: Privacy & Security** steps above if macOS blocks the first launch.
 
 After installation, codexU checks GitHub Releases for new versions at most once per day by default, including beta releases. The check reads public release metadata only. When an update is available, codexU opens the browser to download the DMG or view the Release page; installation remains manual. You can turn off automatic checks or run a manual check from the System section in Settings.
@@ -133,10 +133,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.0.5-mac-arm64.dmg
-dist/codexU-1.0.5-mac-arm64.dmg.sha256
-dist/codexU-1.0.5-mac-x86_64.dmg
-dist/codexU-1.0.5-mac-x86_64.dmg.sha256
+dist/AgentDesk-1.0.5-mac-arm64.dmg
+dist/AgentDesk-1.0.5-mac-arm64.dmg.sha256
+dist/AgentDesk-1.0.5-mac-x86_64.dmg
+dist/AgentDesk-1.0.5-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).
@@ -174,7 +174,7 @@ The current local Codex API exposes rolling-window usage percentages and reset t
 
 ### Does codexU support Intel Macs?
 
-Yes. Intel Macs should use `codexU-<version>-mac-x86_64.dmg`. From source, package it with `make release-intel`, or override `TARGET_TRIPLE="x86_64-apple-macos13.0"` from a compatible toolchain.
+Yes. Intel Macs should use `AgentDesk-<version>-mac-x86_64.dmg`. From source, package it with `make release-intel`, or override `TARGET_TRIPLE="x86_64-apple-macos13.0"` from a compatible toolchain.
 
 ## License
 

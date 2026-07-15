@@ -1,5 +1,6 @@
-APP_NAME := codexU
-DISPLAY_NAME := codexU
+APP_NAME := AgentDesk
+DISPLAY_NAME := AgentDesk
+EXECUTABLE_NAME := codexU
 VERSION := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist 2>/dev/null || echo 0.1.0)
 BUILD_DIR := build
 DIST_DIR := dist
@@ -42,18 +43,20 @@ build:
 	cp Resources/*.png "$(RESOURCES_DIR)/"
 	/usr/bin/xattr -dr com.apple.quarantine "$(APP_DIR)" 2>/dev/null || true
 	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SWIFTC_FEATURE_FLAGS) $(SOURCES) \
-		-o "$(MACOS_DIR)/$(APP_NAME)" \
+		-o "$(MACOS_DIR)/$(EXECUTABLE_NAME)" \
 		-framework Cocoa \
 		-framework Carbon \
 		-framework SwiftUI
 	codesign $(CODESIGN_FLAGS) "$(APP_DIR)"
 	codesign --verify --deep --strict "$(APP_DIR)"
+	rm -rf "$(BUILD_DIR)/codexU.app"
+	ln -s "$(APP_NAME).app" "$(BUILD_DIR)/codexU.app"
 
 run: build
 	open "$(APP_DIR)"
 
 probe: build
-	"$(MACOS_DIR)/$(APP_NAME)" --dump-json
+	"$(MACOS_DIR)/$(EXECUTABLE_NAME)" --dump-json
 
 test-rate-limits:
 	./scripts/test-rate-limits.sh
@@ -130,7 +133,7 @@ notarize: dmg
 	./scripts/notarize-dmg.sh
 
 verify: build
-	file "$(MACOS_DIR)/$(APP_NAME)"
+	file "$(MACOS_DIR)/$(EXECUTABLE_NAME)"
 	codesign -dv --verbose=4 "$(APP_DIR)"
 
 clean:

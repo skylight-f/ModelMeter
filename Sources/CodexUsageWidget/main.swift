@@ -371,7 +371,7 @@ struct UsageSnapshot: Equatable {
         cloudLifetimeTokens: nil,
         local: nil,
         taskBoard: nil,
-        messages: ["正在读取 codexU 数据"]
+        messages: [AppBrand.loadingMessage]
     )
 
     func replacingTaskBoard(_ taskBoard: TaskBoard?) -> UsageSnapshot {
@@ -4021,7 +4021,7 @@ struct UsageWidgetView: View {
     }
 
     private var shouldShowEnvironmentChecklist: Bool {
-        if snapshot.messages.contains("正在读取 codexU 数据") { return false }
+        if snapshot.messages.contains(AppBrand.loadingMessage) { return false }
         if store.selectedRuntimeScope == .mimoCode {
             return snapshot.local == nil
         }
@@ -4620,7 +4620,7 @@ struct SettingsPanelView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(language.text("设置", "Settings"))
                     .font(.system(size: 18, weight: .semibold, design: .rounded))
-                Text("codexU")
+                Text(AppBrand.displayName)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -9469,7 +9469,7 @@ private func localizedTaskDetail(_ detail: String, language: WidgetLanguage) -> 
 
 private func localizedReaderMessage(_ message: String, language: WidgetLanguage) -> String {
     guard !language.isChinese else { return message }
-    if message == "正在读取 codexU 数据" { return "Reading codexU data" }
+    if message == AppBrand.loadingMessage { return "Reading \(AppBrand.displayName) data" }
     if message.contains("未找到 codex") { return "Codex executable not found" }
     if message.contains("app-server 启动失败") { return "Failed to start app-server" }
     if message.contains("app-server 响应超时") { return "app-server response timed out" }
@@ -9818,7 +9818,7 @@ final class MainAppWindow: NSWindow {
             backing: .buffered,
             defer: false
         )
-        title = "codexU"
+        title = AppBrand.displayName
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         isReleasedWhenClosed = false
@@ -10061,10 +10061,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
 
-        let appMenu = NSMenu(title: "codexU")
+        let appMenu = NSMenu(title: AppBrand.displayName)
         appMenuItem.submenu = appMenu
         appMenu.addItem(NSMenuItem(
-            title: language.text("关于 codexU", "About codexU"),
+            title: language.text("关于 \(AppBrand.displayName)", "About \(AppBrand.displayName)"),
             action: #selector(showAboutPanel),
             keyEquivalent: ""
         ))
@@ -10077,7 +10077,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         appMenu.addItem(.separator())
 
         let hideItem = NSMenuItem(
-            title: language.text("隐藏 codexU", "Hide codexU"),
+            title: language.text("隐藏 \(AppBrand.displayName)", "Hide \(AppBrand.displayName)"),
             action: #selector(NSApplication.hide(_:)),
             keyEquivalent: "h"
         )
@@ -10102,7 +10102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         appMenu.addItem(showAllItem)
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(
-            title: language.text("退出 codexU", "Quit codexU"),
+            title: language.text("退出 \(AppBrand.displayName)", "Quit \(AppBrand.displayName)"),
             action: #selector(quitFromMenu),
             keyEquivalent: "q"
         ))
@@ -10413,7 +10413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             appearance: appearance
         )
         button.toolTip = presentation.tooltip
-        button.setAccessibilityLabel("codexU")
+        button.setAccessibilityLabel(AppBrand.displayName)
         button.setAccessibilityValue(presentation.accessibilityValue)
     }
 

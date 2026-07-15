@@ -86,12 +86,12 @@ API 等效价值 =
 
 codexU 目前通过 GitHub Release 的 DMG 安装包分发，不经过 Mac App Store。第一次打开时，macOS 可能会拦截，需要手动允许：
 
-1. 打开 `codexU.app` 一次。如果系统提示无法打开，先取消弹窗。
+1. 打开 `AgentDesk.app` 一次。如果系统提示无法打开，先取消弹窗。
 2. 打开 **系统设置 > 隐私与安全性**。
-3. 在 **安全性** 区域找到 `codexU.app`，点击 **仍要打开**。
+3. 在 **安全性** 区域找到 `AgentDesk.app`，点击 **仍要打开**。
 4. 使用 Touch ID 或密码确认，然后点击 **打开**。
 
-也可以在 Finder 中右键点击 `codexU.app`，选择 **打开**，再确认系统安全提示。
+也可以在 Finder 中右键点击 `AgentDesk.app`，选择 **打开**，再确认系统安全提示。
 
 codexU 需要读取本机 `~/.codex/` 下的 Codex 数据；如果启用 Claude Code 或 MimoCode 统计，还会分别读取 `~/.claude/` 下的本机 transcript、任务和状态缓存，以及 `~/.local/share/mimocode/mimocode.db`。如果 macOS 弹出文件或文件夹访问授权，请允许访问，否则小组件无法读取本机 usage、线程和自动化任务信息。
 
@@ -99,12 +99,12 @@ codexU 需要读取本机 `~/.codex/` 下的 Codex 数据；如果启用 Claude 
 
 从 GitHub Release 下载与你的 Mac 芯片匹配的安装包：
 
-- Apple Silicon：`codexU-<version>-mac-arm64.dmg`
-- Intel：`codexU-<version>-mac-x86_64.dmg`
+- Apple Silicon：`AgentDesk-<version>-mac-arm64.dmg`
+- Intel：`AgentDesk-<version>-mac-x86_64.dmg`
 
 1. 打开 DMG。
-2. 将 `codexU.app` 拖到 `Applications` 文件夹。
-3. 从 `Applications` 打开 codexU。
+2. 将 `AgentDesk.app` 拖到 `Applications` 文件夹。
+3. 从 `Applications` 打开 AgentDesk。
 4. 按上面的 **首次安装：隐私与安全** 步骤完成手动放行。
 
 安装后，codexU 默认每天最多自动检查一次 GitHub Release 是否有新版本，并接收 beta 版本。该检查只读取公开 Release 元数据；发现新版时会打开浏览器下载 DMG 或查看 Release 页面，安装仍由你手动完成。可以在设置窗口的系统区关闭自动检查，或手动点击“检查更新”。
@@ -160,10 +160,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.0.5-mac-arm64.dmg
-dist/codexU-1.0.5-mac-arm64.dmg.sha256
-dist/codexU-1.0.5-mac-x86_64.dmg
-dist/codexU-1.0.5-mac-x86_64.dmg.sha256
+dist/AgentDesk-1.0.5-mac-arm64.dmg
+dist/AgentDesk-1.0.5-mac-arm64.dmg.sha256
+dist/AgentDesk-1.0.5-mac-x86_64.dmg
+dist/AgentDesk-1.0.5-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
@@ -201,7 +201,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 
 ### 支持 Intel Mac 吗？
 
-支持。Intel Mac 下载 `codexU-<version>-mac-x86_64.dmg`。从源码打包时使用 `make release-intel`，或在支持对应 target 的机器上使用 `TARGET_TRIPLE="x86_64-apple-macos13.0"`。
+支持。Intel Mac 下载 `AgentDesk-<version>-mac-x86_64.dmg`。从源码打包时使用 `make release-intel`，或在支持对应 target 的机器上使用 `TARGET_TRIPLE="x86_64-apple-macos13.0"`。
 
 ## License
 
