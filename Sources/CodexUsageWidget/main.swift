@@ -3821,8 +3821,11 @@ struct SettingsPanelView: View {
     private var language: WidgetLanguage { settings.language }
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16) {
+        ZStack {
+            LiquidGlassWindowBackdrop(colorScheme: colorScheme)
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
                 settingsHeader
                 settingsSection(
                     title: language.text("通用", "General"),
@@ -4028,11 +4031,13 @@ struct SettingsPanelView: View {
                         language: language
                     )
                 }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 52)
+                .padding(.bottom, 20)
             }
         }
-        .padding(20)
         .frame(width: 480, alignment: .topLeading)
-        .background(FixedVisualPalette.sectionFill(colorScheme).opacity(0.35))
         .appVisualEnvironment(
             catalog: settings.paletteCatalog,
             paletteID: settings.paletteID,
@@ -9159,20 +9164,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         if settingsWindow == nil {
             let settingsWindow = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 480, height: 620),
-                styleMask: [.titled, .closable, .miniaturizable],
+                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
             settingsWindow.title = settings.language.text("设置", "Settings")
+            settingsWindow.titleVisibility = .hidden
+            settingsWindow.titlebarAppearsTransparent = true
             settingsWindow.isReleasedWhenClosed = false
+            settingsWindow.isOpaque = false
+            settingsWindow.backgroundColor = .clear
+            settingsWindow.hasShadow = true
+            settingsWindow.isMovableByWindowBackground = true
+            settingsWindow.acceptsMouseMovedEvents = true
             settingsWindow.delegate = self
-            settingsWindow.contentView = NSHostingView(
+            settingsWindow.contentView = GlassHostingContainer(
                 rootView: SettingsPanelView(
                     settings: settings,
                     store: store,
                     updateStore: updateStore,
                     onOpenPaletteLibrary: { [weak self] in self?.openPaletteLibraryWindow() }
-                )
+                ),
+                cornerRadius: 20
             )
             settingsWindow.center()
             self.settingsWindow = settingsWindow
@@ -9190,7 +9203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private func openPaletteLibraryWindow() {
         if paletteLibraryWindow == nil {
             let paletteLibraryWindow = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 760, height: 620),
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 320),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
@@ -9205,7 +9218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             paletteLibraryWindow.isMovableByWindowBackground = true
             paletteLibraryWindow.acceptsMouseMovedEvents = true
             paletteLibraryWindow.delegate = self
-            paletteLibraryWindow.contentMinSize = NSSize(width: 620, height: 520)
+            paletteLibraryWindow.contentMinSize = NSSize(width: 660, height: 320)
             paletteLibraryWindow.contentView = GlassHostingContainer(
                 rootView: PaletteLibraryView(settings: settings),
                 cornerRadius: 20

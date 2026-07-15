@@ -79,13 +79,14 @@ struct PaletteLibraryView: View {
     }
 
     private let columns = [
-        GridItem(.flexible(), spacing: 14),
-        GridItem(.flexible(), spacing: 14)
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
     ]
 
     var body: some View {
         ZStack {
-            PaletteLibraryBackdrop(colorScheme: colorScheme)
+            LiquidGlassWindowBackdrop(colorScheme: colorScheme)
 
             VStack(spacing: 0) {
                 HStack {
@@ -94,23 +95,25 @@ struct PaletteLibraryView: View {
                         settings.resetPalette()
                     } label: {
                         Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 30, height: 30)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .frame(width: 26, height: 26)
                             .background(.ultraThinMaterial, in: Circle())
                             .overlay(Circle().strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.16 : 0.48), lineWidth: 0.75))
                     }
                     .buttonStyle(.plain)
+                    .frame(width: 40, height: 34)
+                    .contentShape(Rectangle())
                     .disabled(settings.paletteID == PaletteCatalog.defaultPaletteID)
                     .opacity(settings.paletteID == PaletteCatalog.defaultPaletteID ? 0.34 : 1)
                     .help(settings.language.text("恢复默认配色", "Restore Default Palette"))
                     .accessibilityLabel(settings.language.text("恢复默认配色", "Restore Default Palette"))
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 10)
-                .frame(height: 48)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .frame(height: 42)
 
                 ScrollView(.vertical, showsIndicators: true) {
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                         ForEach(descriptors) { descriptor in
                             PaletteArtworkCard(
                                 descriptor: descriptor,
@@ -122,13 +125,13 @@ struct PaletteLibraryView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .padding(.bottom, 20)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                    .padding(.bottom, 16)
                 }
             }
         }
-        .frame(minWidth: 620, minHeight: 520)
+        .frame(minWidth: 660, minHeight: 300)
         .appVisualEnvironment(
             catalog: settings.paletteCatalog,
             paletteID: settings.paletteID,
@@ -138,7 +141,7 @@ struct PaletteLibraryView: View {
     }
 }
 
-private struct PaletteLibraryBackdrop: View {
+struct LiquidGlassWindowBackdrop: View {
     let colorScheme: ColorScheme
 
     var body: some View {
@@ -191,37 +194,37 @@ private struct PaletteArtworkCard: View {
                 }
 
                 Text(descriptor.displayName)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .tracking(0.35)
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    .tracking(0.20)
                     .foregroundStyle(Color.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
                     .background(Color.black.opacity(0.20), in: Capsule())
                     .overlay(Capsule().strokeBorder(Color.white.opacity(0.30), lineWidth: 0.7))
-                    .shadow(color: Color.black.opacity(0.24), radius: 8, y: 3)
+                    .shadow(color: Color.black.opacity(0.24), radius: 5, y: 2)
 
                 if selected {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(Color.white)
-                        .frame(width: 24, height: 24)
+                        .frame(width: 19, height: 19)
                         .background(.ultraThinMaterial, in: Circle())
                         .overlay(Circle().strokeBorder(Color.white.opacity(0.48), lineWidth: 0.8))
-                        .shadow(color: Color.black.opacity(0.22), radius: 5, y: 2)
-                        .padding(10)
+                        .shadow(color: Color.black.opacity(0.22), radius: 4, y: 1)
+                        .padding(7)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .accessibilityHidden(true)
                 }
             }
-            .aspectRatio(2.20, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .aspectRatio(2.15, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(
                         selected || focused
                             ? lightTokens.selection.focusRing.color
                             : Color.white.opacity(hovering ? 0.52 : 0.24),
-                        lineWidth: selected || focused ? 2.4 : 0.8
+                        lineWidth: selected || focused ? 2.0 : 0.7
                     )
             }
             .brightness(hovering ? 0.035 : 0)
@@ -229,8 +232,8 @@ private struct PaletteArtworkCard: View {
                 color: selected
                     ? lightTokens.selection.focusRing.color.opacity(0.30)
                     : Color.black.opacity(hovering ? 0.24 : 0.15),
-                radius: selected ? 16 : (hovering ? 14 : 9),
-                y: hovering ? 7 : 4
+                radius: selected ? 10 : (hovering ? 8 : 5),
+                y: hovering ? 4 : 2
             )
         }
         .buttonStyle(.plain)
