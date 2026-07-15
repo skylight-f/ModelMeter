@@ -32,7 +32,7 @@ else
 CODESIGN_FLAGS := --force --deep --options runtime --timestamp --sign "$(SIGN_IDENTITY)" $(CODESIGN_EXTRA_FLAGS)
 endif
 
-.PHONY: build run probe test-rate-limits test-statistics-time-zone test-token-counter test-particle-animation test-palettes test-macos-compatibility install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
+.PHONY: build run probe test-rate-limits test-statistics-time-zone test-token-counter test-task-runtime test-performance-monitor test-phase-one-gate test-particle-animation test-palettes test-macos-compatibility phase-one-check phase-one-soak install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
 
 build:
 	rm -rf "$(APP_DIR)"
@@ -65,6 +65,15 @@ test-statistics-time-zone:
 test-token-counter: build
 	"$(MACOS_DIR)/$(APP_NAME)" --self-test-token-counter
 
+test-task-runtime: build
+	"$(MACOS_DIR)/$(APP_NAME)" --self-test-task-runtime
+
+test-performance-monitor: build
+	"$(MACOS_DIR)/$(APP_NAME)" --self-test-performance-monitor
+
+test-phase-one-gate: build
+	"$(MACOS_DIR)/$(APP_NAME)" --self-test-phase-one-gate
+
 test-macos-compatibility:
 	./scripts/test-macos-compatibility.sh
 
@@ -73,6 +82,12 @@ test-particle-animation:
 
 test-palettes:
 	./scripts/test-palettes.sh
+
+phase-one-check: build
+	./scripts/phase-one-check.sh
+
+phase-one-soak: build
+	./scripts/phase-one-soak.sh
 
 install: build
 	rm -rf "/Applications/$(APP_NAME).app"

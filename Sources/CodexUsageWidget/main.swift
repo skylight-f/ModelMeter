@@ -10460,6 +10460,14 @@ struct codexUMain {
             exit(PerformanceMonitorSelfTest.run() ? 0 : 1)
         }
 
+        if CommandLine.arguments.contains("--self-test-phase-one-gate") {
+            exit(PhaseOneGateSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--evaluate-phase-one-gate") {
+            exit(PhaseOneGateCommand.run(arguments: CommandLine.arguments))
+        }
+
         if CommandLine.arguments.contains("--dump-json") {
             dumpJSON(MultiRuntimeUsageReader().load())
             return
