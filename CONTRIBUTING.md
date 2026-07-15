@@ -10,6 +10,12 @@ Build the app:
 make build
 ```
 
+Run the global shortcut validation and exclusive-conflict self-test:
+
+```sh
+build/codexU.app/Contents/MacOS/codexU --self-test-global-shortcut
+```
+
 Run locally:
 
 ```sh

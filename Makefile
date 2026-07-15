@@ -6,7 +6,7 @@ DIST_DIR := dist
 APP_DIR := $(BUILD_DIR)/$(APP_NAME).app
 MACOS_DIR := $(APP_DIR)/Contents/MacOS
 RESOURCES_DIR := $(APP_DIR)/Contents/Resources
-SOURCES := Sources/CodexUsageWidget/main.swift
+SOURCES := $(shell find Sources/CodexUsageWidget -name '*.swift' | sort)
 APP_ICON := Resources/codexU.icns
 DEPLOYMENT_TARGET ?= 14.0
 HOST_ARCH := $(shell uname -m)
@@ -26,14 +26,16 @@ else
 CODESIGN_FLAGS := --force --deep --options runtime --timestamp --sign "$(SIGN_IDENTITY)" $(CODESIGN_EXTRA_FLAGS)
 endif
 
-.PHONY: build run probe install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all notarize verify clean clean-dist
+.PHONY: build run probe test-rate-limits test-statistics-time-zone install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
 
 build:
 	rm -rf "$(APP_DIR)"
 	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)"
 	cp Resources/Info.plist "$(APP_DIR)/Contents/Info.plist"
 	cp "$(APP_ICON)" "$(RESOURCES_DIR)/"
-	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) "$(SOURCES)" \
+	cp Resources/*.png "$(RESOURCES_DIR)/"
+	/usr/bin/xattr -dr com.apple.quarantine "$(APP_DIR)" 2>/dev/null || true
+	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SOURCES) \
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		-framework Cocoa \
 		-framework Carbon \
@@ -46,6 +48,12 @@ run: build
 
 probe: build
 	"$(MACOS_DIR)/$(APP_NAME)" --dump-json
+
+test-rate-limits:
+	./scripts/test-rate-limits.sh
+
+test-statistics-time-zone:
+	./scripts/test-statistics-time-zone.sh
 
 install: build
 	rm -rf "/Applications/$(APP_NAME).app"
@@ -92,6 +100,12 @@ release-intel:
 release-all: clean-dist
 	$(MAKE) release-arm64
 	$(MAKE) release-intel
+
+release-package:
+	./scripts/build-release-artifacts.sh "$(VERSION)"
+
+release-check:
+	./scripts/check-release-ready.sh "$(VERSION)"
 
 notarize: dmg
 	APPLE_ID="$(APPLE_ID)" \

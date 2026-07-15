@@ -1,300 +1,163 @@
 # codexU Design System
 
-本文档定义 codexU macOS 桌面看板的视觉设计体系。目标是让界面从“有玻璃效果的自定义看板”升级为更接近 Apple 原生设计语言的工业级系统：中性材质建立层级，高饱和品牌色负责关键强调，状态色和数据色保持语义清晰。
+本文档定义 codexU 的长期视觉与交互规范。它不是某个版本或某次改版的复盘，而是后续所有界面迭代都应遵守的设计边界。
 
-## 设计目标
+## 设计立场
 
-- Apple 原生感：优先使用系统文本层级、系统材质、动态颜色和 SF Symbols，避免网页式大面积色块。
-- 品牌一致性：主色贴合 codexU logo 的蓝紫高饱和渐变，而不是当前偏青绿的数据仪表盘风格。
-- 高信息密度：保持当前看板的信息容量，但让颜色只承担状态、数据和品牌强调，不干扰阅读。
-- 动态适配：Light、Dark、High Contrast、Reduce Transparency、不同壁纸背景下都要稳定可读。
-- 工业级维护：禁止组件内散落硬编码 RGB。所有颜色必须来自统一 token。
+codexU 是一个 macOS 菜单栏和桌面工作型工具。它应该安静、清晰、可信，优先服务高频扫视和快速判断，而不是制造展示感。
 
-## 当前诊断
+- 像原生工具，不像网页落地页。
+- 以 Liquid Glass 为核心视觉范式，用半透明材质、柔和边界和环境融合建立空间感。
+- 信息密度高，但层级清楚。
+- 颜色用于语义和强调，不用于装饰堆叠。
+- 数据口径诚实，不把估算包装成精确事实。
+- 默认保护隐私，不展示用户内容正文。
 
-### 已有优势
+## 信息原则
 
-- 使用 `.primary`、`.secondary`、`.tertiary` 作为文本层级，方向正确。
-- macOS 26 使用 `GlassEffectContainer`，低版本使用 `NSVisualEffectView`，材质路线成立。
-- 信息架构清楚：额度、token、趋势、任务看板有明确区域。
-- SF Symbols 使用统一，和 macOS 原生生态一致。
+- 先展示用户要做判断所需的信息，再展示解释性细节。
+- 聚合信息优先于原始日志，趋势和排行优先于长文本。
+- 文案使用用户语言，不暴露内部字段名。
+- 不确定、回退、估算的数据必须明确标注。
+- 桌面首屏不展示 prompt、回复正文、tool arguments、auth、raw logs 或附件内容。
 
-### 主要问题
+## 视觉语言
 
-- 颜色没有 token 化：当前 Swift 文件中存在 21 组硬编码 `Color(red:green:blue:)`。
-- 语义复用混乱：绿色同时代表 5h 额度、缓存、成功、正收益；橙色同时代表进行中、警告、输出、亏损。
-- 主色偏离 logo：logo 主色是蓝紫高饱和渐变，界面主视觉却偏青绿和灰蓝。
-- 材质叠加偏重：`Color.white.opacity(...)` 被大量用于卡片和轨道，在复杂壁纸上容易变脏或失去边界。
-- 大面积染色过多：任务列和图表背景使用色彩填充时，容易削弱 Apple 风格的“安静内容层 + 克制强调”。
+### 材质
 
-## Apple 风格原则
+- 界面基调是 Liquid Glass：透明、轻盈、带环境感，但始终以内容可读为前提。
+- 窗口和大分组使用系统玻璃材质建立空间层级。
+- 卡片使用轻量玻璃面和细描边，边界清楚但不厚重。
+- 玻璃层级必须克制；不要把每个内部元素都做成强玻璃。
+- 高光、描边、阴影只用于表达层级和交互状态，不作为装饰元素堆叠。
+- 不使用大面积渐变、装饰性光斑、背景 orb 或过度阴影。
+- 复杂壁纸、浅色模式、深色模式下都必须保持文字可读。
 
-Apple 的颜色和材质体系强调适配性、语义和层级。落地到 codexU，应遵循以下规则：
+### 色彩
 
-1. 先材质，后颜色。窗口、分组、卡片的层级由 material、fill、separator、shadow 建立，颜色只作为强调。
-2. 色彩有职责边界。Brand、Status、Data、Task、Surface 分开维护，不跨角色复用。
-3. 饱和但克制。高饱和色可以用于 logo、主额度环、关键数值和主操作，不用于大面积背景。
-4. 避免玻璃叠玻璃。外层可以是 Liquid Glass 或 visual effect，内容卡片应使用薄 fill、separator 和 vibrancy，避免每层都套强玻璃。
-5. 默认状态安静，交互状态发光。静态界面低对比、低噪音；hover、press、refresh、warning 才提高亮度或边框。
-6. 文字不透明。文本尽量使用系统语义色，不使用自定义半透明色降低可读性。
+色彩分为四类，不跨职责复用：
 
-官方参考：
-
-- Apple HIG Color: https://developer.apple.com/design/human-interface-guidelines/color
-- Apple HIG Materials: https://developer.apple.com/design/human-interface-guidelines/materials
-- Apple HIG Dark Mode: https://developer.apple.com/design/human-interface-guidelines/dark-mode
-- WWDC25 Liquid Glass: https://developer.apple.com/videos/play/wwdc2025/219/
-
-## Logo 色彩抽样
-
-从 `Resources/codexU-icon.png` 抽取到的主要可见色：
-
-| Role | Hex | 用途 |
-| --- | --- | --- |
-| Logo Blue Deep | `#1F59ED` | 品牌主色、主按钮、重点额度 |
-| Logo Blue Vivid | `#2866F7` | 默认主强调色 |
-| Logo Blue Light | `#4778FB` | 渐变中段、hover、图表高亮 |
-| Logo Lavender | `#A195F4` | 辅助品牌色、7d 额度 |
-| Logo Pink Violet | `#DAA3FA` | 高光、halo、轻量装饰 |
-| Logo Pale Highlight | `#EAC7FB` | 高光边缘，不用于正文或状态 |
-
-推荐主渐变：
-
-```text
-Codex Aurora: #1F59ED 0% -> #4778FB 42% -> #A195F4 72% -> #DAA3FA 100%
-```
-
-使用限制：主渐变只用于 logo 呼应、额度主环、主操作强调和极少量装饰高光。任务列、普通卡片、正文区域不得大面积使用渐变。
-
-## 色彩 Token
-
-### Brand
-
-| Token | Light | Dark | 用途 |
-| --- | --- | --- | --- |
-| `brand.primary` | `#2866F7` | `#5E8CFF` | 主品牌色、主要强调 |
-| `brand.primaryStrong` | `#1F59ED` | `#7BA0FF` | 主按钮 pressed、额度主环深色段 |
-| `brand.secondary` | `#8B6DFF` | `#A195F4` | 辅助品牌色、7d 额度 |
-| `brand.highlight` | `#DAA3FA` | `#E7B8FF` | 高光、ring glow、稀疏装饰 |
-| `brand.tintFill` | `#2866F7` at 10% | `#5E8CFF` at 16% | 品牌轻背景 |
-| `brand.tintStroke` | `#2866F7` at 22% | `#7BA0FF` at 28% | 品牌边框 |
-
-### Surface
-
-Surface 不建议用固定 HEX 实现，SwiftUI/AppKit 应优先使用系统材质和语义色。下表是设计意图。
-
-| Token | 推荐实现 | 用途 |
-| --- | --- | --- |
-| `surface.window` | `NSVisualEffectView.material = .hudWindow` 或 `GlassEffect .regular` | 外层窗口 |
-| `surface.section` | `Color.primary.opacity(0.045)` + subtle stroke | 大区域分组 |
-| `surface.card` | `Color.white.opacity(0.13)` light glass / dynamic fill | 指标卡片 |
-| `surface.cardElevated` | card fill + stronger separator + soft shadow | 任务卡片 |
-| `surface.separator` | `Color.primary.opacity(0.08)` | 分割线和描边 |
-| `surface.track` | `Color.primary.opacity(0.10)` | 进度条/环形轨道 |
-| `surface.hover` | `Color.primary.opacity(0.08)` | hover 背景 |
-| `surface.pressed` | `Color.primary.opacity(0.12)` | pressed 背景 |
-
-Reduce Transparency 开启时，`surface.window` 和 `surface.card` 必须提高不透明度，避免背景干扰正文。
-
-### Text
-
-| Token | 推荐实现 | 用途 |
-| --- | --- | --- |
-| `text.primary` | `.primary` | 主要数值、标题 |
-| `text.secondary` | `.secondary` | 标签、说明、次要元数据 |
-| `text.tertiary` | `.tertiary` | 空状态、快捷键、弱提示 |
-| `text.onAccent` | white or black dynamic | 彩色按钮或高饱和 chip 上的文字 |
-
-规则：正文和关键数值不得使用半透明品牌色；小字号文本优先走系统 label 色。
-
-### Status
-
-采用接近 Apple 系统色的高饱和状态色，但只用于小面积图标、圆点、chip、边框。
-
-| Token | Light | Dark | 用途 |
-| --- | --- | --- | --- |
-| `status.success` | `#34C759` | `#30D158` | 成功、可用、完成 |
-| `status.info` | `#007AFF` | `#0A84FF` | 信息、默认链接、普通提示 |
-| `status.warning` | `#FF9F0A` | `#FF9F0A` | 需要注意、进行中 |
-| `status.danger` | `#FF3B30` | `#FF453A` | 错误、额度危险 |
-| `status.neutral` | `#8E8E93` | `#98989D` | 待处理、未知、禁用 |
-
-规则：warning 和 active 可以同色，但 error/danger 必须独立为红色；success 不再承担品牌主色职责。
-
-### Data
-
-数据色必须和状态色分离。图表和 token 拆分优先使用可区分的冷暖组合。
-
-| Token | Hex | 用途 |
-| --- | --- | --- |
-| `data.quotaPrimary` | `#2866F7` | 5h 额度，贴合 logo 主色 |
-| `data.quotaPrimaryHighlight` | `#7BA0FF` | 5h 额度高光 |
-| `data.quotaSecondary` | `#8B6DFF` | 7d 额度，品牌紫 |
-| `data.quotaSecondaryHighlight` | `#DAA3FA` | 7d 额度高光 |
-| `data.input` | `#0A84FF` | 未缓存输入 |
-| `data.cached` | `#8B6DFF` | 缓存命中；缓存占比通常很高，使用品牌紫避免绿色成为主视觉 |
-| `data.output` | `#FF9F0A` | 输出 token |
-| `data.reasoning` | `#BF5AF2` | reasoning 输出，预留 |
-| `data.zero` | `#8E8E93` at 35% | 0 值、空柱 |
-
-绿色只保留给成功、完成等小面积状态语义，不用于可能占据大面积的数据条。
-
-### Task Board
-
-任务看板应使用“低饱和背景 + 高饱和小面积标识”。
-
-| Kind | Accent | Fill | Icon |
-| --- | --- | --- | --- |
-| Active | `#FF9F0A` | accent at 7% | `record.circle` |
-| Pending | `#8E8E93` | accent at 6% | `circle` |
-| Scheduled | `#8B6DFF` | accent at 7% | `clock` |
-| Done | `#34C759` | accent at 7% | `checkmark.circle.fill` |
+| 类别 | 用途 |
+| --- | --- |
+| Brand | logo 呼应、主要数据强调、主操作 |
+| Status | 成功、警告、错误、等待、完成等状态 |
+| Data | 图表、token 拆分、趋势强弱 |
+| Surface | 窗口、分组、卡片、轨道、分割线 |
 
 规则：
 
-- 列背景只用 6% 到 8% 透明度。
-- 任务卡片背景保持中性，不随列状态大面积染色。
-- chip 可以使用 13% 到 16% 透明度填充，文字使用 accent 本色。
-- 任务卡片内状态色面积控制在图标、chip、avatar 三处以内。
+- Brand 主色保持蓝紫体系。
+- 绿色只表示成功、完成或健康状态，不作为普通数据主色。
+- 橙色只表示注意、进行中或输出类数据，不作为危险色。
+- 红色只表示错误、危险或不可继续。
+- 图表色阶使用同一语义色族的明度变化，避免彩虹色。
+- 进度填充使用同一蓝紫色族时，从浅色起点平滑过渡到深色终点。
+- 新增颜色必须进入统一 palette，并说明所属类别。
+- 持续动效只用于表达数据流向或活动性；粒子应沿有效数据弧段单向流动，不进入无效或已消耗轨道，运动速度随剩余比例连续变化，剩余越多越活跃；仅最快的一小部分粒子允许使用短促、逐级衰减的点状拖尾，避免模糊阴影；数量与亮度保持克制，并遵循系统“减少动态效果”设置。
 
-## 组件用色规范
+### 字体
 
-### Window
+- 使用系统字体和系统文本层级。
+- 关键数值使用圆角数字风格和等宽数字，减少刷新跳动。
+- 小字号文字使用 `.secondary` 或 `.tertiary` 语义色。
+- 不使用随窗口宽度连续缩放的字体。
+- 标题、数值、说明、标签必须有稳定层级，不用同一字号硬撑所有信息。
 
-- 外层使用系统材质，不手动铺满品牌渐变。
-- 圆角保持 24px，与当前窗口一致。
-- 外层 stroke 使用 `Color.white.opacity(0.16)` 或系统 separator 的动态替代，但不要超过 1px 视觉重量。
+## 布局原则
+
+- 所有区域遵循清晰的层级：窗口、分组、卡片、行、控件。
+- 卡片之间对齐优先于单卡内容“看起来刚好”。
+- 并列卡片必须共享顶部基线；同一行卡片需要等高时必须显式约束高度。
+- 标题栏高度、图标尺寸、右侧控件高度应稳定，不随文案或数据刷新抖动。
+- 卡片内边距、行距、圆角、列表间距使用统一设计 token，不在局部组件随意新增数值。
+- 不把卡片嵌套在卡片里；重复列表项可以使用轻量行背景。
+- 文本不得溢出容器；长项目名、路径、数字都必须有截断或缩放策略。
+
+## 组件规范
 
 ### Header
 
-- logo 保持原图，不额外加背景色。
-- `codexU` 使用 `.primary`，不使用品牌蓝，避免与 logo 争夺焦点。
-- account、plan pill 使用中性 fill。只有需要提示升级、错误或未登录时才引入状态色。
-- icon button 默认中性，hover 或 active 时可使用 `brand.tintFill`。
+- logo、产品名、账户状态、全局操作分区明确。
+- 全局操作使用 icon button，必要时提供 tooltip。
+- 状态 pill 使用中性样式，只有异常或风险时引入状态色。
 
-### Quota Ring
+### Tabs
 
-- 5h 外环使用 `data.quotaPrimary` 到 `data.quotaPrimaryHighlight`。
-- 7d 内环使用 `data.quotaSecondary` 到 `data.quotaSecondaryHighlight`。
-- 轨道使用 `surface.track`，不要使用深青色轨道。
-- 额度低于 15% 时，外环可切换为 `status.danger`，但保留 ring 结构和轨道。
-- 5h/7d 使用比例只在环形图表达，不再额外展示横向窗口进度条；重置时间用两行小型摘要放在环形图下方。
+- tab 是内容区标题的一部分，位于内容区左侧。
+- tab 必须包含图标和短文本。
+- 当前 tab 清晰可见，但不使用强品牌色块压过内容。
+- tab 行右侧用于放当前视图 summary，不放主要操作。
 
-### Token Cards
+### Cards
 
-- 卡片背景使用 `surface.card`，不要因为指标类型改变卡片底色。
-- 指标标题图标使用中性图标底；拆分条使用 `data.input / data.cached / data.output`。
-- 今日、近 7 天、累计三个卡片不再分别用不同主色点，避免伪装成不同状态。
+- 卡片标题由图标、标题和可选右侧控件组成。
+- 右侧控件只承载筛选、口径、轻量状态，不承载长说明。
+- 说明性长文放 tooltip 或文档，不塞进标题栏。
+- 卡片底部对齐比局部内容紧凑更重要。
 
-### Progress
+### Lists
 
-- “Value progress” 使用本月 API 等效价值作为当前值，进度条终点是 `2亿 tokens/天 * 30天` 按加权均价折算的满额月价值。
-- 当前加权均价使用 Codex-heavy token mix：30% 未缓存输入、50% 缓存输入、20% 输出；按当前 `chat-latest` 参考价折算为 `$7.75/M tokens`，满额月价值约 `$46,500`。
-- 进度条必须保留 Plus、Pro100、Pro200 三个订阅成本刻度，并显示满额月价值；标签不重复展示金额。
-- 由于 `$20/$100/$200` 相对满额月价值很小，进度条使用分段压缩轴：订阅成本段占前 28%，Pro200 到满额月价值占剩余长度。
-- 底部不展示“距某档还差多少”和计价公式，避免信息噪音；计价口径保留在设计文档和代码注释中。
-- 金额数值保持 `.primary`，不要随状态改成橙色或绿色；状态色只作用于图标、条、刻度和说明文本。
+- 列表项结构保持稳定：名称、辅助信息、主数值、次数值、相对条形。
+- 主数值右对齐，名称左对齐。
+- 行间距稳定，刷新时不产生明显跳动。
+- 进度条只表达相对关系，不替代精确数值。
 
-### Mini Trend
+### Charts
 
-- 今日柱使用 `brand.primary`。
-- 历史柱使用 `brand.primary` at 55%。
-- 0 值柱使用 `data.zero`。
+- 图表必须服务一个明确问题：趋势、分布、排行或构成。
+- 轴、图例、tooltip 的位置保持稳定。
+- 图例色块和图中标记大小保持一致。
+- hover tooltip 只显示必要聚合数据，不显示敏感原文。
+- 空值、零值、未来日期和缺失数据必须有不同语义，不用同一种强提示。
 
-### Task Cards
+### Menu Bar Status
 
-- 卡片背景使用中性 elevated surface。
-- 标题 `.primary`，详情 `.secondary`，时间 `.tertiary`。
-- 状态 chip 使用对应 task accent。
-- 不用整张卡片染成状态色，避免看板变成彩色块堆叠。
+- 状态栏使用简约、经典、丰富三档稳定密度；模式控制表达方式，指标选择控制内容，两者不能通过排列组合复制多套业务逻辑。
+- 状态栏图片背景保持透明，不自绘常驻灰色胶囊；hover/pressed 背景由 macOS 状态栏负责。
+- 简约模式不显示 Runtime Logo，只使用加粗的 5h/7d 同心双环；两条环线必须共用圆心并保留透明间隙，不得重叠或粘连。经典模式的独立微型环内只保留百分比数字；丰富模式使用带标签的线性进度条。
+- 5h 进度固定复用主界面浅蓝到品牌蓝的渐变，7d 固定复用粉紫到品牌紫的渐变；颜色标识额度窗口，不随已用/剩余口径或百分比切换。
+- “已用量 / 剩余量”必须同时作用于环、条、数字、tooltip 和可访问性文案；已用按顺时针/左到右绘制，剩余按逆时针/右到左绘制，状态栏内不额外增加口径文字。
+- 经典和丰富模式的 Runtime 图标使用 18pt 常规状态栏尺寸；简约模式外环/内环分别使用不低于 2.5pt/2.2pt 的线宽，并保持至少 0.75pt 的环间径向间隙。
+- 状态栏 Runtime 图标使用从原始品牌 Logo 确定性派生的透明单色模板，不直接复用白底彩色 PNG，也不使用无关通用图标替代；图标和文字必须在 `NSStatusBarButton.effectiveAppearance` 下解析系统动态色，以匹配桌面自动选择的黑色或白色菜单栏前景。
+- 今日总 token 在状态栏只显示垂直居中的紧凑数字，不增加 `T` 等冗余标签；完整口径保留在 tooltip 和可访问性文案。
+- 今日总 token 使用系统菜单栏正文尺寸；5h/7d 标签与重置截止时间使用系统前景色的辅助层级，但与背景的对比必须明显高于占位/禁用文字，并与主百分比保持可辨的主次色差。
+- 状态栏宽度只由模式与可见指标决定；数据刷新、位数变化和不可用状态不得推动相邻菜单栏图标移动。
+- 缺失额度使用中性空轨道和 `--`，不绘制蓝紫填充，不把缺失伪造成 0。
+- 设置页预览与真实状态栏必须共享同一展示模型和绘制器。
 
-## 饱和版 Apple 风配色方案
+## 文案规范
 
-这套方案比当前界面饱和度更高，但仍按 Apple 风格控制使用面积。
+- 标题使用结果导向文案，例如“用量趋势”“项目排行”，避免内部概念。
+- 估算值必须带“估算”。
+- 回退口径使用用户能理解的词，例如“线程口径”，避免孤立的“粗略”。
+- 不使用夸张营销词，不做价值判断。
+- 中英文界面应表达同一语义，不逐字机械翻译。
 
-| Role | Token | Hex |
-| --- | --- | --- |
-| Brand Main | `brand.primary` | `#2866F7` |
-| Brand Deep | `brand.primaryStrong` | `#1F59ED` |
-| Brand Light | `brand.primaryLight` | `#5E8CFF` |
-| Brand Purple | `brand.secondary` | `#8B6DFF` |
-| Brand Violet Highlight | `brand.highlight` | `#DAA3FA` |
-| System Blue | `status.info` | `#0A84FF` |
-| System Green | `status.success` | `#30D158` |
-| System Orange | `status.warning` | `#FF9F0A` |
-| System Red | `status.danger` | `#FF453A` |
-| System Purple | `data.reasoning` | `#BF5AF2` |
-| Neutral Gray | `status.neutral` | `#98989D` |
+## 数据口径
 
-推荐实际界面比例：
+- 精细统计来自本机 session token 事件。
+- 线程口径来自本机线程记录，只能近似归因。
+- API 等效价值、工具 token 分摊、预测值都属于估算。
+- 官方额度、官方账单、本地估算必须清晰区分。
+- 当数据不可用时，说明“记录不足”或“口径不可用”，不要伪造默认值。
 
-- 70% 到 80%：中性材质、系统文本、透明分层。
-- 12% 到 18%：低透明品牌或状态 tint。
-- 4% 到 8%：高饱和实色，例如环形进度、chip、图表柱、状态点。
-- 低于 2%：粉紫高光和 halo。
+## 隐私边界
 
-## 代码落地建议
+- 默认只展示聚合指标、脱敏名称、路径尾名和状态。
+- 完整本地路径只在确有帮助时通过 tooltip 展示。
+- 不展示 prompt、回复正文、tool arguments、附件正文、auth、环境变量或 raw logs。
+- 不新增遥测、远程分析、第三方上传或云同步。
 
-### 1. 建立统一 Palette
+## 可访问性
 
-`main.swift` 必须通过 `WidgetPalette` 建立集中 token，而不是继续增加组件内散色：
+- 颜色不能是唯一信息通道，状态必须同时通过文字、图标或位置表达。
+- 浅色、深色和高对比环境下保持可读。
+- 可点击控件必须有明确视觉反馈和可理解的 tooltip 或 label。
+- 小字号文本不能承担唯一关键含义。
 
-```swift
-private enum WidgetPalette {
-    static let brandPrimary = Color(red: 0.157, green: 0.400, blue: 0.969) // #2866F7
-    static let brandStrong = Color(red: 0.122, green: 0.349, blue: 0.929) // #1F59ED
-    static let brandSecondary = Color(red: 0.545, green: 0.427, blue: 1.000) // #8B6DFF
-    static let brandHighlight = Color(red: 0.855, green: 0.639, blue: 0.980) // #DAA3FA
+## 维护规则
 
-    static let statusSuccess = Color(red: 0.188, green: 0.820, blue: 0.345) // #30D158
-    static let statusInfo = Color(red: 0.039, green: 0.518, blue: 1.000) // #0A84FF
-    static let statusWarning = Color(red: 1.000, green: 0.624, blue: 0.039) // #FF9F0A
-    static let statusDanger = Color(red: 1.000, green: 0.271, blue: 0.227) // #FF453A
-    static let statusNeutral = Color(red: 0.596, green: 0.596, blue: 0.616) // #98989D
-}
-```
-
-`WidgetPalette` 同时负责 light/dark surface、card、control、stroke 的动态透明度。新增组件时优先复用 `sectionBackground()`、`cardBackground(cornerRadius:elevated:)`、`WidgetPalette.surfaceTrack` 和现有 brand/status/data token。
-
-### 1b. 外观模式
-
-顶部外观切换由 `WidgetThemeMode` 管理：
-
-- `system`：默认值，清空 `NSApp.appearance` 并跟随 macOS 系统外观。
-- `light`：设置 `.aqua`，并通过 SwiftUI `preferredColorScheme(.light)` 同步内容层。
-- `dark`：设置 `.darkAqua`，并通过 SwiftUI `preferredColorScheme(.dark)` 同步内容层。
-
-新增页面或组件不得自行保存外观偏好；只读取当前 `colorScheme` 并使用 `WidgetPalette` 返回的动态 surface。
-
-### 2. 替换现有颜色
-
-| 当前用途 | 当前色 | 新 token |
-| --- | --- | --- |
-| 5h 额度 | `#149E7A` | `data.quotaPrimary` |
-| 5h 高光 | `#61F2BA` | `data.quotaPrimaryHighlight` |
-| 7d 额度 | `#2E70B8` | `data.quotaSecondary` |
-| 7d 高光 | `#7AC7FF` | `data.quotaSecondaryHighlight` |
-| 缓存 token | `#149E7A` | `data.cached`，迁移到品牌紫 |
-| 输出 token | `#EB941F` | `data.output` |
-| active task | `#E0800D` | `task.active` |
-| scheduled task | `#128C4F` | `task.scheduled` |
-| done task | `#126EC7` | `task.done` |
-| danger | `#D1382E` | `status.danger` |
-
-### 3. 分阶段迁移
-
-1. 第一阶段：新增 `WidgetPalette`，替换所有硬编码 RGB，不改变布局。
-2. 第二阶段：调整 quota ring 和 token split 的语义色，完成品牌主色迁移。
-3. 第三阶段：调整任务看板列背景和 chip，让大面积色彩降噪。
-4. 第四阶段：为 Reduce Transparency 和 Increased Contrast 增加动态 surface。
-5. 第五阶段：在浅色壁纸、深色壁纸、桌面图片复杂背景下截图验证。
-
-## 验收标准
-
-- 代码中组件内部不再出现新的 `Color(red:green:blue:)`。
-- 主视觉从青绿迁移到 logo 蓝紫，绿色只用于成功或完成等小面积状态语义。
-- 任何状态色都不作为普通品牌色使用。
-- 任务看板列背景不会比任务卡片更抢眼。
-- 正文和数值在浅色、深色、复杂壁纸下都能稳定阅读。
-- 开启 Reduce Transparency 后，卡片和窗口仍有明确层级。
-- 颜色不是唯一信息通道，图标、文本、位置也能表达状态。
+- 新增组件先复用现有模式，再考虑抽象。
+- 新增视觉 token 必须说明职责，不为单个场景临时造 token。
+- 改动布局规范时，同步更新本文档。
+- 设计规范只记录长期原则，不记录一次性诊断、迁移计划或临时实现细节。

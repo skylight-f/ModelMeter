@@ -1,36 +1,57 @@
 # codexU
 
-codexU is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex quota, token usage, and today's task status. It keeps the information you check most on the desktop, so you can quickly see remaining quota, reset times, and daily work progress.
+> [!IMPORTANT]
+> **Upgrade to v1.0.4 or later.** v1.0.4 fixes a menu bar repaint feedback loop that could consume a CPU core while idle, prevents a weekly-only Codex quota from being mislabeled as the 5-hour quota, reduces background task polling, and bounds the long-lived session cache. It retains support for ChatGPT.app, legacy Codex.app paths, and the standard CLI. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
 
-![codexU desktop widget screenshot](docs/screenshot-0.2.0.png)
+codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex, Claude Code, and MimoCode quota availability, local token usage, and today's task status. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, and daily work progress.
+
+![codexU v1.0.2 menu bar customization and main window](docs/screenshot-v1.0.2-status-bar-customization.png)
 
 ## Who It Is For
 
 - Developers who use OpenAI Codex, Codex CLI, or the Codex desktop app every day.
+- Developers who use Codex, Claude Code, or MimoCode and want one local view across runtimes.
 - ChatGPT Pro / Team users who want a quick view of Codex 5-hour quota, 7-day quota, token usage, and reset times.
 - macOS users who want to check Codex status without repeatedly opening a browser or terminal.
 
 ## Features
 
-- Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times.
+- Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times; quota types are classified by their protocol-reported durations so single-window and reordered responses remain correctly labeled.
+- Adds a menu bar runtime menu with separate Codex, Claude Code, and MimoCode cards, available quota windows, today's token usage, and total tokens today.
+- Offers transparent Minimal, Classic, and Rich menu bar modes: Minimal keeps only thicker concentric 5h/7d rings, Classic keeps only the quota number inside each progress ring, and Rich keeps full labels, bars, and reset times.
+- Lets you switch menu bar quotas between used and remaining, choose 5-hour, 7-day, today tokens, and reset countdown, and keeps 5h/7d progress colors aligned with the main blue-purple quota rings.
+- Uses progress direction instead of extra labels: used runs clockwise/left-to-right, while remaining runs counterclockwise/right-to-left.
+- Uses monochrome templates derived exactly from the original Runtime logos and resolves icon/text colors from the menu bar's effective appearance; branded color icons remain in the main window and popover.
+- Shows today's total tokens as one vertically centered number in the menu bar, without an extra `T` label.
+- Uses the system menu bar body size for today's total and a higher-contrast supporting foreground for 5h/7d labels and reset times while preserving hierarchy beneath primary values.
+- Adds a top-level runtime switch in the main widget so all panels can switch between Codex, Claude Code, and MimoCode.
+- Supports Claude Code local transcript usage, 7-day trends, project rankings, top tools/Skills, and a basic task board.
+- Supports MimoCode local database usage, per-model token details, and a basic task board. Unknown model prices remain unavailable instead of being presented as zero.
+- Adds a model-usage tab for today, the last 7 days, and all time, including uncached input, cached input, output, total tokens, cache hit rate, and local estimated value.
 - Summarizes token usage for today, the last 7 days, and lifetime totals with uncached input, cached input, and output splits.
-- Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value.
-- Builds a daily task board from local Codex threads and enabled Codex automations.
-- Groups work into active, pending, scheduled, and done columns.
-- Stays on the desktop layer by default, with `Command + U` foreground toggle.
-- Supports Chinese and English UI text. The default language follows the system time zone, and the top `中 | EN` switch can override it.
-- Supports system, light, and dark appearance modes. The default follows macOS, and the top appearance switch can override it.
+- Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value. The bar uses a segmented nonlinear scale, so movement past Pro 200 remains visible and is not a linear dollar ratio.
+- Adds lower dashboard tabs for today's tasks, usage trend, project ranking, and Skill usage.
+- Builds a daily task board from local Codex threads and enabled Codex automations, grouped into active, pending, scheduled, and done columns.
+- Shows a six-month daily token heatmap, a last-7-day trend summary, and previous-period comparison.
+- Shows recent and all-time project rankings with tokens, estimated value, thread counts, and recent activity.
+- Shows top tool calls and top Skill usage to explain the structure of local Codex work.
+- Runs as a standard macOS window with Dock, system window controls, minimization, and optional background running after the main window is closed. Closing the main window hides the Dock icon and keeps the menu bar item.
+- Uses `Command + U` by default to show or hide the main window, and the shortcut can be customized in Settings. The menu bar runtime menu can also open the main window, open settings, or quit.
+- Includes a Settings window for Chinese/English UI text, system/light/dark appearance, menu bar content with live preview, always-on-top behavior, close-window behavior, system status, and update check configuration.
+- Checks GitHub Releases for newer versions by default, including beta releases, and offers the DMG that matches the current Mac architecture. It does not silently download or install updates, and automatic checks can be turned off.
 - Reads data locally and does not upload usage, threads, or account data to a third-party service.
 
 ## Keyboard Shortcuts
 
-- `Command + U`: toggle the widget between desktop layer and foreground layer.
-- Menu bar gauge icon: same toggle as `Command + U`.
-- Top appearance switch: switch between system, light, and dark modes. System mode follows macOS.
-- Top `中 | EN` switch: switch between Chinese and English. Manual selection is kept for the next launch.
-- Refresh button: immediately refresh quota, token usage, trend, and task board.
-- Close button: quit the widget.
-- Drag anywhere on the widget background to reposition it.
+- `Command + U`: shows or hides the main window by default and can be customized in Settings. If the window is minimized, the shortcut restores it and brings it forward.
+- Custom combinations require at least two modifiers, including Command or Control; known high-risk system and accessibility shortcuts are rejected.
+- Press Backspace while recording to clear the shortcut, or Escape to cancel; you can restore the default or record another shortcut later.
+- The app detects conflicts with other exclusive hotkey registrations. macOS does not provide a complete query for nonexclusive registrations, so choose another combination if another app still conflicts.
+- Menu bar gauge icon: opens the runtime menu. Clicking a Codex or Claude Code card opens the main widget with that runtime selected.
+- Menu bar runtime menu: shows quick Codex / Claude Code status and provides Open, Settings, and Quit actions.
+- Settings window: configure language, appearance, menu bar mode/quota direction/visible metrics, always-on-top and close-window behavior, and control automatic checks or manually check GitHub Releases from the System section.
+- Main-window refresh button: immediately refresh quota, token usage, trend, and task board.
+- System window controls: close, minimize, or zoom the main window. After closing, reopen from the menu bar item or shortcut; quit from the menu bar runtime menu or the app menu.
 
 ## First Install: Privacy & Security
 
@@ -43,7 +64,21 @@ codexU is distributed outside the Mac App Store. On first launch, macOS may bloc
 
 You can also right-click `codexU.app` in Finder and choose **Open**, then confirm the same security prompt.
 
-codexU needs access to local Codex data under `~/.codex/`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
+codexU needs access to local Codex data under `~/.codex/`. When Claude Code or MimoCode stats are used, it also reads local files under `~/.claude/` and `~/.local/share/mimocode/mimocode.db`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
+
+## Install
+
+Download the DMG for your Mac architecture from GitHub Releases:
+
+- Apple Silicon: `codexU-<version>-mac-arm64.dmg`
+- Intel: `codexU-<version>-mac-x86_64.dmg`
+
+1. Open the DMG.
+2. Drag `codexU.app` into the `Applications` folder.
+3. Open codexU from `Applications`.
+4. Complete the **First Install: Privacy & Security** steps above if macOS blocks the first launch.
+
+After installation, codexU checks GitHub Releases for new versions at most once per day by default, including beta releases. The check reads public release metadata only. When an update is available, codexU opens the browser to download the DMG or view the Release page; installation remains manual. You can turn off automatic checks or run a manual check from the System section in Settings.
 
 ## Requirements
 
@@ -51,6 +86,8 @@ codexU needs access to local Codex data under `~/.codex/`. If macOS asks for fil
 - A local Codex installation.
 - A signed-in Codex account for quota data.
 - Codex must have been used at least once so `~/.codex/state_5.sqlite` exists.
+- Claude Code support is optional. Historical tokens come from `~/.claude/projects/**/*.jsonl`; quota requires a local statusLine snapshot cache.
+- MimoCode support is optional. Local usage comes from `~/.local/share/mimocode/mimocode.db`; official quota windows are not currently available.
 - Xcode Command Line Tools for building from source.
 
 ## Build From Source
@@ -94,10 +131,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-0.2.0-mac-arm64.dmg
-dist/codexU-0.2.0-mac-arm64.dmg.sha256
-dist/codexU-0.2.0-mac-x86_64.dmg
-dist/codexU-0.2.0-mac-x86_64.dmg.sha256
+dist/codexU-1.0.4-mac-arm64.dmg
+dist/codexU-1.0.4-mac-arm64.dmg.sha256
+dist/codexU-1.0.4-mac-x86_64.dmg
+dist/codexU-1.0.4-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).
@@ -108,9 +145,16 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 - Local token totals: `~/.codex/state_5.sqlite`.
 - Detailed token splits: `token_count` events in `~/.codex/sessions/**/rollout-*.jsonl` and `~/.codex/archived_sessions/*.jsonl`.
 - Today's board: unarchived and archived Codex threads in the local SQLite database.
+- Usage trends and project rankings: aggregated from local session `token_count` events, with an approximate thread-updated-time fallback when detailed events are unavailable.
+- Tool and Skill usage: tool call and Skill load records parsed from local session events.
 - Scheduled tasks: enabled automation metadata under `~/.codex/automations/**/automation.toml`.
+- Claude Code historical tokens: assistant `message.usage` fields in `~/.claude/projects/**/*.jsonl`.
+- Claude Code tools, Skills, and tasks: transcript `tool_use.name` / explicit Skill attribution, plus `~/.claude/tasks/**/*.json`.
+- Claude Code active quota: optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`; without it, 5-hour and 7-day quota show `--`.
+- MimoCode local tokens and tasks: structured token and session fields in `~/.local/share/mimocode/mimocode.db`; unknown model prices remain unavailable.
+- Update checks: default access to the GitHub Releases API for public `shanggqm/codexU` release metadata, cached in `~/Library/Caches/codexU/update-check.json`.
 
-Current Codex quota APIs expose rolling-window percentages and reset times, not absolute account quota sizes. See [RESEARCH.md](RESEARCH.md) for the data model and fallback behavior.
+Current Codex quota APIs expose rolling-window percentages and reset times, not absolute account quota sizes. Claude Code support reads local history and an optional active snapshot; it is not a Claude.ai official billing view. See [RESEARCH.md](RESEARCH.md) for the data model and fallback behavior.
 
 ## FAQ
 
@@ -120,7 +164,7 @@ No. codexU is an unofficial local macOS utility for reading local Codex app-serv
 
 ### Does codexU upload my Codex threads or usage data?
 
-No. codexU reads Codex quota, local SQLite usage, and automation metadata locally. It does not upload that data to a third-party service.
+No. codexU reads Codex quota, local SQLite usage, and automation metadata locally. It does not upload that data to a third-party service. Update checks only request public GitHub Release metadata and do not include local usage, threads, paths, logs, or account data.
 
 ### Why does codexU show remaining percentage instead of absolute quota?
 
@@ -133,3 +177,15 @@ Yes. Intel Macs should use `codexU-<version>-mac-x86_64.dmg`. From source, packa
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## WeChat Official Account
+
+Scan the QR code to follow my WeChat official account for AI tools, Codex usage notes, and independent product building.
+
+<img src="docs/wechat-official-account-qr.png" alt="WeChat official account QR code" width="220" />
+
+## User Community
+
+Scan to join the Chinese-language codexU user community for usage tips, issue feedback, and open-source collaboration.
+
+<img src="docs/codexu-community-qr.jpg" alt="codexU user community WeChat QR code" width="320" />

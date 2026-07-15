@@ -1,6 +1,6 @@
 # Codex usage and remaining limit notes
 
-Date checked: 2026-06-29.
+Date checked: 2026-07-13.
 
 ## Official model
 
@@ -29,7 +29,7 @@ The stable-looking local path is Codex app-server JSON-RPC:
    - `account/rateLimits/read`
    - `account/usage/read`
 
-The generated schema for the installed Codex 0.142.3 runtime includes:
+The generated schema for the installed Codex 0.144.2 runtime includes:
 
 - `GetAccountRateLimitsResponse`
 - `RateLimitSnapshot`
@@ -37,11 +37,19 @@ The generated schema for the installed Codex 0.142.3 runtime includes:
 - `GetAccountTokenUsageResponse`
 - `AccountTokenUsageSummary`
 
-`account/rateLimits/read` returns rolling windows as percentages, not absolute token quota numbers. On this machine it returned:
+`account/rateLimits/read` returns rolling windows as percentages, not absolute token quota numbers. The response uses nullable `primary` and `secondary` transport slots. Those slot names do not define a fixed 5-hour or 7-day meaning; clients must classify each returned window by `windowDurationMins`.
 
-- primary window: 300 minutes
-- secondary window: 10080 minutes
+Observed response combinations on this machine include:
+
+- primary: 300 minutes, secondary: 10080 minutes
+- primary: 10080 minutes, secondary: null
 - each window has `usedPercent` and `resetsAt`
+
+The widget therefore normalizes all returned slots before exposing quota data to the UI:
+
+- 300 minutes: 5-hour quota
+- 10080 minutes: 7-day quota
+- missing, duplicate, or unknown durations: left unclassified and never labeled as 5-hour or 7-day quota
 
 So this widget computes account remaining limit as:
 
@@ -100,3 +108,17 @@ The widget displays both kinds of data separately:
 - Detailed token split and API-equivalent value: from local JSONL `token_count` events, with SQLite as the source of session paths and model names.
 
 If app-server is unavailable, the widget falls back to SQLite-only mode and marks account-limit data as unavailable.
+
+## Claude Code local support
+
+Claude Code does not expose the same local `account/rateLimits/read` app-server API as Codex. v0.4.0 therefore separates historical usage from active quota:
+
+- Historical token usage: parsed from assistant `message.usage` fields in `~/.claude/projects/**/*.jsonl`.
+- Cache split: `cache_creation_input_tokens` and `cache_read_input_tokens` are mapped into the widget's cached input bucket so existing UI cards can show uncached/cached/output splits.
+- Project attribution: uses transcript `cwd` first, then best-effort decoding of the Claude project directory name.
+- Tool usage: counts only `tool_use.name`; it does not retain tool arguments or output.
+- Skill usage: uses explicit Skill attribution fields when present and the `Skill` tool name as a fallback.
+- Task board: reads `~/.claude/tasks/**/*.json` status and subject fields.
+- Active quota: optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json` with 5-hour and 7-day used percentages. Missing snapshots are shown as unavailable, and snapshots older than 15 minutes are marked stale.
+
+Claude Code API-equivalent value is an estimate from a small built-in Claude model price table. Unknown models still contribute tokens, but their dollar value is omitted from the estimate.
