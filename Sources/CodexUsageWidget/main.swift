@@ -1190,8 +1190,9 @@ final class CodexUsageReader {
         // Quota topology is committed atomically. A partly understood payload must
         // never make a confirmed dual-window layout collapse into a misleading
         // single-window layout; continuity will keep the last confirmed topology.
+        // Long-period secondary slot: prefer explicit 7d, else monthly (team accounts).
         snapshot.fiveHourQuota = quotaReadSucceeded ? normalized.fiveHour : nil
-        snapshot.sevenDayQuota = quotaReadSucceeded ? normalized.sevenDay : nil
+        snapshot.sevenDayQuota = quotaReadSucceeded ? normalized.longPeriod : nil
         var diagnostics = rateLimitDiagnostics(for: normalized)
         if !hasWindowFields {
             diagnostics.append("Codex 额度响应缺少窗口字段，未将其视为当前无限制")
@@ -1246,18 +1247,24 @@ final class CodexUsageReader {
         if windows.sevenDayMatchCount > 1 {
             messages.append("Codex 返回了重复的 7 天额度窗口，已停止显示该窗口")
         }
+        if windows.monthlyMatchCount > 1 {
+            messages.append("Codex 返回了重复的月额度窗口，已停止显示该窗口")
+        }
+        if windows.sevenDay != nil && windows.monthly != nil {
+            messages.append("Codex 同时返回了 7 天与月额度窗口，当前优先显示 7 天")
+        }
 
         let missingDurationCount = windows.unclassified.filter {
             $0.windowDurationMins == nil
         }.count
         if missingDurationCount > 0 {
-            messages.append("Codex 返回了缺少时长的额度窗口，未将其标注为 5 小时或 7 天")
+            messages.append("Codex 返回了缺少时长的额度窗口，未将其标注为 5 小时、7 天或月额度")
         }
 
         let unknownDurations = Set(windows.unclassified.compactMap(\.windowDurationMins)).sorted()
         if !unknownDurations.isEmpty {
             let values = unknownDurations.map(String.init).joined(separator: "、")
-            messages.append("Codex 返回了未识别的额度窗口（\(values) 分钟），未将其标注为 5 小时或 7 天")
+            messages.append("Codex 返回了未识别的额度窗口（\(values) 分钟），未将其标注为 5 小时、7 天或月额度")
         }
 
         return messages
@@ -4510,32 +4517,38 @@ private enum QuotaRingGeometry {
 private enum QuotaWindowKind: String, Hashable {
     case fiveHour
     case sevenDay
+    case monthly
+
+    static func longPeriod(for window: RateWindow) -> QuotaWindowKind {
+        CodexRateLimitNormalizer.isMonthlyDuration(window.windowDurationMins) ? .monthly : .sevenDay
+    }
 
     var compactTitle: String {
         switch self {
         case .fiveHour: "5h"
         case .sevenDay: "7d"
+        case .monthly: "mo"
         }
     }
 
     var startColor: RingRGBColor {
         switch self {
         case .fiveHour: quotaPrimaryStartColor
-        case .sevenDay: quotaSecondaryStartColor
+        case .sevenDay, .monthly: quotaSecondaryStartColor
         }
     }
 
     var endColor: RingRGBColor {
         switch self {
         case .fiveHour: quotaPrimaryEndColor
-        case .sevenDay: quotaSecondaryEndColor
+        case .sevenDay, .monthly: quotaSecondaryEndColor
         }
     }
 
     var color: Color {
         switch self {
         case .fiveHour: quotaPrimaryColor
-        case .sevenDay: quotaSecondaryColor
+        case .sevenDay, .monthly: quotaSecondaryColor
         }
     }
 }
@@ -4578,7 +4591,7 @@ private struct QuotaRingPresentation: Equatable {
             items.append(QuotaRingItem(kind: .fiveHour, window: fiveHourQuota))
         }
         if let sevenDayQuota {
-            items.append(QuotaRingItem(kind: .sevenDay, window: sevenDayQuota))
+            items.append(QuotaRingItem(kind: .longPeriod(for: sevenDayQuota), window: sevenDayQuota))
         }
         self.items = items
     }
@@ -4627,7 +4640,7 @@ private struct QuotaRingPresentation: Equatable {
     }
 
     func diameter(for item: QuotaRingItem) -> CGFloat {
-        guard topology == .dual, item.kind == .sevenDay else {
+        guard topology == .dual, item.kind == .sevenDay || item.kind == .monthly else {
             return QuotaRingGeometry.outerDiameter
         }
         return QuotaRingGeometry.innerDiameter
@@ -8461,7 +8474,13 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
     }
     if message.contains("重复的 5 小时额度窗口") { return "Codex returned duplicate 5-hour quota windows, so that quota is hidden" }
     if message.contains("重复的 7 天额度窗口") { return "Codex returned duplicate 7-day quota windows, so that quota is hidden" }
-    if message.contains("缺少时长的额度窗口") { return "Codex returned a quota window without a duration, so it was not labeled as 5h or 7d" }
+    if message.contains("重复的月额度窗口") { return "Codex returned duplicate monthly quota windows, so that quota is hidden" }
+    if message.contains("同时返回了 7 天与月额度窗口") {
+        return "Codex returned both 7-day and monthly quota windows; the 7-day window is shown first"
+    }
+    if message.contains("缺少时长的额度窗口") {
+        return "Codex returned a quota window without a duration, so it was not labeled as 5h, 7d, or monthly"
+    }
     if message.contains("未识别的额度窗口") {
         return message
             .replacingOccurrences(
@@ -8469,8 +8488,12 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
                 with: "Codex returned an unknown quota window ("
             )
             .replacingOccurrences(
+                of: " 分钟），未将其标注为 5 小时、7 天或月额度",
+                with: " minutes), so it was not labeled as 5h, 7d, or monthly"
+            )
+            .replacingOccurrences(
                 of: " 分钟），未将其标注为 5 小时或 7 天",
-                with: " minutes), so it was not labeled as 5h or 7d"
+                with: " minutes), so it was not labeled as 5h, 7d, or monthly"
             )
     }
     if message.contains("app-server") { return message.replacingOccurrences(of: "未知错误", with: "Unknown error") }
