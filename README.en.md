@@ -29,7 +29,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Supports MimoCode local database usage, per-model token details, and a basic task board. Unknown model prices remain unavailable instead of being presented as zero.
 - Adds six model-usage periods: today, rolling 24 hours, last 7 days, this month, last 30 days, and all time. Models can be searched by model or provider, with a stacked 7-day model-mix trend.
 - Model details include provider, uncached input, cached input, output, total tokens, cache hit rate, and local estimated value. An end-to-end estimated speed appears only when reliable completion timing is available.
-- The overview uses the same six periods and keeps uncached input, cached input, and output splits.
+- The overview keeps its four core periods—today, last 7 days, this month, and all time—with uncached input, cached input, and output splits.
 - Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value. The bar uses a segmented nonlinear scale, so movement past Pro 200 remains visible and is not a linear dollar ratio.
 - Adds lower dashboard tabs for today's tasks, usage trend, project ranking, and Skill usage.
 - Builds a daily task board from local Codex threads and enabled Codex automations, grouped into active, pending, scheduled, and done columns.

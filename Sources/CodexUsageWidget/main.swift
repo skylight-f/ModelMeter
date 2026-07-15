@@ -3315,19 +3315,12 @@ struct UsageWidgetView: View {
             }
 
             VStack(alignment: .leading, spacing: 13) {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
+                HStack(spacing: 12) {
                     DetailedTokenMetricCard(
                         title: language.text("今日", "Today"),
                         systemName: "sun.max.fill",
                         usage: snapshot.local?.detailedUsage?.today,
                         fallbackTokens: snapshot.local?.todayTokens,
-                        language: language
-                    )
-                    DetailedTokenMetricCard(
-                        title: "24H",
-                        systemName: "clock.arrow.circlepath",
-                        usage: snapshot.local?.detailedUsage?.twentyFourHour,
-                        fallbackTokens: snapshot.local?.modelUsage.twentyFourHour.reduce(Int64(0)) { $0 + $1.tokens },
                         language: language
                     )
                     DetailedTokenMetricCard(
@@ -3338,15 +3331,8 @@ struct UsageWidgetView: View {
                         language: language
                     )
                     DetailedTokenMetricCard(
-                        title: language.text("近 30 天", "Last 30 days"),
-                        systemName: "calendar.badge.clock",
-                        usage: snapshot.local?.detailedUsage?.thirtyDay,
-                        fallbackTokens: snapshot.local?.modelUsage.thirtyDay.reduce(Int64(0)) { $0 + $1.tokens },
-                        language: language
-                    )
-                    DetailedTokenMetricCard(
                         title: language.text("本月", "This month"),
-                        systemName: "calendar",
+                        systemName: "calendar.badge.clock",
                         usage: snapshot.local?.detailedUsage?.month,
                         fallbackTokens: snapshot.local?.modelUsage.month.reduce(Int64(0)) { $0 + $1.tokens },
                         language: language
