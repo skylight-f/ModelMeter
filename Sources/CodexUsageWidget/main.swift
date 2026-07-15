@@ -268,6 +268,38 @@ struct TaskItem: Identifiable, Equatable {
     let updatedAt: Date?
     let tokens: Int64?
     let kind: TaskColumnKind
+    let threadID: String?
+    let runtimeState: TaskRuntimeState
+    let isRealtime: Bool
+    let approval: TaskApprovalRequest?
+
+    init(
+        id: String,
+        code: String,
+        title: String,
+        detail: String,
+        chip: String,
+        updatedAt: Date?,
+        tokens: Int64?,
+        kind: TaskColumnKind,
+        threadID: String? = nil,
+        runtimeState: TaskRuntimeState = .recorded,
+        isRealtime: Bool = false,
+        approval: TaskApprovalRequest? = nil
+    ) {
+        self.id = id
+        self.code = code
+        self.title = title
+        self.detail = detail
+        self.chip = chip
+        self.updatedAt = updatedAt
+        self.tokens = tokens
+        self.kind = kind
+        self.threadID = threadID
+        self.runtimeState = runtimeState
+        self.isRealtime = isRealtime
+        self.approval = approval
+    }
 }
 
 struct TaskColumn: Identifiable, Equatable {
@@ -2376,7 +2408,8 @@ final class CodexUsageReader {
             chip: chip,
             updatedAt: updatedAt,
             tokens: tokens,
-            kind: kind
+            kind: kind,
+            threadID: rawId
         )
     }
 
@@ -9997,6 +10030,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-token-counter") {
             exit(CodexTokenCounterNormalizerSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-task-runtime") {
+            exit(TaskRuntimeSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {
