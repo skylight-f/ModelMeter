@@ -500,7 +500,7 @@ private enum RuntimeLogo {
         case .claudeCode:
             name = "claudecode-color"
         case .mimoCode:
-            return nil
+            name = "mimo-color"
         }
         guard let url = Bundle.main.url(forResource: name, withExtension: "png") else {
             return nil

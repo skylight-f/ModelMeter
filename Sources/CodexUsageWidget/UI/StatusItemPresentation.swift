@@ -173,7 +173,10 @@ struct StatusItemPresentationBuilder {
         shortcutName: String? = GlobalShortcut.default.displayName,
         now: Date = Date()
     ) -> StatusItemPresentation {
-        let preferences = preferences.normalized()
+        let preferences = effectivePreferences(
+            configured: preferences,
+            runtime: source.runtime
+        )
         let configuredMetrics = preferences.orderedVisibleMetrics.map { metric in
             makeMetric(
                 metric,
@@ -236,6 +239,24 @@ struct StatusItemPresentationBuilder {
             tooltip: "\(AppBrand.displayName) · \(description) · \(action)",
             accessibilityValue: description
         )
+    }
+
+    /// MimoCode exposes local token usage but no quota windows. Adapt only the
+    /// rendered status item so switching runtimes never mutates saved Codex
+    /// quota preferences.
+    private func effectivePreferences(
+        configured preferences: StatusItemPreferences,
+        runtime: RuntimeScope
+    ) -> StatusItemPreferences {
+        var result = preferences.normalized()
+        guard runtime == .mimoCode else { return result }
+
+        result.visibleMetrics = [.todayTokens]
+        result.showsResetCountdown = false
+        if result.displayMode == .minimal {
+            result.displayMode = .classic
+        }
+        return result
     }
 
     /// Preferences remain persistent, while the rendered set follows the last

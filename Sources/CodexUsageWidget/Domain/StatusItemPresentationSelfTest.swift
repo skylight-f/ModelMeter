@@ -574,6 +574,39 @@ enum StatusItemPresentationSelfTest {
             "non-authoritative local-only data must not redefine the quota topology"
         )
 
+        let mimoSource = StatusItemSourceSnapshot(
+            runtime: .mimoCode,
+            status: .localOnly,
+            fiveHourRemainingPercent: nil,
+            fiveHourResetsAt: nil,
+            sevenDayRemainingPercent: nil,
+            sevenDayResetsAt: nil,
+            todayTokens: 23_456_789
+        )
+        let mimoRich = builder.build(
+            source: mimoSource,
+            preferences: .default,
+            language: .zh,
+            now: now
+        )
+        expect(mimoRich.quotaMetrics.isEmpty, "MimoCode must not render unavailable quota placeholders")
+        expect(mimoRich.todayMetric?.value == "23.5M", "MimoCode should render today's token total")
+        expect(!mimoRich.showsNoActiveQuota, "MimoCode local usage must not be described as unlimited quota")
+        expect(mimoRich.accessibilityValue.contains("今日 token 23.5M"), "MimoCode token total should be accessible")
+        expect(
+            Bundle.main.url(forResource: "mimo-template", withExtension: "png") != nil,
+            "MimoCode status item template should be bundled"
+        )
+
+        let mimoMinimal = builder.build(
+            source: mimoSource,
+            preferences: minimalPreferences,
+            language: .en,
+            now: now
+        )
+        expect(mimoMinimal.mode == .classic, "MimoCode should use a token-capable fallback for minimal mode")
+        expect(mimoMinimal.todayMetric?.isAvailable == true, "MimoCode minimal fallback should keep today's tokens")
+
         if failures.isEmpty {
             print("status item self-test passed")
             return true

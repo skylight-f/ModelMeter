@@ -552,7 +552,7 @@ struct StatusItemRenderer {
         case .claudeCode:
             resourceName = "claudecode-template"
         case .mimoCode:
-            return nil
+            resourceName = "mimo-template"
         }
         if let cached = Self.templateCache[resourceName] {
             return cached
