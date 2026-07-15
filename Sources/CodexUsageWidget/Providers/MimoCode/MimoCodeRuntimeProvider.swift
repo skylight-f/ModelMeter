@@ -80,7 +80,9 @@ private final class MimoCodeLocalReader {
           json_extract(data, '$.tokens.output') AS outputTokens,
           json_extract(data, '$.tokens.reasoning') AS reasoningTokens,
           json_extract(data, '$.tokens.cache.read') AS cachedInputTokens,
-          json_extract(data, '$.modelID') AS model
+          json_extract(data, '$.modelID') AS model,
+          json_extract(data, '$.providerID') AS provider,
+          json_extract(data, '$.time.completed') AS timeCompleted
         FROM message
         WHERE json_extract(data, '$.tokens.total') IS NOT NULL
         ORDER BY session_id ASC, time_created ASC, id ASC;
@@ -93,15 +95,20 @@ private final class MimoCodeLocalReader {
 
         let calendar = context.statistics.calendar
         let dayStart = calendar.startOfDay(for: context.now)
+        let twentyFourHourStart = calendar.date(byAdding: .hour, value: -24, to: context.now) ?? dayStart
         let sevenDayStart = calendar.date(byAdding: .day, value: -6, to: dayStart) ?? dayStart
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: context.now)) ?? dayStart
+        let thirtyDayStart = calendar.date(byAdding: .day, value: -29, to: dayStart) ?? dayStart
         var previousBySession: [String: TokenBreakdown] = [:]
         var sessionTokens: [String: Int64] = [:]
         var dailyTokens: [String: Int64] = [:]
         var todayModels: [String: MimoModelAccumulator] = [:]
+        var twentyFourHourModels: [String: MimoModelAccumulator] = [:]
         var sevenDayModels: [String: MimoModelAccumulator] = [:]
         var monthModels: [String: MimoModelAccumulator] = [:]
+        var thirtyDayModels: [String: MimoModelAccumulator] = [:]
         var lifetimeModels: [String: MimoModelAccumulator] = [:]
+        var sevenDayTrendModels: [String: (date: Date, models: [String: MimoModelAccumulator])] = [:]
         var lifetimeTokens: Int64 = 0
         var todayTokens: Int64 = 0
         var sevenDayTokens: Int64 = 0
@@ -126,21 +133,35 @@ private final class MimoCodeLocalReader {
             guard !delta.isZero else { continue }
 
             let model = mimoModelName(mimoString(event["model"]))
+            let provider = mimoProviderName(mimoString(event["provider"]), model: model)
+            let key = "\(provider)|\(model)"
+            let completedAt = mimoDate(event["timeCompleted"])
+            let duration = completedAt.map { max(0, $0.timeIntervalSince(date)) }
             let visibleTokens = delta.visibleTotalTokens
             lifetimeTokens += visibleTokens
             sessionTokens[sessionId, default: 0] += visibleTokens
-            add(tokens: delta, model: model, to: &lifetimeModels)
+            add(tokens: delta, model: model, provider: provider, duration: duration, key: key, to: &lifetimeModels)
             if date >= sevenDayStart {
                 sevenDayTokens += visibleTokens
                 dailyTokens[context.statistics.dayKey(for: date), default: 0] += visibleTokens
-                add(tokens: delta, model: model, to: &sevenDayModels)
+                add(tokens: delta, model: model, provider: provider, duration: duration, key: key, to: &sevenDayModels)
+                let dayKey = context.statistics.dayKey(for: date)
+                var trendDay = sevenDayTrendModels[dayKey] ?? (calendar.startOfDay(for: date), [:])
+                add(tokens: delta, model: model, provider: provider, duration: duration, key: key, to: &trendDay.models)
+                sevenDayTrendModels[dayKey] = trendDay
             }
             if date >= monthStart {
-                add(tokens: delta, model: model, to: &monthModels)
+                add(tokens: delta, model: model, provider: provider, duration: duration, key: key, to: &monthModels)
+            }
+            if date >= thirtyDayStart {
+                add(tokens: delta, model: model, provider: provider, duration: duration, key: key, to: &thirtyDayModels)
+            }
+            if date >= twentyFourHourStart {
+                add(tokens: delta, model: model, provider: provider, duration: duration, key: key, to: &twentyFourHourModels)
             }
             if date >= dayStart {
                 todayTokens += visibleTokens
-                add(tokens: delta, model: model, to: &todayModels)
+                add(tokens: delta, model: model, provider: provider, duration: duration, key: key, to: &todayModels)
             }
             lastUpdatedAt = maxDate(lastUpdatedAt, date)
         }
@@ -178,9 +199,17 @@ private final class MimoCodeLocalReader {
             skillUsages: [],
             modelUsage: ModelUsageBreakdown(
                 today: makeModelItems(todayModels),
+                twentyFourHour: makeModelItems(twentyFourHourModels),
                 sevenDay: makeModelItems(sevenDayModels),
                 month: makeModelItems(monthModels),
-                lifetime: makeModelItems(lifetimeModels)
+                thirtyDay: makeModelItems(thirtyDayModels),
+                lifetime: makeModelItems(lifetimeModels),
+                sevenDayTrend: makeTrendDays(
+                    values: sevenDayTrendModels,
+                    dayStart: dayStart,
+                    calendar: calendar,
+                    statistics: context.statistics
+                )
             )
         )
     }
@@ -285,25 +314,49 @@ private final class MimoCodeLocalReader {
     private func add(
         tokens: TokenBreakdown,
         model: String,
+        provider: String,
+        duration: TimeInterval?,
+        key: String,
         to values: inout [String: MimoModelAccumulator]
     ) {
-        var value = values[model] ?? MimoModelAccumulator()
-        value.add(tokens)
-        values[model] = value
+        var value = values[key] ?? MimoModelAccumulator(model: model, provider: provider)
+        value.add(tokens, duration: duration)
+        values[key] = value
     }
 
     private func makeModelItems(_ values: [String: MimoModelAccumulator]) -> [ModelUsageItem] {
-        values.map { model, value in
+        values.map { _, value in
             ModelUsageItem(
-                model: model,
+                model: value.model,
+                provider: value.provider,
                 tokens: value.tokens.visibleTotalTokens,
                 uncachedInputTokens: value.tokens.uncachedInputTokens,
                 cachedInputTokens: value.tokens.billableCachedInputTokens,
                 outputTokens: value.tokens.outputTokens,
-                estimatedCostUSD: nil
+                estimatedCostUSD: nil,
+                endToEndTokensPerSecond: value.endToEndTokensPerSecond
             )
         }
         .sorted { $0.tokens == $1.tokens ? $0.model < $1.model : $0.tokens > $1.tokens }
+    }
+
+    private func makeTrendDays(
+        values: [String: (date: Date, models: [String: MimoModelAccumulator])],
+        dayStart: Date,
+        calendar: Calendar,
+        statistics: StatisticsContext
+    ) -> [ModelUsageTrendDay] {
+        (0..<7).compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset - 6, to: dayStart) else { return nil }
+            let dayKey = statistics.dayKey(for: date)
+            let models: [String: MimoModelAccumulator] = values[dayKey]?.models ?? [:]
+            let segments: [ModelUsageTrendSegment] = models.values.map {
+                ModelUsageTrendSegment(model: $0.model, provider: $0.provider, tokens: $0.tokens.visibleTotalTokens)
+            }
+            .filter { $0.tokens > 0 }
+            .sorted { $0.tokens == $1.tokens ? $0.id < $1.id : $0.tokens > $1.tokens }
+            return ModelUsageTrendDay(id: dayKey, date: date, segments: segments)
+        }
     }
 
     private func databaseURL(context: RuntimeLoadContext) -> URL? {
@@ -347,10 +400,22 @@ private struct MimoSession {
 }
 
 private struct MimoModelAccumulator {
+    let model: String
+    let provider: String
     var tokens = TokenBreakdown.zero
+    var generatedTokens: Int64 = 0
+    var durationSeconds: TimeInterval = 0
 
-    mutating func add(_ value: TokenBreakdown) {
+    mutating func add(_ value: TokenBreakdown, duration: TimeInterval?) {
         tokens.add(value)
+        guard let duration, duration > 0 else { return }
+        generatedTokens += max(value.outputTokens + value.reasoningOutputTokens, 0)
+        durationSeconds += duration
+    }
+
+    var endToEndTokensPerSecond: Double? {
+        guard durationSeconds > 0, generatedTokens > 0 else { return nil }
+        return Double(generatedTokens) / durationSeconds
     }
 }
 
@@ -379,6 +444,17 @@ private func mimoModelName(_ value: String?) -> String {
     let raw = (value ?? "unknown").trimmingCharacters(in: .whitespacesAndNewlines)
     let model = raw.isEmpty ? "unknown" : raw
     return model.count <= 28 ? model : String(model.prefix(25)) + "..."
+}
+
+private func mimoProviderName(_ value: String?, model: String) -> String {
+    let raw = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !raw.isEmpty else { return modelProviderName(for: model) }
+    let normalized = raw.lowercased()
+    if normalized.contains("anthropic") { return "Anthropic" }
+    if normalized.contains("openai") { return "OpenAI" }
+    if normalized.contains("google") { return "Google" }
+    if normalized.contains("mimo") { return "MimoCode" }
+    return modelProviderName(for: model)
 }
 
 private func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {

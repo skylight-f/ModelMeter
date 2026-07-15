@@ -267,21 +267,28 @@ private final class ClaudeCodeTranscriptReader {
 
         let calendar = statistics.calendar
         let dayStart = calendar.startOfDay(for: now)
+        let twentyFourHourStart = calendar.date(byAdding: .hour, value: -24, to: now) ?? dayStart
         let sevenDayStart = calendar.date(byAdding: .day, value: -6, to: dayStart) ?? dayStart
         let previousSevenDayStart = calendar.date(byAdding: .day, value: -13, to: dayStart) ?? dayStart
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? dayStart
+        let thirtyDayStart = calendar.date(byAdding: .day, value: -29, to: dayStart) ?? dayStart
 
         var today = PricedTokenUsage.zero
+        var twentyFourHour = PricedTokenUsage.zero
         var sevenDay = PricedTokenUsage.zero
         var previousSevenDay = PricedTokenUsage.zero
         var month = PricedTokenUsage.zero
+        var thirtyDay = PricedTokenUsage.zero
         var lifetime = PricedTokenUsage.zero
         var dailyUsage: [String: (date: Date, usage: PricedTokenUsage)] = [:]
         var projects: [String: ClaudeProjectAccumulator] = [:]
         var todayUsageByModel: [String: PricedTokenUsage] = [:]
+        var twentyFourHourUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
         var monthUsageByModel: [String: PricedTokenUsage] = [:]
+        var thirtyDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
+        var sevenDayTrendByDay: [String: (date: Date, models: [String: PricedTokenUsage])] = [:]
 
         for delta in uniqueDeltas {
             let cost = claudeEstimatedCostUSD(tokens: delta.tokens, model: delta.model)
@@ -292,9 +299,17 @@ private final class ClaudeCodeTranscriptReader {
                 month.add(tokens: delta.tokens, costUSD: cost)
                 claudeAddModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &monthUsageByModel)
             }
+            if delta.date >= thirtyDayStart {
+                thirtyDay.add(tokens: delta.tokens, costUSD: cost)
+                claudeAddModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &thirtyDayUsageByModel)
+            }
             if delta.date >= sevenDayStart {
                 sevenDay.add(tokens: delta.tokens, costUSD: cost)
                 claudeAddModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &sevenDayUsageByModel)
+                let trendKey = statistics.dayKey(for: delta.date)
+                var trendDay = sevenDayTrendByDay[trendKey] ?? (calendar.startOfDay(for: delta.date), [:])
+                claudeAddModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &trendDay.models)
+                sevenDayTrendByDay[trendKey] = trendDay
             }
             if delta.date >= previousSevenDayStart && delta.date < sevenDayStart {
                 previousSevenDay.add(tokens: delta.tokens, costUSD: cost)
@@ -302,6 +317,10 @@ private final class ClaudeCodeTranscriptReader {
             if delta.date >= dayStart {
                 today.add(tokens: delta.tokens, costUSD: cost)
                 claudeAddModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &todayUsageByModel)
+            }
+            if delta.date >= twentyFourHourStart {
+                twentyFourHour.add(tokens: delta.tokens, costUSD: cost)
+                claudeAddModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &twentyFourHourUsageByModel)
             }
 
             let bucketDate = calendar.startOfDay(for: delta.date)
@@ -318,8 +337,10 @@ private final class ClaudeCodeTranscriptReader {
 
         let detailed = DetailedUsage(
             today: today,
+            twentyFourHour: twentyFourHour,
             sevenDay: sevenDay,
             month: month,
+            thirtyDay: thirtyDay,
             lifetime: lifetime,
             parsedFileCount: summaries.count,
             tokenEventCount: uniqueDeltas.count
@@ -365,9 +386,17 @@ private final class ClaudeCodeTranscriptReader {
             skillUsages: skillUsages,
             modelUsage: ModelUsageBreakdown(
                 today: claudeModelUsageItems(todayUsageByModel),
+                twentyFourHour: claudeModelUsageItems(twentyFourHourUsageByModel),
                 sevenDay: claudeModelUsageItems(sevenDayUsageByModel),
                 month: claudeModelUsageItems(monthUsageByModel),
-                lifetime: claudeModelUsageItems(lifetimeUsageByModel)
+                thirtyDay: claudeModelUsageItems(thirtyDayUsageByModel),
+                lifetime: claudeModelUsageItems(lifetimeUsageByModel),
+                sevenDayTrend: claudeModelUsageTrendDays(
+                    usageByDay: sevenDayTrendByDay,
+                    dayStart: dayStart,
+                    calendar: calendar,
+                    statistics: statistics
+                )
             )
         )
     }
@@ -591,8 +620,10 @@ private final class ClaudeCodeStatsCacheReader {
         let usage = PricedTokenUsage(tokens: tokens, estimatedCostUSD: claudeDoubleValue(object["totalCostUSD"]) ?? claudeDoubleValue(object["total_cost_usd"]) ?? 0)
         let detailed = DetailedUsage(
             today: PricedTokenUsage(tokens: TokenBreakdown(inputTokens: todayTokens, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: todayTokens), estimatedCostUSD: 0),
+            twentyFourHour: PricedTokenUsage(tokens: TokenBreakdown(inputTokens: todayTokens, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: todayTokens), estimatedCostUSD: 0),
             sevenDay: PricedTokenUsage(tokens: TokenBreakdown(inputTokens: sevenDayTokens, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: sevenDayTokens), estimatedCostUSD: 0),
             month: usage,
+            thirtyDay: usage,
             lifetime: usage,
             parsedFileCount: 1,
             tokenEventCount: 0
@@ -956,14 +987,39 @@ private func claudeModelUsageItems(_ values: [String: PricedTokenUsage]) -> [Mod
     values.map { model, usage in
         ModelUsageItem(
             model: model,
+            provider: modelProviderName(for: model),
             tokens: usage.tokens.visibleTotalTokens,
             uncachedInputTokens: usage.tokens.uncachedInputTokens,
             cachedInputTokens: usage.tokens.billableCachedInputTokens,
             outputTokens: usage.tokens.outputTokens,
-            estimatedCostUSD: usage.estimatedCostUSD
+            estimatedCostUSD: usage.estimatedCostUSD,
+            endToEndTokensPerSecond: nil
         )
     }
     .sorted { $0.tokens == $1.tokens ? $0.model < $1.model : $0.tokens > $1.tokens }
+}
+
+private func claudeModelUsageTrendDays(
+    usageByDay: [String: (date: Date, models: [String: PricedTokenUsage])],
+    dayStart: Date,
+    calendar: Calendar,
+    statistics: StatisticsContext
+) -> [ModelUsageTrendDay] {
+    (0..<7).compactMap { offset in
+        guard let date = calendar.date(byAdding: .day, value: offset - 6, to: dayStart) else { return nil }
+        let key = statistics.dayKey(for: date)
+        let models: [String: PricedTokenUsage] = usageByDay[key]?.models ?? [:]
+        let segments: [ModelUsageTrendSegment] = models.map { model, usage in
+            return ModelUsageTrendSegment(
+                model: model,
+                provider: modelProviderName(for: model),
+                tokens: usage.tokens.visibleTotalTokens
+            )
+        }
+        .filter { $0.tokens > 0 }
+        .sorted { $0.tokens == $1.tokens ? $0.id < $1.id : $0.tokens > $1.tokens }
+        return ModelUsageTrendDay(id: key, date: date, segments: segments)
+    }
 }
 
 private func mergeClaudeSkillUsages(_ skills: [SkillUsage]) -> [SkillUsage] {

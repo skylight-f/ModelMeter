@@ -61,28 +61,66 @@ struct AgentUsageAggregator {
     private func aggregateModelUsage(_ values: [ModelUsageBreakdown]) -> ModelUsageBreakdown {
         ModelUsageBreakdown(
             today: mergeModelUsage(values.flatMap(\.today)),
+            twentyFourHour: mergeModelUsage(values.flatMap(\.twentyFourHour)),
             sevenDay: mergeModelUsage(values.flatMap(\.sevenDay)),
             month: mergeModelUsage(values.flatMap(\.month)),
-            lifetime: mergeModelUsage(values.flatMap(\.lifetime))
+            thirtyDay: mergeModelUsage(values.flatMap(\.thirtyDay)),
+            lifetime: mergeModelUsage(values.flatMap(\.lifetime)),
+            sevenDayTrend: mergeModelUsageTrend(values.flatMap(\.sevenDayTrend))
         )
     }
 
     private func mergeModelUsage(_ items: [ModelUsageItem]) -> [ModelUsageItem] {
         var totals: [String: ModelUsageItem] = [:]
         for item in items {
-            let current = totals[item.model]
-            totals[item.model] = ModelUsageItem(
+            let current = totals[item.id]
+            let currentTPSWeight = current?.endToEndTokensPerSecond == nil ? 0 : max(current?.outputTokens ?? 0, 1)
+            let itemTPSWeight = item.endToEndTokensPerSecond == nil ? 0 : max(item.outputTokens, 1)
+            let tpsWeight = currentTPSWeight + itemTPSWeight
+            let weightedTPS = tpsWeight > 0
+                ? (((current?.endToEndTokensPerSecond ?? 0) * Double(currentTPSWeight)
+                    + (item.endToEndTokensPerSecond ?? 0) * Double(itemTPSWeight)) / Double(tpsWeight))
+                : nil
+            totals[item.id] = ModelUsageItem(
                 model: item.model,
+                provider: item.provider,
                 tokens: (current?.tokens ?? 0) + item.tokens,
                 uncachedInputTokens: (current?.uncachedInputTokens ?? 0) + item.uncachedInputTokens,
                 cachedInputTokens: (current?.cachedInputTokens ?? 0) + item.cachedInputTokens,
                 outputTokens: (current?.outputTokens ?? 0) + item.outputTokens,
-                estimatedCostUSD: aggregateEstimatedCost(current?.estimatedCostUSD, item.estimatedCostUSD)
+                estimatedCostUSD: aggregateEstimatedCost(current?.estimatedCostUSD, item.estimatedCostUSD),
+                endToEndTokensPerSecond: weightedTPS
             )
         }
         return totals.values.sorted {
             $0.tokens == $1.tokens ? $0.model < $1.model : $0.tokens > $1.tokens
         }
+    }
+
+    private func mergeModelUsageTrend(_ days: [ModelUsageTrendDay]) -> [ModelUsageTrendDay] {
+        var totals: [String: (date: Date, segments: [String: ModelUsageTrendSegment])] = [:]
+        for day in days {
+            var current = totals[day.id] ?? (day.date, [:])
+            for segment in day.segments {
+                let previous = current.segments[segment.id]
+                current.segments[segment.id] = ModelUsageTrendSegment(
+                    model: segment.model,
+                    provider: segment.provider,
+                    tokens: (previous?.tokens ?? 0) + segment.tokens
+                )
+            }
+            totals[day.id] = current
+        }
+        return totals.map { id, value in
+            ModelUsageTrendDay(
+                id: id,
+                date: value.date,
+                segments: value.segments.values.sorted {
+                    $0.tokens == $1.tokens ? $0.id < $1.id : $0.tokens > $1.tokens
+                }
+            )
+        }
+        .sorted { $0.date < $1.date }
     }
 
     private func aggregateEstimatedCost(_ lhs: Double?, _ rhs: Double?) -> Double? {
@@ -105,16 +143,20 @@ struct AgentUsageAggregator {
     private func aggregateDetailedUsage(_ values: [DetailedUsage]) -> DetailedUsage? {
         guard !values.isEmpty else { return nil }
         var today = PricedTokenUsage.zero
+        var twentyFourHour = PricedTokenUsage.zero
         var sevenDay = PricedTokenUsage.zero
         var month = PricedTokenUsage.zero
+        var thirtyDay = PricedTokenUsage.zero
         var lifetime = PricedTokenUsage.zero
         var parsedFileCount = 0
         var tokenEventCount = 0
 
         for value in values {
             today.add(tokens: value.today.tokens, costUSD: value.today.estimatedCostUSD)
+            twentyFourHour.add(tokens: value.twentyFourHour.tokens, costUSD: value.twentyFourHour.estimatedCostUSD)
             sevenDay.add(tokens: value.sevenDay.tokens, costUSD: value.sevenDay.estimatedCostUSD)
             month.add(tokens: value.month.tokens, costUSD: value.month.estimatedCostUSD)
+            thirtyDay.add(tokens: value.thirtyDay.tokens, costUSD: value.thirtyDay.estimatedCostUSD)
             lifetime.add(tokens: value.lifetime.tokens, costUSD: value.lifetime.estimatedCostUSD)
             parsedFileCount += value.parsedFileCount
             tokenEventCount += value.tokenEventCount
@@ -122,8 +164,10 @@ struct AgentUsageAggregator {
 
         return DetailedUsage(
             today: today,
+            twentyFourHour: twentyFourHour,
             sevenDay: sevenDay,
             month: month,
+            thirtyDay: thirtyDay,
             lifetime: lifetime,
             parsedFileCount: parsedFileCount,
             tokenEventCount: tokenEventCount

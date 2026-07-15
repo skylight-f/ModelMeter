@@ -168,8 +168,10 @@ struct UsageTrend: Equatable, Codable {
 
 struct DetailedUsage: Equatable, Codable {
     let today: PricedTokenUsage
+    let twentyFourHour: PricedTokenUsage
     let sevenDay: PricedTokenUsage
     let month: PricedTokenUsage
+    let thirtyDay: PricedTokenUsage
     let lifetime: PricedTokenUsage
     let parsedFileCount: Int
     let tokenEventCount: Int
@@ -177,22 +179,51 @@ struct DetailedUsage: Equatable, Codable {
 
 struct ModelUsageItem: Identifiable, Equatable, Codable {
     let model: String
+    let provider: String
     let tokens: Int64
     let uncachedInputTokens: Int64
     let cachedInputTokens: Int64
     let outputTokens: Int64
     let estimatedCostUSD: Double?
+    let endToEndTokensPerSecond: Double?
 
-    var id: String { model }
+    var id: String { "\(provider)|\(model)" }
+}
+
+struct ModelUsageTrendSegment: Identifiable, Equatable, Codable {
+    let model: String
+    let provider: String
+    let tokens: Int64
+
+    var id: String { "\(provider)|\(model)" }
+}
+
+struct ModelUsageTrendDay: Identifiable, Equatable, Codable {
+    let id: String
+    let date: Date
+    let segments: [ModelUsageTrendSegment]
+
+    var tokens: Int64 { segments.reduce(Int64(0)) { $0 + $1.tokens } }
 }
 
 struct ModelUsageBreakdown: Equatable, Codable {
     let today: [ModelUsageItem]
+    let twentyFourHour: [ModelUsageItem]
     let sevenDay: [ModelUsageItem]
     let month: [ModelUsageItem]
+    let thirtyDay: [ModelUsageItem]
     let lifetime: [ModelUsageItem]
+    let sevenDayTrend: [ModelUsageTrendDay]
 
-    static let empty = ModelUsageBreakdown(today: [], sevenDay: [], month: [], lifetime: [])
+    static let empty = ModelUsageBreakdown(
+        today: [],
+        twentyFourHour: [],
+        sevenDay: [],
+        month: [],
+        thirtyDay: [],
+        lifetime: [],
+        sevenDayTrend: []
+    )
 }
 
 struct ProjectUsage: Identifiable, Equatable, Codable {
@@ -376,8 +407,10 @@ private struct SessionUsageDiskCache: Codable {
 
 private struct DetailedUsageAccumulator {
     var today = PricedTokenUsage.zero
+    var twentyFourHour = PricedTokenUsage.zero
     var sevenDay = PricedTokenUsage.zero
     var month = PricedTokenUsage.zero
+    var thirtyDay = PricedTokenUsage.zero
     var lifetime = PricedTokenUsage.zero
     var parsedFileCount = 0
     var tokenEventCount = 0
@@ -387,16 +420,24 @@ private struct DetailedUsageAccumulator {
         at date: Date,
         price: ModelTokenPrice,
         dayStart: Date,
+        twentyFourHourStart: Date,
         sevenDayStart: Date,
-        monthStart: Date
+        monthStart: Date,
+        thirtyDayStart: Date
     ) {
         let cost = estimatedCostUSD(tokens: tokens, price: price)
         lifetime.add(tokens: tokens, costUSD: cost)
         if date >= monthStart {
             month.add(tokens: tokens, costUSD: cost)
         }
+        if date >= thirtyDayStart {
+            thirtyDay.add(tokens: tokens, costUSD: cost)
+        }
         if date >= sevenDayStart {
             sevenDay.add(tokens: tokens, costUSD: cost)
+        }
+        if date >= twentyFourHourStart {
+            twentyFourHour.add(tokens: tokens, costUSD: cost)
         }
         if date >= dayStart {
             today.add(tokens: tokens, costUSD: cost)
@@ -406,8 +447,10 @@ private struct DetailedUsageAccumulator {
     func makeUsage() -> DetailedUsage {
         DetailedUsage(
             today: today,
+            twentyFourHour: twentyFourHour,
             sevenDay: sevenDay,
             month: month,
+            thirtyDay: thirtyDay,
             lifetime: lifetime,
             parsedFileCount: parsedFileCount,
             tokenEventCount: tokenEventCount
@@ -518,6 +561,7 @@ private struct LocalAnalytics: Equatable, Codable {
 private struct LocalAnalyticsCacheEntry: Codable {
     let version: Int
     let dayKey: String
+    let rollingWindowKey: String
     let timeZoneIdentifier: String
     let databaseFingerprint: String
     let sourceFingerprint: String
@@ -817,7 +861,7 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
-    private let localAnalyticsCacheVersion = 8
+    private let localAnalyticsCacheVersion = 9
     private let sessionUsageCacheVersion = 4
     private static let sessionUsageCacheLimit = 1_024
     private static var sessionUsageCache: [String: SessionUsageCacheEntry] = [:]
@@ -1301,6 +1345,7 @@ final class CodexUsageReader {
         }
 
         let dayKey = statistics.dayKey(for: dayStart)
+        let rollingWindowKey = String(Int(statistics.now.timeIntervalSince1970 / 300))
         let databaseFingerprint = fileFingerprint(paths: [
             dbPath,
             dbPath + "-wal",
@@ -1311,6 +1356,7 @@ final class CodexUsageReader {
         if let cached = Self.localAnalyticsCache,
            cached.version == localAnalyticsCacheVersion,
            cached.dayKey == dayKey,
+           cached.rollingWindowKey == rollingWindowKey,
            cached.timeZoneIdentifier == statistics.resolvedIdentifier,
            cached.databaseFingerprint == databaseFingerprint,
            cached.sourceFingerprint == sourceFingerprint {
@@ -1320,6 +1366,7 @@ final class CodexUsageReader {
         if let cached = readPersistentLocalAnalyticsCache(),
            cached.version == localAnalyticsCacheVersion,
            cached.dayKey == dayKey,
+           cached.rollingWindowKey == rollingWindowKey,
            cached.timeZoneIdentifier == statistics.resolvedIdentifier,
            cached.databaseFingerprint == databaseFingerprint,
            cached.sourceFingerprint == sourceFingerprint {
@@ -1333,6 +1380,8 @@ final class CodexUsageReader {
         monthComponents.minute = 0
         monthComponents.second = 0
         let monthStart = calendar.date(from: monthComponents) ?? dayStart
+        let twentyFourHourStart = calendar.date(byAdding: .hour, value: -24, to: statistics.now) ?? dayStart
+        let thirtyDayStart = calendar.date(byAdding: .day, value: -29, to: dayStart) ?? dayStart
 
         let fractionalFormatter = ISO8601DateFormatter()
         fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -1345,9 +1394,12 @@ final class CodexUsageReader {
         var toolUsage: [String: ToolUsageAccumulator] = [:]
         var skillUsage: [String: SkillUsageAccumulator] = [:]
         var todayUsageByModel: [String: PricedTokenUsage] = [:]
+        var twentyFourHourUsageByModel: [String: PricedTokenUsage] = [:]
         var sevenDayUsageByModel: [String: PricedTokenUsage] = [:]
         var monthUsageByModel: [String: PricedTokenUsage] = [:]
+        var thirtyDayUsageByModel: [String: PricedTokenUsage] = [:]
         var lifetimeUsageByModel: [String: PricedTokenUsage] = [:]
+        var sevenDayTrendByDay: [String: (date: Date, models: [String: PricedTokenUsage])] = [:]
         for source in sources {
             guard let entry = cachedSessionUsage(
                 source: source,
@@ -1371,18 +1423,30 @@ final class CodexUsageReader {
                     at: delta.date,
                     price: price,
                     dayStart: dayStart,
+                    twentyFourHourStart: twentyFourHourStart,
                     sevenDayStart: sevenDayStart,
-                    monthStart: monthStart
+                    monthStart: monthStart,
+                    thirtyDayStart: thirtyDayStart
                 )
 
                 if delta.date >= dayStart {
                     addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &todayUsageByModel)
                 }
+                if delta.date >= twentyFourHourStart {
+                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &twentyFourHourUsageByModel)
+                }
                 if delta.date >= sevenDayStart {
                     addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &sevenDayUsageByModel)
+                    let key = statistics.dayKey(for: delta.date)
+                    var trendDay = sevenDayTrendByDay[key] ?? (calendar.startOfDay(for: delta.date), [:])
+                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &trendDay.models)
+                    sevenDayTrendByDay[key] = trendDay
                 }
                 if delta.date >= monthStart {
                     addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &monthUsageByModel)
+                }
+                if delta.date >= thirtyDayStart {
+                    addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &thirtyDayUsageByModel)
                 }
                 addModelUsage(tokens: delta.tokens, costUSD: cost, model: modelName, to: &lifetimeUsageByModel)
 
@@ -1448,6 +1512,7 @@ final class CodexUsageReader {
             Self.localAnalyticsCache = LocalAnalyticsCacheEntry(
                 version: localAnalyticsCacheVersion,
                 dayKey: dayKey,
+                rollingWindowKey: rollingWindowKey,
                 timeZoneIdentifier: statistics.resolvedIdentifier,
                 databaseFingerprint: databaseFingerprint,
                 sourceFingerprint: sourceFingerprint,
@@ -1477,14 +1542,23 @@ final class CodexUsageReader {
             skillUsages: skillUsages,
             modelUsage: ModelUsageBreakdown(
                 today: sortedModelUsageItems(todayUsageByModel),
+                twentyFourHour: sortedModelUsageItems(twentyFourHourUsageByModel),
                 sevenDay: sortedModelUsageItems(sevenDayUsageByModel),
                 month: sortedModelUsageItems(monthUsageByModel),
-                lifetime: sortedModelUsageItems(lifetimeUsageByModel)
+                thirtyDay: sortedModelUsageItems(thirtyDayUsageByModel),
+                lifetime: sortedModelUsageItems(lifetimeUsageByModel),
+                sevenDayTrend: makeModelUsageTrendDays(
+                    usageByDay: sevenDayTrendByDay,
+                    dayStart: dayStart,
+                    calendar: calendar,
+                    statistics: statistics
+                )
             )
         )
         Self.localAnalyticsCache = LocalAnalyticsCacheEntry(
             version: localAnalyticsCacheVersion,
             dayKey: dayKey,
+            rollingWindowKey: rollingWindowKey,
             timeZoneIdentifier: statistics.resolvedIdentifier,
             databaseFingerprint: databaseFingerprint,
             sourceFingerprint: sourceFingerprint,
@@ -2604,6 +2678,28 @@ private func normalizedModelName(_ model: String?, fallback: String) -> String {
     return String(candidate.prefix(25)) + "..."
 }
 
+func modelProviderName(for model: String) -> String {
+    let normalized = model.lowercased()
+    if normalized.contains("claude") { return "Anthropic" }
+    if normalized.contains("gemini") || normalized.contains("gemma") || normalized.contains("palm") { return "Google" }
+    if normalized.contains("deepseek") { return "DeepSeek" }
+    if normalized.contains("mimo") { return "MimoCode" }
+    if normalized.contains("glm") { return "Zhipu AI" }
+    if normalized.contains("qwen") { return "Alibaba" }
+    if normalized.contains("llama") { return "Meta" }
+    if normalized.contains("mistral") || normalized.contains("mixtral") { return "Mistral" }
+    if normalized.contains("command-r") || normalized.contains("cohere") { return "Cohere" }
+    if normalized.contains("grok") { return "xAI" }
+    if normalized.contains("yi-") { return "01.AI" }
+    if normalized.contains("kimi") || normalized.contains("moonshot") { return "Moonshot" }
+    if normalized.contains("minimax") { return "MiniMax" }
+    if normalized.contains("gpt") || normalized.contains("o1") || normalized.contains("o3")
+        || normalized.contains("chatgpt") || normalized.contains("codex") {
+        return "OpenAI"
+    }
+    return "AI"
+}
+
 private func addModelUsage(
     tokens: TokenBreakdown,
     costUSD: Double,
@@ -2619,11 +2715,13 @@ private func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage]) -
     usageByModel.map { model, usage in
         ModelUsageItem(
             model: model,
+            provider: modelProviderName(for: model),
             tokens: usage.tokens.visibleTotalTokens,
             uncachedInputTokens: usage.tokens.uncachedInputTokens,
             cachedInputTokens: usage.tokens.billableCachedInputTokens,
             outputTokens: usage.tokens.outputTokens,
-            estimatedCostUSD: usage.estimatedCostUSD
+            estimatedCostUSD: usage.estimatedCostUSD,
+            endToEndTokensPerSecond: nil
         )
     }
     .sorted { lhs, rhs in
@@ -2631,6 +2729,29 @@ private func sortedModelUsageItems(_ usageByModel: [String: PricedTokenUsage]) -
             return lhs.model.localizedCaseInsensitiveCompare(rhs.model) == .orderedAscending
         }
         return lhs.tokens > rhs.tokens
+    }
+}
+
+private func makeModelUsageTrendDays(
+    usageByDay: [String: (date: Date, models: [String: PricedTokenUsage])],
+    dayStart: Date,
+    calendar: Calendar,
+    statistics: StatisticsContext
+) -> [ModelUsageTrendDay] {
+    (0..<7).compactMap { offset in
+        guard let date = calendar.date(byAdding: .day, value: offset - 6, to: dayStart) else { return nil }
+        let key = statistics.dayKey(for: date)
+        let models: [String: PricedTokenUsage] = usageByDay[key]?.models ?? [:]
+        let segments: [ModelUsageTrendSegment] = models.map { model, usage in
+            return ModelUsageTrendSegment(
+                model: model,
+                provider: modelProviderName(for: model),
+                tokens: usage.tokens.visibleTotalTokens
+            )
+        }
+        .filter { $0.tokens > 0 }
+        .sorted { $0.tokens == $1.tokens ? $0.id < $1.id : $0.tokens > $1.tokens }
+        return ModelUsageTrendDay(id: key, date: date, segments: segments)
     }
 }
 
@@ -3194,12 +3315,19 @@ struct UsageWidgetView: View {
             }
 
             VStack(alignment: .leading, spacing: 13) {
-                HStack(spacing: 12) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
                     DetailedTokenMetricCard(
                         title: language.text("今日", "Today"),
                         systemName: "sun.max.fill",
                         usage: snapshot.local?.detailedUsage?.today,
                         fallbackTokens: snapshot.local?.todayTokens,
+                        language: language
+                    )
+                    DetailedTokenMetricCard(
+                        title: "24H",
+                        systemName: "clock.arrow.circlepath",
+                        usage: snapshot.local?.detailedUsage?.twentyFourHour,
+                        fallbackTokens: snapshot.local?.modelUsage.twentyFourHour.reduce(Int64(0)) { $0 + $1.tokens },
                         language: language
                     )
                     DetailedTokenMetricCard(
@@ -3210,8 +3338,15 @@ struct UsageWidgetView: View {
                         language: language
                     )
                     DetailedTokenMetricCard(
-                        title: language.text("本月", "This month"),
+                        title: language.text("近 30 天", "Last 30 days"),
                         systemName: "calendar.badge.clock",
+                        usage: snapshot.local?.detailedUsage?.thirtyDay,
+                        fallbackTokens: snapshot.local?.modelUsage.thirtyDay.reduce(Int64(0)) { $0 + $1.tokens },
+                        language: language
+                    )
+                    DetailedTokenMetricCard(
+                        title: language.text("本月", "This month"),
+                        systemName: "calendar",
                         usage: snapshot.local?.detailedUsage?.month,
                         fallbackTokens: snapshot.local?.modelUsage.month.reduce(Int64(0)) { $0 + $1.tokens },
                         language: language
@@ -4964,8 +5099,10 @@ struct DailyTokenBar: View {
 
 private enum ModelUsagePeriod: String, CaseIterable, Identifiable {
     case today
+    case twentyFourHour
     case sevenDay
     case month
+    case thirtyDay
     case lifetime
 
     var id: String { rawValue }
@@ -4974,10 +5111,14 @@ private enum ModelUsagePeriod: String, CaseIterable, Identifiable {
         switch self {
         case .today:
             return language.text("今日", "Today")
+        case .twentyFourHour:
+            return "24H"
         case .sevenDay:
             return language.text("近 7 天", "7 days")
         case .month:
             return language.text("本月", "This month")
+        case .thirtyDay:
+            return language.text("近 30 天", "30 days")
         case .lifetime:
             return language.text("累计", "All time")
         }
@@ -4987,19 +5128,33 @@ private enum ModelUsagePeriod: String, CaseIterable, Identifiable {
 struct ModelUsagePanel: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var period: ModelUsagePeriod = .today
+    @State private var searchText = ""
     let modelUsage: ModelUsageBreakdown
     let language: WidgetLanguage
 
-    private var items: [ModelUsageItem] {
+    private var periodItems: [ModelUsageItem] {
         switch period {
         case .today:
             return modelUsage.today
+        case .twentyFourHour:
+            return modelUsage.twentyFourHour
         case .sevenDay:
             return modelUsage.sevenDay
         case .month:
             return modelUsage.month
+        case .thirtyDay:
+            return modelUsage.thirtyDay
         case .lifetime:
             return modelUsage.lifetime
+        }
+    }
+
+    private var items: [ModelUsageItem] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return periodItems }
+        return periodItems.filter {
+            $0.model.localizedCaseInsensitiveContains(query)
+                || $0.provider.localizedCaseInsensitiveContains(query)
         }
     }
 
@@ -5013,17 +5168,30 @@ struct ModelUsagePanel: View {
                     Text(language.text("模型用量", "Model usage"))
                         .font(.system(size: dashboardCardTitleSize, weight: .semibold))
                     Spacer(minLength: 8)
+                    TextField(language.text("搜索模型或厂商", "Search model or provider"), text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 10, weight: .medium))
+                        .frame(width: 150)
                     periodPicker
                 }
                 .frame(height: dashboardCardHeaderHeight)
 
-                if items.isEmpty {
+                if periodItems.isEmpty {
                     AnalyticsEmptyState(
                         systemName: "chart.bar.doc.horizontal",
                         title: language.text("暂无模型明细", "No model details"),
                         detail: language.text("完成一次包含 token 记录的会话后再刷新。", "Refresh after a session with token records.")
                     )
+                } else if items.isEmpty {
+                    AnalyticsEmptyState(
+                        systemName: "magnifyingglass",
+                        title: language.text("没有匹配的模型", "No matching models"),
+                        detail: language.text("可按模型名或厂商搜索。", "Search by model or provider.")
+                    )
                 } else {
+                    if period == .sevenDay, !modelUsage.sevenDayTrend.isEmpty {
+                        ModelUsageStackedTrend(days: modelUsage.sevenDayTrend, language: language)
+                    }
                     modelTable
                 }
             }
@@ -5084,6 +5252,7 @@ private struct ModelUsageHeader: View {
             header(language.text("输出", "Output"), width: 66, alignment: .trailing, color: outputTokenColor)
             header(language.text("总消耗", "Total"), width: 70, alignment: .trailing)
             header(language.text("缓存率", "Hit rate"), width: 58, alignment: .trailing)
+            header(language.text("估算速度", "Est. TPS"), width: 68, alignment: .trailing)
             header(language.text("估算价值", "Est. value"), width: 72, alignment: .trailing)
         }
         .padding(.horizontal, 10)
@@ -5116,9 +5285,15 @@ private struct ModelUsageRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(item.model)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.model)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                Text(item.provider)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 4)
             value(item.uncachedInputTokens, width: 66, color: uncachedInputColor)
             value(item.cachedInputTokens, width: 66, color: cachedInputColor)
@@ -5129,6 +5304,11 @@ private struct ModelUsageRow: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(width: 58, alignment: .trailing)
+            Text(item.endToEndTokensPerSecond.map { String(format: "%.1f", $0) } ?? "--")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(width: 68, alignment: .trailing)
             Text(formatUSD(item.estimatedCostUSD))
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .monospacedDigit()
@@ -5138,8 +5318,8 @@ private struct ModelUsageRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .help(language.text(
-            "\(item.model) · 总计 \(formatTokens(item.tokens)) · 费用为本地估算",
-            "\(item.model) · \(formatTokens(item.tokens)) total · value is estimated locally"
+            "\(item.provider) · \(item.model) · 总计 \(formatTokens(item.tokens)) · 速度为端到端估算，费用为本地估算",
+            "\(item.provider) · \(item.model) · \(formatTokens(item.tokens)) total · speed is an end-to-end estimate; value is estimated locally"
         ))
     }
 
@@ -5156,6 +5336,77 @@ private struct ModelUsageRow: View {
             .lineLimit(1)
             .minimumScaleFactor(0.72)
             .frame(width: width, alignment: .trailing)
+    }
+}
+
+private struct ModelUsageStackedTrend: View {
+    let days: [ModelUsageTrendDay]
+    let language: WidgetLanguage
+
+    private var maxTokens: Int64 { max(days.map(\.tokens).max() ?? 0, 1) }
+
+    private var rankedModelIDs: [String] {
+        var totals: [String: Int64] = [:]
+        for segment in days.flatMap(\.segments) {
+            totals[segment.id, default: 0] += segment.tokens
+        }
+        return totals.keys.sorted {
+            totals[$0, default: 0] == totals[$1, default: 0]
+                ? $0 < $1
+                : totals[$0, default: 0] > totals[$1, default: 0]
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(language.text("近 7 天模型构成", "7-day model mix"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            HStack(alignment: .bottom, spacing: 8) {
+                ForEach(days) { day in
+                    VStack(spacing: 4) {
+                        ZStack(alignment: .bottom) {
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(WidgetPalette.surfaceTrack)
+                            VStack(spacing: 1) {
+                                ForEach(day.segments) { segment in
+                                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                        .fill(color(for: segment.id))
+                                        .frame(height: max(2, 62 * CGFloat(Double(segment.tokens) / Double(maxTokens))))
+                                }
+                            }
+                        }
+                        .frame(height: 64)
+                        .help(dayHelp(day))
+                        Text(dayLabel(day.date))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .padding(10)
+        .cardBackground(cornerRadius: dashboardCardCornerRadius)
+    }
+
+    private func color(for id: String) -> Color {
+        let index = rankedModelIDs.firstIndex(of: id) ?? 0
+        let opacities = [0.95, 0.78, 0.62, 0.48, 0.36]
+        return WidgetPalette.brandPrimary.opacity(opacities[index % opacities.count])
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = language.isChinese ? Locale(identifier: "zh_CN") : Locale(identifier: "en_US")
+        formatter.dateFormat = "M/d"
+        return formatter.string(from: date)
+    }
+
+    private func dayHelp(_ day: ModelUsageTrendDay) -> String {
+        let details = day.segments.prefix(5).map { "\($0.provider) \($0.model): \(formatTokens($0.tokens))" }
+        return ([dayLabel(day.date), language.text("总计 \(formatTokens(day.tokens))", "Total \(formatTokens(day.tokens))")] + details)
+            .joined(separator: "\n")
     }
 }
 
@@ -8585,6 +8836,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-statistics-time-zone") {
             exit(StatisticsTimeZoneSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-model-usage") {
+            exit(ModelUsageSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {

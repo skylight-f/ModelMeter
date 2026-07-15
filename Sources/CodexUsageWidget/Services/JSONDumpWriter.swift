@@ -107,17 +107,22 @@ private func runtimeJSONObject(_ local: LocalUsage) -> [String: Any] {
         "skillUsages": local.skillUsages.prefix(20).map { runtimeJSONObject($0) },
         "modelUsage": [
             "today": local.modelUsage.today.map { runtimeJSONObject($0) },
+            "twentyFourHour": local.modelUsage.twentyFourHour.map { runtimeJSONObject($0) },
             "sevenDay": local.modelUsage.sevenDay.map { runtimeJSONObject($0) },
             "month": local.modelUsage.month.map { runtimeJSONObject($0) },
-            "lifetime": local.modelUsage.lifetime.map { runtimeJSONObject($0) }
+            "thirtyDay": local.modelUsage.thirtyDay.map { runtimeJSONObject($0) },
+            "lifetime": local.modelUsage.lifetime.map { runtimeJSONObject($0) },
+            "sevenDayTrend": local.modelUsage.sevenDayTrend.map { runtimeJSONObject($0) }
         ] as [String: Any]
     ]
 
     if let detailed = local.detailedUsage {
         object["detailedUsage"] = [
             "today": runtimeJSONObject(detailed.today),
+            "twentyFourHour": runtimeJSONObject(detailed.twentyFourHour),
             "sevenDay": runtimeJSONObject(detailed.sevenDay),
             "month": runtimeJSONObject(detailed.month),
+            "thirtyDay": runtimeJSONObject(detailed.thirtyDay),
             "lifetime": runtimeJSONObject(detailed.lifetime),
             "parsedFileCount": detailed.parsedFileCount,
             "tokenEventCount": detailed.tokenEventCount
@@ -158,11 +163,28 @@ private func runtimeJSONObject(_ local: LocalUsage) -> [String: Any] {
 private func runtimeJSONObject(_ item: ModelUsageItem) -> [String: Any] {
     [
         "model": item.model,
+        "provider": item.provider,
         "tokens": item.tokens,
         "uncachedInputTokens": item.uncachedInputTokens,
         "cachedInputTokens": item.cachedInputTokens,
         "outputTokens": item.outputTokens,
-        "estimatedCostUSD": runtimeJSONValue(item.estimatedCostUSD)
+        "estimatedCostUSD": runtimeJSONValue(item.estimatedCostUSD),
+        "endToEndTokensPerSecond": runtimeJSONValue(item.endToEndTokensPerSecond)
+    ] as [String: Any]
+}
+
+private func runtimeJSONObject(_ day: ModelUsageTrendDay) -> [String: Any] {
+    [
+        "day": day.id,
+        "date": runtimeISOString(day.date) ?? "",
+        "tokens": day.tokens,
+        "segments": day.segments.map {
+            [
+                "model": $0.model,
+                "provider": $0.provider,
+                "tokens": $0.tokens
+            ] as [String: Any]
+        }
     ] as [String: Any]
 }
 
