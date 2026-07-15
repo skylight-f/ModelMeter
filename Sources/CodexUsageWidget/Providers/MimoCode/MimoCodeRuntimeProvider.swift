@@ -99,8 +99,10 @@ private final class MimoCodeLocalReader {
         let sevenDayStart = calendar.date(byAdding: .day, value: -6, to: dayStart) ?? dayStart
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: context.now)) ?? dayStart
         let thirtyDayStart = calendar.date(byAdding: .day, value: -29, to: dayStart) ?? dayStart
+        let trendStart = calendar.date(byAdding: .day, value: -190, to: dayStart) ?? sevenDayStart
         var sessionTokens: [String: Int64] = [:]
         var dailyTokens: [String: Int64] = [:]
+        var trendDailyUsage: [String: PricedTokenUsage] = [:]
         var todayModels: [String: MimoModelAccumulator] = [:]
         var twentyFourHourModels: [String: MimoModelAccumulator] = [:]
         var sevenDayModels: [String: MimoModelAccumulator] = [:]
@@ -148,6 +150,14 @@ private final class MimoCodeLocalReader {
             sessionTokens[sessionId, default: 0] += visibleTokens
             lifetimeDetailed.add(tokens: current, costUSD: 0)
             add(tokens: current, cost: estimatedCost, model: model, provider: provider, duration: duration, key: key, to: &lifetimeModels)
+            if date >= trendStart {
+                let dayKey = context.statistics.dayKey(for: date)
+                var dayUsage = trendDailyUsage[dayKey] ?? .zero
+                // A MimoCode database can contain models priced in different currencies.
+                // Keep trend totals currency-neutral instead of combining CNY and USD.
+                dayUsage.add(tokens: current, costUSD: 0)
+                trendDailyUsage[dayKey] = dayUsage
+            }
             if date >= sevenDayStart {
                 sevenDayTokens += visibleTokens
                 dailyTokens[context.statistics.dayKey(for: date), default: 0] += visibleTokens
@@ -214,7 +224,15 @@ private final class MimoCodeLocalReader {
                 parsedFileCount: tokenEventCount > 0 ? 1 : 0,
                 tokenEventCount: tokenEventCount
             ),
-            usageTrend: nil,
+            usageTrend: makeUsageTrend(
+                dailyUsage: trendDailyUsage,
+                dayStart: dayStart,
+                sevenDayStart: sevenDayStart,
+                trendStart: trendStart,
+                monthStart: monthStart,
+                calendar: calendar,
+                statistics: context.statistics
+            ),
             projectBoard: nil,
             toolUsages: [],
             skillUsages: [],
@@ -384,6 +402,159 @@ private final class MimoCodeLocalReader {
             .sorted { $0.tokens == $1.tokens ? $0.id < $1.id : $0.tokens > $1.tokens }
             return ModelUsageTrendDay(id: dayKey, date: date, segments: segments)
         }
+    }
+
+    private func makeUsageTrend(
+        dailyUsage: [String: PricedTokenUsage],
+        dayStart: Date,
+        sevenDayStart: Date,
+        trendStart: Date,
+        monthStart: Date,
+        calendar: Calendar,
+        statistics: StatisticsContext
+    ) -> UsageTrend {
+        var buckets: [UsageDayBucket] = []
+        var cursor = calendar.startOfDay(for: trendStart)
+        let end = calendar.startOfDay(for: dayStart)
+
+        while cursor <= end {
+            let key = statistics.dayKey(for: cursor)
+            buckets.append(UsageDayBucket(
+                id: key,
+                date: cursor,
+                usage: dailyUsage[key] ?? .zero,
+                sourceQuality: .detailed
+            ))
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+
+        var sevenDay = PricedTokenUsage.zero
+        var previousSevenDayTokens: Int64 = 0
+        var month = PricedTokenUsage.zero
+        let previousSevenDayStart = calendar.date(byAdding: .day, value: -7, to: sevenDayStart) ?? sevenDayStart
+
+        for bucket in buckets {
+            if bucket.date >= sevenDayStart {
+                sevenDay.add(tokens: bucket.usage.tokens, costUSD: 0)
+            } else if bucket.date >= previousSevenDayStart {
+                previousSevenDayTokens += bucket.tokens
+            }
+            if bucket.date >= monthStart {
+                month.add(tokens: bucket.usage.tokens, costUSD: 0)
+            }
+        }
+
+        let peakDay = buckets
+            .filter { $0.date >= sevenDayStart }
+            .max { $0.tokens < $1.tokens }
+        let changePercent: Double?
+        let isNewActivity: Bool
+        if previousSevenDayTokens > 0 {
+            changePercent = (Double(sevenDay.tokens.visibleTotalTokens) - Double(previousSevenDayTokens))
+                / Double(previousSevenDayTokens) * 100
+            isNewActivity = false
+        } else {
+            changePercent = nil
+            isNewActivity = sevenDay.tokens.visibleTotalTokens > 0
+        }
+
+        let heatmapData = makeHeatmapData(
+            buckets: buckets,
+            endDate: dayStart,
+            weekCount: 26,
+            calendar: calendar,
+            statistics: statistics
+        )
+
+        return UsageTrend(
+            dayBuckets: buckets,
+            heatmapWeeks: heatmapData.weeks,
+            heatmapThresholds: heatmapData.thresholds,
+            summary: UsageTrendSummary(
+                sevenDay: sevenDay,
+                dailyAverageTokens: sevenDay.tokens.visibleTotalTokens / 7,
+                peakDay: peakDay?.tokens ?? 0 > 0 ? peakDay : nil,
+                changePercent: changePercent,
+                isNewActivity: isNewActivity
+            ),
+            month: month,
+            projectedMonthCostUSD: nil,
+            activeDayCount: buckets.filter { $0.tokens > 0 }.count,
+            sourceQuality: .detailed
+        )
+    }
+
+    private func makeHeatmapData(
+        buckets: [UsageDayBucket],
+        endDate: Date,
+        weekCount: Int,
+        calendar: Calendar,
+        statistics: StatisticsContext
+    ) -> (weeks: [[UsageHeatmapDay]], thresholds: [Int64]) {
+        let latestDate = calendar.startOfDay(for: endDate)
+        let currentWeekStart = weekStart(for: latestDate, calendar: calendar)
+        let firstWeekStart = calendar.date(
+            byAdding: .weekOfYear,
+            value: -(weekCount - 1),
+            to: currentWeekStart
+        ) ?? currentWeekStart
+        let bucketByDay = Dictionary(uniqueKeysWithValues: buckets.map { ($0.id, $0) })
+
+        let weeks: [[UsageHeatmapDay]] = (0..<weekCount).map { weekIndex in
+            (0..<7).compactMap { weekdayIndex in
+                guard let date = calendar.date(
+                    byAdding: .day,
+                    value: weekIndex * 7 + weekdayIndex,
+                    to: firstWeekStart
+                ) else { return nil }
+                let key = statistics.dayKey(for: date)
+                let isFuture = date > latestDate
+                return UsageHeatmapDay(
+                    id: key,
+                    date: date,
+                    usage: isFuture ? nil : bucketByDay[key]?.usage,
+                    isFuture: isFuture
+                )
+            }
+        }
+        let values = weeks
+            .flatMap { $0 }
+            .filter { !$0.isFuture }
+            .map(\.tokens)
+            .filter { $0 > 0 }
+            .sorted()
+        return (weeks, heatmapThresholds(values))
+    }
+
+    private func heatmapThresholds(_ values: [Int64]) -> [Int64] {
+        guard values.count >= 5 else {
+            let maxValue = max(values.max() ?? 0, 1)
+            return [maxValue / 5, maxValue * 2 / 5, maxValue * 3 / 5, maxValue * 4 / 5]
+                .map { max($0, 1) }
+        }
+        return [
+            quantile(values, fraction: 0.25),
+            quantile(values, fraction: 0.50),
+            quantile(values, fraction: 0.75),
+            quantile(values, fraction: 0.90)
+        ]
+    }
+
+    private func quantile(_ values: [Int64], fraction: Double) -> Int64 {
+        guard !values.isEmpty else { return 1 }
+        let index = min(values.count - 1, max(0, Int((Double(values.count - 1) * fraction).rounded())))
+        return max(values[index], 1)
+    }
+
+    private func weekStart(for date: Date, calendar: Calendar) -> Date {
+        let weekday = calendar.component(.weekday, from: date)
+        let mondayOffset = (weekday + 5) % 7
+        return calendar.date(
+            byAdding: .day,
+            value: -mondayOffset,
+            to: calendar.startOfDay(for: date)
+        ) ?? date
     }
 
     private func databaseURL(context: RuntimeLoadContext) -> URL? {

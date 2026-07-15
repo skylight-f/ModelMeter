@@ -3638,7 +3638,10 @@ struct UsageWidgetView: View {
                         usage: snapshot.local?.detailedUsage?.today,
                         fallbackTokens: snapshot.local?.todayTokens,
                         language: language,
-                        showsEstimatedCost: store.selectedRuntimeScope != .mimoCode
+                        estimatedCostText: overviewCostText(
+                            usage: snapshot.local?.detailedUsage?.today,
+                            modelItems: snapshot.local?.modelUsage.today ?? []
+                        )
                     )
                     DetailedTokenMetricCard(
                         title: language.text("近 7 天", "Last 7 days"),
@@ -3646,7 +3649,10 @@ struct UsageWidgetView: View {
                         usage: snapshot.local?.detailedUsage?.sevenDay,
                         fallbackTokens: snapshot.local?.sevenDayTokens,
                         language: language,
-                        showsEstimatedCost: store.selectedRuntimeScope != .mimoCode
+                        estimatedCostText: overviewCostText(
+                            usage: snapshot.local?.detailedUsage?.sevenDay,
+                            modelItems: snapshot.local?.modelUsage.sevenDay ?? []
+                        )
                     )
                     DetailedTokenMetricCard(
                         title: language.text("本月", "This month"),
@@ -3654,7 +3660,10 @@ struct UsageWidgetView: View {
                         usage: snapshot.local?.detailedUsage?.month,
                         fallbackTokens: snapshot.local?.modelUsage.month.reduce(Int64(0)) { $0 + $1.tokens },
                         language: language,
-                        showsEstimatedCost: store.selectedRuntimeScope != .mimoCode
+                        estimatedCostText: overviewCostText(
+                            usage: snapshot.local?.detailedUsage?.month,
+                            modelItems: snapshot.local?.modelUsage.month ?? []
+                        )
                     )
                     DetailedTokenMetricCard(
                         title: language.text("累计", "Lifetime"),
@@ -3662,7 +3671,10 @@ struct UsageWidgetView: View {
                         usage: snapshot.local?.detailedUsage?.lifetime,
                         fallbackTokens: snapshot.local?.lifetimeTokens,
                         language: language,
-                        showsEstimatedCost: store.selectedRuntimeScope != .mimoCode
+                        estimatedCostText: overviewCostText(
+                            usage: snapshot.local?.detailedUsage?.lifetime,
+                            modelItems: snapshot.local?.modelUsage.lifetime ?? []
+                        )
                     )
                 }
 
@@ -3675,6 +3687,13 @@ struct UsageWidgetView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 16)
         .sectionBackground()
+    }
+
+    private func overviewCostText(usage: PricedTokenUsage?, modelItems: [ModelUsageItem]) -> String {
+        if store.selectedRuntimeScope == .mimoCode {
+            return formatModelUsageCostSummary(modelItems)
+        }
+        return formatUSD(usage?.estimatedCostUSD)
     }
 
     private var dashboardTabsSection: some View {
@@ -5741,13 +5760,26 @@ private func formatModelUsageCost(_ value: Double?, currency: ModelTokenCurrency
     return String(format: "\(currency.rawValue)%.2f", value)
 }
 
+private func formatModelUsageCostSummary(_ items: [ModelUsageItem]) -> String {
+    var totals: [ModelTokenCurrency: Double] = [:]
+    for item in items {
+        guard let cost = item.estimatedCostUSD, cost > 0 else { continue }
+        totals[item.currency, default: 0] += cost
+    }
+    let values = [ModelTokenCurrency.cny, .usd].compactMap { currency -> String? in
+        guard let total = totals[currency], total > 0 else { return nil }
+        return formatModelUsageCost(total, currency: currency)
+    }
+    return values.isEmpty ? "--" : values.joined(separator: " + ")
+}
+
 struct DetailedTokenMetricCard: View {
     let title: String
     let systemName: String
     let usage: PricedTokenUsage?
     let fallbackTokens: Int64?
     let language: WidgetLanguage
-    let showsEstimatedCost: Bool
+    let estimatedCostText: String
 
     private var displayTokens: Int64? {
         usage?.tokens.visibleTotalTokens ?? fallbackTokens
@@ -5774,7 +5806,7 @@ struct DetailedTokenMetricCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                Text(showsEstimatedCost ? formatUSD(usage?.estimatedCostUSD) : "--")
+                Text(estimatedCostText)
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -6309,7 +6341,10 @@ struct UsageTrendPanel: View {
             AnalyticsEmptyState(
                 systemName: "chart.bar.doc.horizontal",
                 title: language.text("暂无用量趋势", "No usage trend"),
-                detail: language.text("完成一次 Codex 会话后，这里会显示最近半年的每日 token 热力图。", "After one Codex session, this panel shows a daily token heatmap for the last six months.")
+                detail: language.text(
+                    "完成一次 \(runtimeScope.displayName) 会话后，这里会显示最近半年的每日 token 热力图。",
+                    "After one \(runtimeScope.displayName) session, this panel shows a daily token heatmap for the last six months."
+                )
             )
         }
     }
@@ -6352,7 +6387,7 @@ struct UsageHeatmapCard: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 4)
-                .help(usageSourceHelp(language: language))
+                .help(usageSourceHelp(runtimeScope: runtimeScope, language: language))
             }
         }
     }
@@ -7898,11 +7933,24 @@ private func usageSourceTooltip(_ quality: UsageSourceQuality, language: WidgetL
     }
 }
 
-private func usageSourceHelp(language: WidgetLanguage) -> String {
-    language.text(
-        "使用本机 Codex session token_count 事件估算；缺失时回退到本机线程更新时间统计。API 等效价值为估算，不代表官方账单。",
-        "Estimated from local Codex session token_count events. Falls back to thread updated_at when detailed events are unavailable. API-equivalent value is an estimate, not an official bill."
-    )
+private func usageSourceHelp(runtimeScope: RuntimeScope, language: WidgetLanguage) -> String {
+    switch runtimeScope {
+    case .mimoCode:
+        return language.text(
+            "来自本机 MimoCode 数据库中的消息 token 事件；按本地统计时区聚合，不上传会话内容。",
+            "From message token events in the local MimoCode database, grouped in the local statistics time zone without uploading session content."
+        )
+    case .claudeCode:
+        return language.text(
+            "来自本机 Claude Code transcript 的结构化 token 记录；按本地统计时区聚合。",
+            "From structured token records in local Claude Code transcripts, grouped in the local statistics time zone."
+        )
+    case .codex:
+        return language.text(
+            "使用本机 Codex session token_count 事件估算；缺失时回退到本机线程更新时间统计。API 等效价值为估算，不代表官方账单。",
+            "Estimated from local Codex session token_count events. Falls back to thread updated_at when detailed events are unavailable. API-equivalent value is an estimate, not an official bill."
+        )
+    }
 }
 
 private func fullDateText(_ date: Date, language: WidgetLanguage) -> String {
