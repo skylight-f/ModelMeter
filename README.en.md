@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **Upgrade to v1.1.0 or later.** v1.1.0 adds six reviewed built-in palettes and a Liquid Glass palette gallery, Codex reset-credit counts with expiry details, macOS 13 support, and more reliable cumulative token accounting across missing fields, regressions, and counter resets. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
+> **Upgrade to v1.1.1 or later.** v1.1.1 adds source-aware task classification and next-run times, Codex Team monthly-quota compatibility, Claude Code Skill path resolution, a resizable main window, and stronger local performance and graduation checks. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
 
 codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex and Claude Code quota, token usage, and today's task status. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, and daily work progress.
 
@@ -132,10 +132,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.1.0-mac-arm64.dmg
-dist/codexU-1.1.0-mac-arm64.dmg.sha256
-dist/codexU-1.1.0-mac-x86_64.dmg
-dist/codexU-1.1.0-mac-x86_64.dmg.sha256
+dist/codexU-1.1.1-mac-arm64.dmg
+dist/codexU-1.1.1-mac-arm64.dmg.sha256
+dist/codexU-1.1.1-mac-x86_64.dmg
+dist/codexU-1.1.1-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

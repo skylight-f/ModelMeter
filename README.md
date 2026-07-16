@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **建议升级到 v1.1.0 或更高版本。** v1.1.0 新增六套经过审核的内置配色与 Liquid Glass 配色图库、Codex 额度重置次数及到期详情，支持 macOS 13，并强化累计 Token 计数在字段缺失、回退和重置场景下的准确性。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
+> **建议升级到 v1.1.1 或更高版本。** v1.1.1 带来源感知的今日任务分类与下次运行时间，新增 Codex Team 月额度兼容、Claude Code Skill 路径定位和可调整主窗口，并强化本地性能与阶段验收门禁。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
 [产品官网](https://shanggqm.github.io/codexU-site/) · [下载最新版本](https://github.com/shanggqm/codexU/releases/latest) · [English](README.en.md)
 
@@ -159,10 +159,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.1.0-mac-arm64.dmg
-dist/codexU-1.1.0-mac-arm64.dmg.sha256
-dist/codexU-1.1.0-mac-x86_64.dmg
-dist/codexU-1.1.0-mac-x86_64.dmg.sha256
+dist/codexU-1.1.1-mac-arm64.dmg
+dist/codexU-1.1.1-mac-arm64.dmg.sha256
+dist/codexU-1.1.1-mac-x86_64.dmg
+dist/codexU-1.1.1-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
