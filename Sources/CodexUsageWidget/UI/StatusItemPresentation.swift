@@ -1,10 +1,5 @@
 import Cocoa
 
-enum StatusItemQuotaPaletteRole: Equatable {
-    case primary
-    case secondary
-}
-
 struct StatusItemSourceSnapshot: Equatable {
     let runtime: RuntimeScope
     let status: RuntimeMenuStatus
@@ -12,6 +7,8 @@ struct StatusItemSourceSnapshot: Equatable {
     let fiveHourResetsAt: Date?
     let sevenDayRemainingPercent: Double?
     let sevenDayResetsAt: Date?
+    let monthlyRemainingPercent: Double?
+    let monthlyResetsAt: Date?
     let todayTokens: Int64?
 
     init(summary: RuntimeMenuSummary) {
@@ -21,6 +18,8 @@ struct StatusItemSourceSnapshot: Equatable {
         fiveHourResetsAt = summary.fiveHourResetsAt
         sevenDayRemainingPercent = summary.sevenDayRemainingPercent
         sevenDayResetsAt = summary.sevenDayResetsAt
+        monthlyRemainingPercent = summary.monthlyRemainingPercent
+        monthlyResetsAt = summary.monthlyResetsAt
         todayTokens = summary.todayTokens
     }
 
@@ -32,6 +31,8 @@ struct StatusItemSourceSnapshot: Equatable {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: nil,
             sevenDayResetsAt: nil,
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil
         )
     }
@@ -43,6 +44,8 @@ struct StatusItemSourceSnapshot: Equatable {
         fiveHourResetsAt: Date?,
         sevenDayRemainingPercent: Double?,
         sevenDayResetsAt: Date?,
+        monthlyRemainingPercent: Double? = nil,
+        monthlyResetsAt: Date? = nil,
         todayTokens: Int64?
     ) {
         self.runtime = runtime
@@ -51,6 +54,8 @@ struct StatusItemSourceSnapshot: Equatable {
         self.fiveHourResetsAt = fiveHourResetsAt
         self.sevenDayRemainingPercent = sevenDayRemainingPercent
         self.sevenDayResetsAt = sevenDayResetsAt
+        self.monthlyRemainingPercent = monthlyRemainingPercent
+        self.monthlyResetsAt = monthlyResetsAt
         self.todayTokens = todayTokens
     }
 }
@@ -61,7 +66,7 @@ struct StatusItemMetricPresentation: Equatable, Identifiable {
     let value: String
     let compactValue: String
     let fraction: CGFloat?
-    let paletteRole: StatusItemQuotaPaletteRole?
+    let paletteRole: QuotaPaletteRole?
     let resetText: String?
     let isAvailable: Bool
 
@@ -183,7 +188,7 @@ struct StatusItemPresentationBuilder {
                 now: now
             )
         }
-        let availableQuotaMetrics = [StatusItemMetric.fiveHourQuota, .sevenDayQuota]
+        let availableQuotaMetrics = [StatusItemMetric.fiveHourQuota, .sevenDayQuota, .monthlyQuota]
             .map { metric in
                 makeMetric(
                     metric,
@@ -247,13 +252,13 @@ struct StatusItemPresentationBuilder {
         sourceStatus: RuntimeMenuStatus
     ) -> [StatusItemMetricPresentation] {
         guard sourceStatus == .available || sourceStatus == .stale else {
-            return configuredMetrics
+            return limitingQuotaPlaceholders(configuredMetrics)
         }
 
         if availableQuotaMetrics.isEmpty {
             return sourceStatus == .available
                 ? configuredMetrics.filter { !$0.isQuota }
-                : configuredMetrics
+                : limitingQuotaPlaceholders(configuredMetrics)
         }
 
         let configuredAvailable = configuredMetrics.filter { metric in
@@ -266,6 +271,17 @@ struct StatusItemPresentationBuilder {
               let fallbackQuota = availableQuotaMetrics.first
         else { return configuredAvailable }
         return [fallbackQuota] + configuredAvailable
+    }
+
+    private func limitingQuotaPlaceholders(
+        _ metrics: [StatusItemMetricPresentation]
+    ) -> [StatusItemMetricPresentation] {
+        var quotaCount = 0
+        return metrics.filter { metric in
+            guard metric.isQuota else { return true }
+            quotaCount += 1
+            return quotaCount <= 2
+        }
     }
 
     private func makeMetric(
@@ -282,7 +298,7 @@ struct StatusItemPresentationBuilder {
                 label: "5h",
                 remainingPercent: source.fiveHourRemainingPercent,
                 resetsAt: source.fiveHourResetsAt,
-                paletteRole: .primary,
+                paletteRole: paletteRole(for: .fiveHour, source: source),
                 preferences: preferences,
                 now: now
             )
@@ -292,7 +308,17 @@ struct StatusItemPresentationBuilder {
                 label: "7d",
                 remainingPercent: source.sevenDayRemainingPercent,
                 resetsAt: source.sevenDayResetsAt,
-                paletteRole: .secondary,
+                paletteRole: paletteRole(for: .sevenDay, source: source),
+                preferences: preferences,
+                now: now
+            )
+        case .monthlyQuota:
+            return makeQuotaMetric(
+                metric: metric,
+                label: "mo",
+                remainingPercent: source.monthlyRemainingPercent,
+                resetsAt: source.monthlyResetsAt,
+                paletteRole: paletteRole(for: .monthly, source: source),
                 preferences: preferences,
                 now: now
             )
@@ -316,7 +342,7 @@ struct StatusItemPresentationBuilder {
         label: String,
         remainingPercent: Double?,
         resetsAt: Date?,
-        paletteRole: StatusItemQuotaPaletteRole,
+        paletteRole: QuotaPaletteRole,
         preferences: StatusItemPreferences,
         now: Date
     ) -> StatusItemMetricPresentation {
@@ -344,6 +370,17 @@ struct StatusItemPresentationBuilder {
         )
     }
 
+    private func paletteRole(
+        for kind: QuotaWindowKind,
+        source: StatusItemSourceSnapshot
+    ) -> QuotaPaletteRole {
+        var activeKinds: Set<QuotaWindowKind> = []
+        if source.fiveHourRemainingPercent != nil { activeKinds.insert(.fiveHour) }
+        if source.sevenDayRemainingPercent != nil { activeKinds.insert(.sevenDay) }
+        if source.monthlyRemainingPercent != nil { activeKinds.insert(.monthly) }
+        return QuotaPaletteRoleResolver.role(for: kind, activeKinds: activeKinds)
+    }
+
     private func accessibilityDescription(
         source: StatusItemSourceSnapshot,
         preferences: StatusItemPreferences,
@@ -366,7 +403,7 @@ struct StatusItemPresentationBuilder {
         }
         values += metrics.map { metric -> String in
             switch metric.metric {
-            case .fiveHourQuota, .sevenDayQuota:
+            case .fiveHourQuota, .sevenDayQuota, .monthlyQuota:
                 let value = metric.isAvailable ? metric.value : unavailable
                 let quotaName: String
                 switch metric.metric {
@@ -374,6 +411,8 @@ struct StatusItemPresentationBuilder {
                     quotaName = language.text("5 小时额度", "5-hour quota")
                 case .sevenDayQuota:
                     quotaName = language.text("7 天额度", "7-day quota")
+                case .monthlyQuota:
+                    quotaName = language.text("月额度", "monthly quota")
                 case .todayTokens:
                     quotaName = metric.label
                 }

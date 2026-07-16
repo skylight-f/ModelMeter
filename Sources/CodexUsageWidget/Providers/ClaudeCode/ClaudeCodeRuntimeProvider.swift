@@ -25,6 +25,7 @@ struct ClaudeCodeRuntimeProvider: RuntimeUsageProvider {
             quotaReadSucceeded: statusLine.hasQuota,
             fiveHourQuota: statusLine.primary,
             sevenDayQuota: statusLine.secondary,
+            monthlyQuota: nil,
             credits: nil,
             cloudLifetimeTokens: nil,
             local: local,

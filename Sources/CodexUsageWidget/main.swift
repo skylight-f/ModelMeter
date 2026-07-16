@@ -294,6 +294,7 @@ struct UsageSnapshot: Equatable {
     let quotaReadSucceeded: Bool
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let credits: CreditsInfo?
     let cloudLifetimeTokens: Int64?
     let local: LocalUsage?
@@ -308,6 +309,7 @@ struct UsageSnapshot: Equatable {
         quotaReadSucceeded: false,
         fiveHourQuota: nil,
         sevenDayQuota: nil,
+        monthlyQuota: nil,
         credits: nil,
         cloudLifetimeTokens: nil,
         local: nil,
@@ -324,6 +326,7 @@ struct UsageSnapshot: Equatable {
             quotaReadSucceeded: quotaReadSucceeded,
             fiveHourQuota: fiveHourQuota,
             sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
@@ -335,6 +338,7 @@ struct UsageSnapshot: Equatable {
     func replacingQuotaWindows(
         fiveHourQuota: RateWindow?,
         sevenDayQuota: RateWindow?,
+        monthlyQuota: RateWindow?,
         credits: CreditsInfo?,
         quotaReadSucceeded: Bool
     ) -> UsageSnapshot {
@@ -346,6 +350,7 @@ struct UsageSnapshot: Equatable {
             quotaReadSucceeded: quotaReadSucceeded,
             fiveHourQuota: fiveHourQuota,
             sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
@@ -988,6 +993,7 @@ final class CodexUsageReader {
             quotaReadSucceeded: appServer.quotaReadSucceeded,
             fiveHourQuota: appServer.fiveHourQuota,
             sevenDayQuota: appServer.sevenDayQuota,
+            monthlyQuota: appServer.monthlyQuota,
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
             local: local,
@@ -1008,6 +1014,7 @@ final class CodexUsageReader {
         var quotaReadSucceeded = false
         var fiveHourQuota: RateWindow?
         var sevenDayQuota: RateWindow?
+        var monthlyQuota: RateWindow?
         var rateLimitDiagnostics: [String] = []
         var credits: CreditsInfo?
         var cloudLifetimeTokens: Int64?
@@ -1218,6 +1225,7 @@ final class CodexUsageReader {
         // single-window layout; continuity will keep the last confirmed topology.
         snapshot.fiveHourQuota = quotaReadSucceeded ? normalized.fiveHour : nil
         snapshot.sevenDayQuota = quotaReadSucceeded ? normalized.sevenDay : nil
+        snapshot.monthlyQuota = quotaReadSucceeded ? normalized.monthly : nil
         var diagnostics = rateLimitDiagnostics(for: normalized)
         if !hasWindowFields {
             diagnostics.append("Codex 额度响应缺少窗口字段，未将其视为当前无限制")
@@ -1308,18 +1316,20 @@ final class CodexUsageReader {
         if windows.sevenDayMatchCount > 1 {
             messages.append("Codex 返回了重复的 7 天额度窗口，已停止显示该窗口")
         }
-
+        if windows.monthlyMatchCount > 1 {
+            messages.append("Codex 返回了重复的月额度窗口，已停止显示该窗口")
+        }
         let missingDurationCount = windows.unclassified.filter {
             $0.windowDurationMins == nil
         }.count
         if missingDurationCount > 0 {
-            messages.append("Codex 返回了缺少时长的额度窗口，未将其标注为 5 小时或 7 天")
+            messages.append("Codex 返回了缺少时长的额度窗口，未将其标注为 5 小时、7 天或月额度")
         }
 
         let unknownDurations = Set(windows.unclassified.compactMap(\.windowDurationMins)).sorted()
         if !unknownDurations.isEmpty {
             let values = unknownDurations.map(String.init).joined(separator: "、")
-            messages.append("Codex 返回了未识别的额度窗口（\(values) 分钟），未将其标注为 5 小时或 7 天")
+            messages.append("Codex 返回了未识别的额度窗口（\(values) 分钟），未将其标注为 5 小时、7 天或月额度")
         }
 
         return messages
@@ -3455,6 +3465,7 @@ struct UsageWidgetView: View {
                 DualQuotaRing(
                     fiveHourQuota: snapshot.fiveHourQuota,
                     sevenDayQuota: snapshot.sevenDayQuota,
+                    monthlyQuota: snapshot.monthlyQuota,
                     quotaReadSucceeded: snapshot.quotaReadSucceeded,
                     quotaIsStale: selectedQuotaIsStale,
                     language: language,
@@ -3466,6 +3477,7 @@ struct UsageWidgetView: View {
                 QuotaResetSummary(
                     fiveHourQuota: snapshot.fiveHourQuota,
                     sevenDayQuota: snapshot.sevenDayQuota,
+                    monthlyQuota: snapshot.monthlyQuota,
                     language: language
                 )
                 .frame(width: 154, height: 26)
@@ -3621,7 +3633,9 @@ struct UsageWidgetView: View {
 
     private var shouldShowEnvironmentChecklist: Bool {
         if snapshot.messages.contains("正在读取 codexU 数据") { return false }
-        let quotaUnavailable = snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil
+        let quotaUnavailable = snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil
         let hasQuotaProtocolWarning = snapshot.messages.contains { $0.contains("额度窗口") }
         return (!snapshot.messages.isEmpty && (quotaUnavailable || hasQuotaProtocolWarning || snapshot.local == nil))
             || snapshot.account == nil
@@ -3673,7 +3687,9 @@ struct UsageWidgetView: View {
             return items
         }
 
-        if (snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil) || snapshot.account == nil {
+        if (snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil) || snapshot.account == nil {
             if messages.contains("未找到 codex") {
                 items.append(DiagnosticItem(
                     id: "codex-missing",
@@ -4736,42 +4752,49 @@ private enum QuotaRingGeometry {
     static let center = CGPoint(x: outerDiameter / 2, y: outerDiameter / 2)
 }
 
-private enum QuotaWindowKind: String, Hashable {
-    case fiveHour
-    case sevenDay
-
+private extension QuotaWindowKind {
     var compactTitle: String {
         switch self {
-        case .fiveHour: return "5h"
-        case .sevenDay: return "7d"
+        case .fiveHour: "5h"
+        case .sevenDay: "7d"
+        case .monthly: "mo"
         }
     }
+}
 
+private extension QuotaPaletteRole {
     func tokens(in visualTokens: ResolvedVisualTokens) -> QuotaRoleTokenSet {
         switch self {
-        case .fiveHour: visualTokens.quota.primary
-        case .sevenDay: visualTokens.quota.secondary
+        case .primary: visualTokens.quota.primary
+        case .secondary: visualTokens.quota.secondary
         }
     }
 
     var ringAssetSlot: PaletteAssetSlot {
         switch self {
-        case .fiveHour: .quotaRingPrimary
-        case .sevenDay: .quotaRingSecondary
+        case .primary: .quotaRingPrimary
+        case .secondary: .quotaRingSecondary
         }
     }
 
     var capAssetSlot: PaletteAssetSlot {
         switch self {
-        case .fiveHour: .quotaCapPrimary
-        case .sevenDay: .quotaCapSecondary
+        case .primary: .quotaCapPrimary
+        case .secondary: .quotaCapSecondary
         }
     }
+}
+
+private enum QuotaRingPosition: Equatable {
+    case outer
+    case inner
 }
 
 private struct QuotaRingItem: Identifiable, Equatable {
     let kind: QuotaWindowKind
     let window: RateWindow
+    let paletteRole: QuotaPaletteRole
+    let position: QuotaRingPosition
 
     var id: QuotaWindowKind { kind }
 
@@ -4801,15 +4824,29 @@ private struct QuotaRingPresentation: Equatable {
 
     let items: [QuotaRingItem]
 
-    init(fiveHourQuota: RateWindow?, sevenDayQuota: RateWindow?) {
-        var items: [QuotaRingItem] = []
+    init(fiveHourQuota: RateWindow?, sevenDayQuota: RateWindow?, monthlyQuota: RateWindow?) {
+        var windows: [(QuotaWindowKind, RateWindow)] = []
         if let fiveHourQuota {
-            items.append(QuotaRingItem(kind: .fiveHour, window: fiveHourQuota))
+            windows.append((.fiveHour, fiveHourQuota))
         }
         if let sevenDayQuota {
-            items.append(QuotaRingItem(kind: .sevenDay, window: sevenDayQuota))
+            windows.append((.sevenDay, sevenDayQuota))
         }
-        self.items = items
+        if let monthlyQuota {
+            windows.append((.monthly, monthlyQuota))
+        }
+        let activeKinds = Set(windows.map(\.0))
+        self.items = windows.enumerated().map { index, entry in
+            QuotaRingItem(
+                kind: entry.0,
+                window: entry.1,
+                paletteRole: QuotaPaletteRoleResolver.role(
+                    for: entry.0,
+                    activeKinds: activeKinds
+                ),
+                position: index == 0 ? .outer : .inner
+            )
+        }
     }
 
     var topology: Topology {
@@ -4856,7 +4893,7 @@ private struct QuotaRingPresentation: Equatable {
     }
 
     func diameter(for item: QuotaRingItem) -> CGFloat {
-        guard topology == .dual, item.kind == .sevenDay else {
+        guard topology == .dual, item.position == .inner else {
             return QuotaRingGeometry.outerDiameter
         }
         return QuotaRingGeometry.innerDiameter
@@ -4885,6 +4922,7 @@ private enum QuotaRingHoverTarget {
 struct DualQuotaRing: View {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let quotaReadSucceeded: Bool
     let quotaIsStale: Bool
     let language: WidgetLanguage
@@ -4897,7 +4935,8 @@ struct DualQuotaRing: View {
     private var presentation: QuotaRingPresentation {
         QuotaRingPresentation(
             fiveHourQuota: fiveHourQuota,
-            sevenDayQuota: sevenDayQuota
+            sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota
         )
     }
 
@@ -4906,9 +4945,9 @@ struct DualQuotaRing: View {
             ForEach(presentation.items) { item in
                 QuotaRingSegment(
                     percent: item.window.remainingPercent,
-                    tokens: item.kind.tokens(in: visualTokens),
-                    ringAsset: visualTokens.assets[item.kind.ringAssetSlot],
-                    capAsset: visualTokens.assets[item.kind.capAssetSlot],
+                    tokens: item.paletteRole.tokens(in: visualTokens),
+                    ringAsset: visualTokens.assets[item.paletteRole.ringAssetSlot],
+                    capAsset: visualTokens.assets[item.paletteRole.capAssetSlot],
                     lineWidth: QuotaRingGeometry.lineWidth
                 )
                 .frame(
@@ -4965,7 +5004,7 @@ struct DualQuotaRing: View {
                         QuotaRingLabel(
                             title: item.kind.compactTitle,
                             value: item.remainingText,
-                            color: item.kind.tokens(in: visualTokens).label.color
+                            color: item.paletteRole.tokens(in: visualTokens).label.color
                         )
                     }
                     Text(
@@ -5765,21 +5804,36 @@ private enum QuotaParticleAnimationSelfTest {
 
         let fullFiveHour = quotaWindow(usedPercent: 0, durationMins: 300)
         let fullSevenDay = quotaWindow(usedPercent: 0, durationMins: 10_080)
+        let fullMonthly = quotaWindow(usedPercent: 0, durationMins: 43_800)
         let noQuotaPresentation = QuotaRingPresentation(
             fiveHourQuota: nil,
-            sevenDayQuota: nil
+            sevenDayQuota: nil,
+            monthlyQuota: nil
         )
         let fiveHourOnlyPresentation = QuotaRingPresentation(
             fiveHourQuota: fullFiveHour,
-            sevenDayQuota: nil
+            sevenDayQuota: nil,
+            monthlyQuota: nil
         )
         let sevenDayOnlyPresentation = QuotaRingPresentation(
             fiveHourQuota: nil,
-            sevenDayQuota: fullSevenDay
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: nil
+        )
+        let monthlyOnlyPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: nil,
+            monthlyQuota: fullMonthly
         )
         let dualPresentation = QuotaRingPresentation(
             fiveHourQuota: fullFiveHour,
-            sevenDayQuota: fullSevenDay
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: nil
+        )
+        let bothLongPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: fullMonthly
         )
 
         expect(noQuotaPresentation.topology == .none, "zero quota windows should use the empty presentation")
@@ -5788,12 +5842,20 @@ private enum QuotaParticleAnimationSelfTest {
         expect(fiveHourOnlyPresentation.topology == .single, "5h-only quota should use a single ring")
         expect(
             fiveHourOnlyPresentation.items.map(\.kind) == [.fiveHour],
-            "5h-only presentation should preserve the blue 5h semantic"
+            "5h-only presentation should preserve the 5h semantic"
         )
         expect(sevenDayOnlyPresentation.topology == .single, "7d-only quota should use a single ring")
         expect(
             sevenDayOnlyPresentation.items.map(\.kind) == [.sevenDay],
-            "7d-only presentation should preserve the purple 7d semantic"
+            "7d-only presentation should preserve the 7d semantic"
+        )
+        expect(
+            sevenDayOnlyPresentation.items.map(\.paletteRole) == [.secondary],
+            "7d-only presentation must preserve the quota.secondary identity"
+        )
+        expect(
+            monthlyOnlyPresentation.items.map(\.paletteRole) == [.secondary],
+            "monthly-only presentation should use the documented secondary fallback"
         )
         expect(
             sevenDayOnlyPresentation.particleLanes.count == 1
@@ -5807,6 +5869,16 @@ private enum QuotaParticleAnimationSelfTest {
             "dual presentation should retain the stable 5h then 7d order"
         )
         expect(
+            dualPresentation.items.map(\.paletteRole) == [.primary, .secondary],
+            "5h and 7d must preserve their Palette Package semantic identities"
+        )
+        expect(
+            bothLongPresentation.items.map(\.kind) == [.sevenDay, .monthly]
+                && bothLongPresentation.items.map(\.paletteRole) == [.secondary, .primary]
+                && bothLongPresentation.items.map(\.position) == [.outer, .inner],
+            "7d should remain secondary while monthly uses the free primary fallback independent of ring geometry"
+        )
+        expect(
             dualPresentation.activeRadii == [
                 QuotaRingGeometry.outerRadius,
                 QuotaRingGeometry.innerRadius
@@ -5816,7 +5888,9 @@ private enum QuotaParticleAnimationSelfTest {
         expect(
             fiveHourOnlyPresentation.items.count == 1
                 && sevenDayOnlyPresentation.items.count == 1
-                && dualPresentation.items.count == 2,
+                && monthlyOnlyPresentation.items.count == 1
+                && dualPresentation.items.count == 2
+                && bothLongPresentation.items.count == 2,
             "reset summary should receive only real quota rows"
         )
         expect(
@@ -6137,7 +6211,7 @@ private struct SingleQuotaRingLabel: View {
         VStack(spacing: 1) {
             Text(item.kind.compactTitle)
                 .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(item.kind.tokens(in: visualTokens).label.color)
+                .foregroundStyle(item.paletteRole.tokens(in: visualTokens).label.color)
             Text(item.remainingText)
                 .font(.system(size: 28, weight: .bold, design: .rounded))
                 .monospacedDigit()
@@ -6181,13 +6255,15 @@ private struct QuotaUnavailablePlaceholder: View {
 struct QuotaResetSummary: View {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let language: WidgetLanguage
     @Environment(\.visualTokens) private var visualTokens
 
     private var presentation: QuotaRingPresentation {
         QuotaRingPresentation(
             fiveHourQuota: fiveHourQuota,
-            sevenDayQuota: sevenDayQuota
+            sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota
         )
     }
 
@@ -6197,7 +6273,7 @@ struct QuotaResetSummary: View {
                 QuotaResetLine(
                     title: item.kind.compactTitle,
                     window: item.window,
-                    color: item.kind.tokens(in: visualTokens).label.color,
+                    color: item.paletteRole.tokens(in: visualTokens).label.color,
                     language: language
                 )
             }
@@ -8810,7 +8886,13 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
     }
     if message.contains("重复的 5 小时额度窗口") { return "Codex returned duplicate 5-hour quota windows, so that quota is hidden" }
     if message.contains("重复的 7 天额度窗口") { return "Codex returned duplicate 7-day quota windows, so that quota is hidden" }
-    if message.contains("缺少时长的额度窗口") { return "Codex returned a quota window without a duration, so it was not labeled as 5h or 7d" }
+    if message.contains("重复的月额度窗口") { return "Codex returned duplicate monthly quota windows, so that quota is hidden" }
+    if message.contains("同时返回了 7 天与月额度窗口") {
+        return "Codex returned both 7-day and monthly quota windows; the 7-day window is shown first"
+    }
+    if message.contains("缺少时长的额度窗口") {
+        return "Codex returned a quota window without a duration, so it was not labeled as 5h, 7d, or monthly"
+    }
     if message.contains("未识别的额度窗口") {
         return message
             .replacingOccurrences(
@@ -8818,8 +8900,12 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
                 with: "Codex returned an unknown quota window ("
             )
             .replacingOccurrences(
+                of: " 分钟），未将其标注为 5 小时、7 天或月额度",
+                with: " minutes), so it was not labeled as 5h, 7d, or monthly"
+            )
+            .replacingOccurrences(
                 of: " 分钟），未将其标注为 5 小时或 7 天",
-                with: " minutes), so it was not labeled as 5h or 7d"
+                with: " minutes), so it was not labeled as 5h, 7d, or monthly"
             )
     }
     if message.contains("app-server") { return message.replacingOccurrences(of: "未知错误", with: "Unknown error") }
@@ -8941,6 +9027,15 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
             "remainingPercent": secondary.remainingPercent,
             "windowDurationMins": jsonValue(secondary.windowDurationMins),
             "resetsAt": jsonValue(isoString(secondary.resetsAt))
+        ] as [String: Any]
+    }
+
+    if let monthly = snapshot.monthlyQuota {
+        object["monthly"] = [
+            "usedPercent": monthly.usedPercent,
+            "remainingPercent": monthly.remainingPercent,
+            "windowDurationMins": jsonValue(monthly.windowDurationMins),
+            "resetsAt": jsonValue(isoString(monthly.resetsAt))
         ] as [String: Any]
     }
 
