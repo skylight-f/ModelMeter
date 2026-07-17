@@ -48,8 +48,8 @@ struct ResetCreditDisclosure: Equatable {
         max(0, totalCount - fullDetails.count)
     }
 
-    var showsExpandedTooltip: Bool {
-        totalCount > Self.inlineDetailLimit
+    var showsHoverTooltip: Bool {
+        !inlineDetails.isEmpty
     }
 }
 
@@ -352,6 +352,50 @@ struct TaskItem: Identifiable, Equatable {
     let updatedAt: Date?
     let tokens: Int64?
     let kind: TaskColumnKind
+    let threadID: String?
+    let runtimeState: TaskRuntimeState
+    let isRealtime: Bool
+    let sourceKind: TaskSourceKind
+    let displayState: TaskDisplayState
+    let stateBasis: TaskStateBasis
+    let rawStatus: String?
+    let nextRunAt: Date?
+
+    init(
+        id: String,
+        code: String,
+        title: String,
+        detail: String,
+        chip: String,
+        updatedAt: Date?,
+        tokens: Int64?,
+        kind: TaskColumnKind,
+        threadID: String? = nil,
+        runtimeState: TaskRuntimeState = .recorded,
+        isRealtime: Bool = false,
+        sourceKind: TaskSourceKind,
+        displayState: TaskDisplayState,
+        stateBasis: TaskStateBasis,
+        rawStatus: String? = nil,
+        nextRunAt: Date? = nil
+    ) {
+        self.id = id
+        self.code = code
+        self.title = title
+        self.detail = detail
+        self.chip = chip
+        self.updatedAt = updatedAt
+        self.tokens = tokens
+        self.kind = kind
+        self.threadID = threadID
+        self.runtimeState = runtimeState
+        self.isRealtime = isRealtime
+        self.sourceKind = sourceKind
+        self.displayState = displayState
+        self.stateBasis = stateBasis
+        self.rawStatus = rawStatus
+        self.nextRunAt = nextRunAt
+    }
 }
 
 struct TaskColumn: Identifiable, Equatable {
@@ -378,6 +422,7 @@ struct UsageSnapshot: Equatable {
     let quotaReadSucceeded: Bool
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let credits: CreditsInfo?
     let cloudLifetimeTokens: Int64?
     let local: LocalUsage?
@@ -392,6 +437,7 @@ struct UsageSnapshot: Equatable {
         quotaReadSucceeded: false,
         fiveHourQuota: nil,
         sevenDayQuota: nil,
+        monthlyQuota: nil,
         credits: nil,
         cloudLifetimeTokens: nil,
         local: nil,
@@ -408,6 +454,7 @@ struct UsageSnapshot: Equatable {
             quotaReadSucceeded: quotaReadSucceeded,
             fiveHourQuota: fiveHourQuota,
             sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
@@ -419,6 +466,7 @@ struct UsageSnapshot: Equatable {
     func replacingQuotaWindows(
         fiveHourQuota: RateWindow?,
         sevenDayQuota: RateWindow?,
+        monthlyQuota: RateWindow?,
         credits: CreditsInfo?,
         quotaReadSucceeded: Bool
     ) -> UsageSnapshot {
@@ -430,6 +478,7 @@ struct UsageSnapshot: Equatable {
             quotaReadSucceeded: quotaReadSucceeded,
             fiveHourQuota: fiveHourQuota,
             sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
@@ -697,9 +746,12 @@ final class UsageStore: ObservableObject {
     @Published private(set) var statisticsTransitionMessage: String?
     @Published private(set) var isSwitchingStatisticsTimeZone = false
     @Published private(set) var visualEnergyMode: VisualEnergyMode = .suspended
+    @Published private(set) var codexLiveTasks: CodexTaskLiveSnapshot = .disconnected
+    @Published private(set) var taskFocusRequest: TaskFocusRequest?
 
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
+    private var performanceSampleTimer: Timer?
     private var statisticsRolloverTimer: Timer?
     private var systemTimeZoneObserver: NSObjectProtocol?
     private var powerStateObserver: NSObjectProtocol?
@@ -714,11 +766,20 @@ final class UsageStore: ObservableObject {
     private var isMainWindowActive = false
     private var isTaskBoardSelected = false
     private var lastFullRefreshCompletedAt: Date?
+    private var baseTaskBoards: [RuntimeScope: TaskBoard] = [:]
     private let statisticsSnapshotCacheLimit = 4
     private let statisticsSnapshotCacheTTL: TimeInterval = 3 * 60
     private let taskBoardRefreshInterval: TimeInterval = 60
     private let foregroundFullRefreshInterval: TimeInterval = 5 * 60
     private let backgroundFullRefreshInterval: TimeInterval = 15 * 60
+    private let codexTaskClient: CodexTaskEventClient
+
+    init(codexTaskClient: CodexTaskEventClient = CodexAppServerTaskClient()) {
+        self.codexTaskClient = codexTaskClient
+        self.codexTaskClient.onSnapshot = { [weak self] snapshot in
+            self?.applyCodexLiveTasks(snapshot)
+        }
+    }
 
     var runtimeSummaries: [RuntimeMenuSummary] {
         RuntimeScope.allCases.compactMap { scope in
@@ -738,6 +799,7 @@ final class UsageStore: ObservableObject {
 
     func start() {
         hasStarted = true
+        codexTaskClient.start(reason: .startup)
         refresh()
         systemTimeZoneObserver = NotificationCenter.default.addObserver(
             forName: .NSSystemTimeZoneDidChange,
@@ -766,6 +828,13 @@ final class UsageStore: ObservableObject {
         scheduleStatisticsRollover()
         scheduleFullRefreshTimer()
         updateTaskBoardPollingState(refreshImmediately: false)
+        updateCodexTaskConnection()
+        PerformanceMonitor.shared.recordResourceSample(windowVisible: isMainWindowActive)
+        performanceSampleTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            PerformanceMonitor.shared.recordResourceSample(windowVisible: self.isMainWindowActive)
+        }
+        performanceSampleTimer?.tolerance = 90
     }
 
     func stop() {
@@ -774,6 +843,7 @@ final class UsageStore: ObservableObject {
         taskBoardTimer?.invalidate()
         statisticsRolloverTimer?.invalidate()
         statisticsFeedbackTimer?.invalidate()
+        performanceSampleTimer?.invalidate()
         if let systemTimeZoneObserver {
             NotificationCenter.default.removeObserver(systemTimeZoneObserver)
             self.systemTimeZoneObserver = nil
@@ -787,6 +857,8 @@ final class UsageStore: ObservableObject {
             self.thermalStateObserver = nil
         }
         visualEnergyMode = .suspended
+        codexTaskClient.stop()
+        PerformanceMonitor.shared.flush()
     }
 
     func refresh(queueIfBusy: Bool = false) {
@@ -800,6 +872,7 @@ final class UsageStore: ObservableObject {
         let generation = refreshGeneration
         let preference = statisticsPreference
         isRefreshing = true
+        let performanceSpan = PerformanceMonitor.shared.begin(.fullRefresh)
 
         DispatchQueue.global(qos: .utility).async {
             let multiSnapshot = MultiRuntimeUsageReader().load(
@@ -816,6 +889,7 @@ final class UsageStore: ObservableObject {
                     }
                 }
                 self.isRefreshing = false
+                PerformanceMonitor.shared.end(performanceSpan)
                 self.lastFullRefreshCompletedAt = Date()
                 self.scheduleFullRefreshTimer()
                 if self.hasPendingRefresh {
@@ -918,6 +992,48 @@ final class UsageStore: ObservableObject {
         let nextScope = visibleRuntimeScopes.contains(scope) ? scope : (visibleRuntimeScopes.first ?? scope)
         selectedRuntimeScope = nextScope
         snapshot = multiRuntimeSnapshot.displaySnapshot(for: nextScope)
+        updateCodexTaskConnection()
+    }
+
+    func requestTaskFocus(scope: RuntimeScope, threadID: String?) {
+        selectRuntime(scope)
+        taskFocusRequest = TaskFocusRequest(id: UUID(), runtimeScope: scope, threadID: threadID)
+    }
+
+    func attentionItems(for scopes: [RuntimeScope], updateResult: AppUpdateResult) -> [TaskAttentionItem] {
+        var items: [TaskAttentionItem] = []
+        for scope in scopes {
+            guard let runtime = runtimeSnapshot(for: scope) else { continue }
+            items.append(contentsOf: runtime.snapshot.taskBoard?.attentionItems(scope: scope) ?? [])
+            if runtime.status == .unavailable || runtime.status == .stale || runtime.status == .snapshotNeeded {
+                items.append(TaskAttentionItem(
+                    id: "data-\(scope.runtimeId)-\(runtime.status.rawValue)",
+                    kind: .dataIssue,
+                    runtimeScope: scope,
+                    threadID: nil,
+                    title: scope.displayName,
+                    since: runtime.snapshot.refreshedAt
+                ))
+            }
+        }
+        if updateResult.status == .updateAvailable {
+            items.append(TaskAttentionItem(
+                id: "update-\(updateResult.latestVersionLabel ?? "available")",
+                kind: .update,
+                runtimeScope: nil,
+                threadID: nil,
+                title: updateResult.latestVersionLabel ?? "codexU",
+                since: updateResult.checkedAt
+            ))
+        }
+        return items
+    }
+
+    func highestPriorityAttention(
+        for scopes: [RuntimeScope],
+        updateResult: AppUpdateResult
+    ) -> TaskAttentionItem? {
+        TaskAttentionSelector.highestPriority(attentionItems(for: scopes, updateResult: updateResult))
     }
 
     func runtimeSnapshot(for scope: RuntimeScope) -> RuntimeUsageSnapshot? {
@@ -941,6 +1057,7 @@ final class UsageStore: ObservableObject {
             refreshIfStale(maximumAge: foregroundFullRefreshInterval)
         }
         updateTaskBoardPollingState(refreshImmediately: isTaskBoardPollingEnabled)
+        updateCodexTaskConnection()
     }
 
     private func updateVisualEnergyMode() {
@@ -975,6 +1092,23 @@ final class UsageStore: ObservableObject {
         isTaskBoardSelected = isSelected
         guard hasStarted else { return }
         updateTaskBoardPollingState(refreshImmediately: isTaskBoardPollingEnabled)
+        updateCodexTaskConnection()
+    }
+
+    func setStatusPopoverVisible(_ isVisible: Bool) {
+        if isVisible {
+            codexTaskClient.start(reason: .popover)
+        } else if !isTaskBoardPollingEnabled {
+            codexTaskClient.stopIfIdle()
+        }
+    }
+
+    private func updateCodexTaskConnection() {
+        if isTaskBoardPollingEnabled && selectedRuntimeScope == .codex {
+            codexTaskClient.start(reason: .taskUI)
+        } else {
+            codexTaskClient.stopIfIdle()
+        }
     }
 
     private var isTaskBoardPollingEnabled: Bool {
@@ -1021,8 +1155,12 @@ final class UsageStore: ObservableObject {
     private func refreshTaskBoard() {
         guard !isRefreshing, !isRefreshingTaskBoard else { return }
         isRefreshingTaskBoard = true
+        let performanceSpan = PerformanceMonitor.shared.begin(.taskRefresh)
         let scope = selectedRuntimeScope
         let preference = statisticsPreference
+        if scope == .codex {
+            codexTaskClient.refreshThreads()
+        }
 
         DispatchQueue.global(qos: .utility).async {
             let taskBoard = MultiRuntimeUsageReader().loadTaskBoard(
@@ -1032,6 +1170,7 @@ final class UsageStore: ObservableObject {
             DispatchQueue.main.async {
                 self.applyTaskBoard(taskBoard, for: scope)
                 self.isRefreshingTaskBoard = false
+                PerformanceMonitor.shared.end(performanceSpan, success: taskBoard != nil)
                 if self.hasPendingRefresh {
                     self.hasPendingRefresh = false
                     self.refresh()
@@ -1041,14 +1180,27 @@ final class UsageStore: ObservableObject {
     }
 
     private func apply(_ multiSnapshot: MultiRuntimeUsageSnapshot) {
+        let performanceSpan = PerformanceMonitor.shared.begin(.statePublish)
+        defer { PerformanceMonitor.shared.end(performanceSpan) }
         let reconciledRuntimes = RuntimeQuotaContinuity.reconcile(
             previous: runtimeSnapshots,
             incoming: multiSnapshot.runtimes
         )
+        for runtime in reconciledRuntimes {
+            if let board = runtime.snapshot.taskBoard {
+                baseTaskBoards[runtime.scope] = board
+            }
+        }
+        let displayedRuntimes = reconciledRuntimes.map { runtime -> RuntimeUsageSnapshot in
+            guard runtime.scope == .codex,
+                  let board = baseTaskBoards[.codex]
+            else { return runtime }
+            return runtime.replacingTaskBoard(board.merging(codexLiveTasks))
+        }
         let reconciledSnapshot = MultiRuntimeUsageSnapshot(
             refreshedAt: multiSnapshot.refreshedAt,
-            runtimes: reconciledRuntimes,
-            aggregate: multiSnapshot.aggregate,
+            runtimes: displayedRuntimes,
+            aggregate: AgentUsageAggregator().aggregate(displayedRuntimes, at: multiSnapshot.refreshedAt),
             statisticsIdentity: multiSnapshot.statisticsIdentity
         )
         let nextScope = reconciledSnapshot.defaultScope(
@@ -1056,12 +1208,28 @@ final class UsageStore: ObservableObject {
             allowedScopes: visibleRuntimeScopes
         )
         multiRuntimeSnapshot = reconciledSnapshot
-        runtimeSnapshots = reconciledRuntimes
+        runtimeSnapshots = displayedRuntimes
         selectedRuntimeScope = nextScope
         snapshot = reconciledSnapshot.displaySnapshot(for: nextScope)
     }
 
     private func applyTaskBoard(_ taskBoard: TaskBoard?, for scope: RuntimeScope) {
+        if let taskBoard {
+            baseTaskBoards[scope] = taskBoard
+        }
+        let displayedBoard = scope == .codex
+            ? taskBoard?.merging(codexLiveTasks)
+            : taskBoard
+        publishTaskBoard(displayedBoard, for: scope)
+    }
+
+    private func applyCodexLiveTasks(_ liveTasks: CodexTaskLiveSnapshot) {
+        codexLiveTasks = liveTasks
+        guard let baseBoard = baseTaskBoards[.codex] else { return }
+        publishTaskBoard(baseBoard.merging(liveTasks), for: .codex)
+    }
+
+    private func publishTaskBoard(_ taskBoard: TaskBoard?, for scope: RuntimeScope) {
         guard let index = runtimeSnapshots.firstIndex(where: { $0.scope == scope }) else {
             guard snapshot.taskBoard?.columns != taskBoard?.columns else { return }
             snapshot = snapshot.replacingTaskBoard(taskBoard)
@@ -1110,6 +1278,7 @@ final class CodexUsageReader {
             quotaReadSucceeded: appServer.quotaReadSucceeded,
             fiveHourQuota: appServer.fiveHourQuota,
             sevenDayQuota: appServer.sevenDayQuota,
+            monthlyQuota: appServer.monthlyQuota,
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
             local: local,
@@ -1130,12 +1299,15 @@ final class CodexUsageReader {
         var quotaReadSucceeded = false
         var fiveHourQuota: RateWindow?
         var sevenDayQuota: RateWindow?
+        var monthlyQuota: RateWindow?
         var rateLimitDiagnostics: [String] = []
         var credits: CreditsInfo?
         var cloudLifetimeTokens: Int64?
     }
 
     private func readAppServer(messages: inout [String]) -> AppServerSnapshot {
+        let performanceSpan = PerformanceMonitor.shared.begin(.appServerQuota)
+        defer { PerformanceMonitor.shared.end(performanceSpan) }
         guard let codexPath = resolveCodexExecutablePath() else {
             messages.append("未找到 codex 可执行文件")
             return AppServerSnapshot()
@@ -1340,6 +1512,7 @@ final class CodexUsageReader {
         // single-window layout; continuity will keep the last confirmed topology.
         snapshot.fiveHourQuota = quotaReadSucceeded ? normalized.fiveHour : nil
         snapshot.sevenDayQuota = quotaReadSucceeded ? normalized.sevenDay : nil
+        snapshot.monthlyQuota = quotaReadSucceeded ? normalized.monthly : nil
         var diagnostics = rateLimitDiagnostics(for: normalized)
         if !hasWindowFields {
             diagnostics.append("Codex 额度响应缺少窗口字段，未将其视为当前无限制")
@@ -1430,18 +1603,20 @@ final class CodexUsageReader {
         if windows.sevenDayMatchCount > 1 {
             messages.append("Codex 返回了重复的 7 天额度窗口，已停止显示该窗口")
         }
-
+        if windows.monthlyMatchCount > 1 {
+            messages.append("Codex 返回了重复的月额度窗口，已停止显示该窗口")
+        }
         let missingDurationCount = windows.unclassified.filter {
             $0.windowDurationMins == nil
         }.count
         if missingDurationCount > 0 {
-            messages.append("Codex 返回了缺少时长的额度窗口，未将其标注为 5 小时或 7 天")
+            messages.append("Codex 返回了缺少时长的额度窗口，未将其标注为 5 小时、7 天或月额度")
         }
 
         let unknownDurations = Set(windows.unclassified.compactMap(\.windowDurationMins)).sorted()
         if !unknownDurations.isEmpty {
             let values = unknownDurations.map(String.init).joined(separator: "、")
-            messages.append("Codex 返回了未识别的额度窗口（\(values) 分钟），未将其标注为 5 小时或 7 天")
+            messages.append("Codex 返回了未识别的额度窗口（\(values) 分钟），未将其标注为 5 小时、7 天或月额度")
         }
 
         return messages
@@ -1690,7 +1865,8 @@ final class CodexUsageReader {
             return cached.analytics
         }
 
-        if let cached = readPersistentLocalAnalyticsCache(),
+        let persistentAnalyticsCache = readPersistentLocalAnalyticsCache()
+        if let cached = persistentAnalyticsCache,
            cached.version == localAnalyticsCacheVersion,
            cached.dayKey == dayKey,
            cached.rollingWindowKey == rollingWindowKey,
@@ -1699,6 +1875,20 @@ final class CodexUsageReader {
             Self.localAnalyticsCache = cached
             writePersistentSessionUsageCache()
             return cached.analytics
+        }
+
+        var reusableSkillStaticInfo: [String: SkillStaticInfo] = [:]
+        for skill in persistentAnalyticsCache?.analytics.skillUsages ?? [] {
+            reusableSkillStaticInfo[skill.path] = SkillStaticInfo(
+                tokenEstimate: skill.staticTokenEstimate,
+                byteCount: skill.staticByteCount
+            )
+        }
+        for skill in Self.localAnalyticsCache?.analytics.skillUsages ?? [] {
+            reusableSkillStaticInfo[skill.path] = SkillStaticInfo(
+                tokenEstimate: skill.staticTokenEstimate,
+                byteCount: skill.staticByteCount
+            )
         }
 
         var monthComponents = calendar.dateComponents([.year, .month], from: dayStart)
@@ -1852,7 +2042,10 @@ final class CodexUsageReader {
         }
 
         writePersistentSessionUsageCache()
-        let skillUsages = makeSkillUsages(from: skillUsage)
+        let skillUsages = makeSkillUsages(
+            from: skillUsage,
+            reusableStaticInfo: reusableSkillStaticInfo
+        )
 
         guard accumulator.parsedFileCount > 0, accumulator.tokenEventCount > 0 else {
             messages.append("未找到 Codex token_count 事件")
@@ -2183,10 +2376,15 @@ final class CodexUsageReader {
         }
     }
 
-    private func makeSkillUsages(from accumulators: [String: SkillUsageAccumulator]) -> [SkillUsage] {
+    private func makeSkillUsages(
+        from accumulators: [String: SkillUsageAccumulator],
+        reusableStaticInfo: [String: SkillStaticInfo]
+    ) -> [SkillUsage] {
         accumulators.values
             .map { accumulator in
-                accumulator.makeUsage(staticInfo: skillStaticInfo(for: accumulator.path))
+                accumulator.makeUsage(
+                    staticInfo: reusableStaticInfo[accumulator.path] ?? skillStaticInfo(for: accumulator.path)
+                )
             }
             .sorted {
                 if $0.loadCount != $1.loadCount { return $0.loadCount > $1.loadCount }
@@ -2627,8 +2825,6 @@ final class CodexUsageReader {
         let calendar = context.statistics.calendar
         let now = context.now
         let dayStart = calendar.startOfDay(for: now)
-        let activeCutoff = now.addingTimeInterval(-2 * 60 * 60)
-
         var activeItems: [TaskItem] = []
         var pendingItems: [TaskItem] = []
         var doneItems: [TaskItem] = []
@@ -2645,6 +2841,7 @@ final class CodexUsageReader {
             SELECT id, title, preview, cwd, tokens_used AS tokens, updated_at AS updatedAt, recency_at AS recencyAt, model
             FROM threads
             WHERE archived = 0
+              AND COALESCE(thread_source, '') <> 'subagent'
               AND preview <> ''
               AND (
                 updated_at >= \(Int(dayStart.timeIntervalSince1970))
@@ -2658,6 +2855,7 @@ final class CodexUsageReader {
             SELECT id, title, preview, cwd, tokens_used AS tokens, COALESCE(archived_at, updated_at) AS updatedAt, model
             FROM threads
             WHERE archived = 1
+              AND COALESCE(thread_source, '') <> 'subagent'
               AND COALESCE(archived_at, updated_at) >= \(Int(dayStart.timeIntervalSince1970))
             ORDER BY COALESCE(archived_at, updated_at) DESC;
             """
@@ -2665,9 +2863,14 @@ final class CodexUsageReader {
             let todayThreads = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: todayThreadsQuery)
             for object in todayThreads {
                 let updatedAt = dateFromEpoch(object["recencyAt"]) ?? dateFromEpoch(object["updatedAt"])
-                let kind: TaskColumnKind = (updatedAt ?? .distantPast) >= activeCutoff ? .active : .pending
-                let item = makeThreadTaskItem(object: object, updatedAt: updatedAt, kind: kind)
-                if kind == .active {
+                let classification = TaskSourceClassifier.codexThread(updatedAt: updatedAt, now: now)
+                let item = makeThreadTaskItem(
+                    object: object,
+                    updatedAt: updatedAt,
+                    kind: classification.columnKind,
+                    displayState: classification.displayState
+                )
+                if classification.columnKind == .active {
                     activeItems.append(item)
                 } else {
                     pendingItems.append(item)
@@ -2675,60 +2878,61 @@ final class CodexUsageReader {
             }
 
             doneItems = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: archivedTodayQuery).map { object in
-                makeThreadTaskItem(object: object, updatedAt: dateFromEpoch(object["updatedAt"]), kind: .done)
+                makeThreadTaskItem(
+                    object: object,
+                    updatedAt: dateFromEpoch(object["updatedAt"]),
+                    kind: .done,
+                    displayState: .archived
+                )
             }
         } else {
             messages.append("任务看板未找到 SQLite 数据源")
         }
 
-        let scheduledItems = readAutomationTasks()
+        activeItems = sortedTaskItems(activeItems)
+        pendingItems = sortedTaskItems(pendingItems)
+        doneItems = sortedTaskItems(doneItems)
+        let scheduledItems = readAutomationTasks(now: now)
 
-        return TaskBoard(refreshedAt: Date(), columns: [
-            TaskColumn(id: .active, title: "进行中", count: activeItems.count, items: activeItems),
-            TaskColumn(id: .pending, title: "待处理", count: pendingItems.count, items: pendingItems),
+        return TaskBoard(refreshedAt: now, columns: [
+            TaskColumn(id: .active, title: "最近活跃", count: activeItems.count, items: activeItems),
+            TaskColumn(id: .pending, title: "待继续", count: pendingItems.count, items: pendingItems),
             TaskColumn(id: .scheduled, title: "定时", count: scheduledItems.count, items: scheduledItems),
-            TaskColumn(id: .done, title: "完成", count: doneItems.count, items: doneItems)
+            TaskColumn(id: .done, title: "今日归档", count: doneItems.count, items: doneItems)
         ])
     }
 
-    private func makeThreadTaskItem(object: [String: Any], updatedAt: Date?, kind: TaskColumnKind) -> TaskItem {
+    private func makeThreadTaskItem(
+        object: [String: Any],
+        updatedAt: Date?,
+        kind: TaskColumnKind,
+        displayState: TaskDisplayState
+    ) -> TaskItem {
         let rawId = object["id"] as? String ?? UUID().uuidString
         let title = normalizedTitle(object["title"] as? String, fallback: object["preview"] as? String)
         let cwd = object["cwd"] as? String ?? ""
-        let tokens = int64Value(object["tokens"]) ?? 0
+        let tokens = int64Value(object["tokens"]).flatMap { $0 > 0 ? $0 : nil }
         let compactId = rawId.replacingOccurrences(of: "-", with: "")
         let code = "COD-" + compactId.suffix(4).uppercased()
-        let chip: String
-
-        switch kind {
-        case .active:
-            chip = tokens >= 5_000_000 ? "High" : "Active"
-        case .pending:
-            chip = tokens >= 2_000_000 ? "Medium" : "Idle"
-        case .scheduled:
-            chip = "Cron"
-        case .done:
-            chip = "Done"
-        }
-
-        let detailParts = [
-            shortWorkspaceName(cwd),
-            tokens > 0 ? formatTokens(tokens) : nil
-        ].compactMap { $0 }.filter { !$0.isEmpty }
+        let chip = displayState.rawValue
 
         return TaskItem(
             id: rawId + kind.rawValue,
             code: String(code),
             title: title,
-            detail: detailParts.joined(separator: " · "),
+            detail: shortWorkspaceName(cwd),
             chip: chip,
             updatedAt: updatedAt,
             tokens: tokens,
-            kind: kind
+            kind: kind,
+            threadID: rawId,
+            sourceKind: .codexThread,
+            displayState: displayState,
+            stateBasis: kind == .done ? .archive : .activityWindow
         )
     }
 
-    private func readAutomationTasks() -> [TaskItem] {
+    private func readAutomationTasks(now: Date) -> [TaskItem] {
         let root = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex/automations")
         guard let enumerator = fileManager.enumerator(at: root, includingPropertiesForKeys: nil) else {
             return []
@@ -2743,25 +2947,56 @@ final class CodexUsageReader {
             let id = fields["id"] ?? url.deletingLastPathComponent().lastPathComponent
             let name = fields["name"] ?? id
             let kind = fields["kind"] ?? "cron"
-            let schedule = scheduleSummary(fields["rrule"])
-            let detail = [kind.uppercased(), schedule].filter { !$0.isEmpty }.joined(separator: " · ")
+            let schedule = TaskScheduleParser.presentation(rrule: fields["rrule"], now: now)
 
             items.append(TaskItem(
                 id: "automation-" + id,
                 code: "AUTO-" + id.prefix(4).uppercased(),
                 title: name,
-                detail: detail,
+                detail: schedule.summary,
                 chip: kind == "heartbeat" ? "Wake" : "Cron",
-                updatedAt: dateFromEpoch(fields["updated_at"]),
+                updatedAt: nil,
                 tokens: nil,
-                kind: .scheduled
+                kind: .scheduled,
+                sourceKind: .codexAutomation,
+                displayState: .scheduled,
+                stateBasis: .scheduleConfig,
+                nextRunAt: schedule.nextRunAt
             ))
         }
 
-        return items.sorted { $0.title < $1.title }
+        return items.sorted { lhs, rhs in
+            switch (lhs.nextRunAt, rhs.nextRunAt) {
+            case let (left?, right?) where left != right:
+                return left < right
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                if lhs.title != rhs.title { return lhs.title < rhs.title }
+                return lhs.id < rhs.id
+            }
+        }
+    }
+
+    private func sortedTaskItems(_ items: [TaskItem]) -> [TaskItem] {
+        items.sorted { lhs, rhs in
+            switch (lhs.updatedAt, rhs.updatedAt) {
+            case let (left?, right?) where left != right:
+                return left > right
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                return lhs.id < rhs.id
+            }
+        }
     }
 
     private func runSQLiteJSON(sqlitePath: String, dbPath: String, query: String) -> [[String: Any]] {
+        let performanceSpan = PerformanceMonitor.shared.begin(.sqliteRead)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sqlitePath)
         process.arguments = ["-readonly", "-json", dbPath, query]
@@ -2774,6 +3009,7 @@ final class CodexUsageReader {
         do {
             try process.run()
         } catch {
+            PerformanceMonitor.shared.end(performanceSpan, success: false)
             return []
         }
 
@@ -2783,8 +3019,12 @@ final class CodexUsageReader {
         guard
             process.terminationStatus == 0,
             let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-        else { return [] }
+        else {
+            PerformanceMonitor.shared.end(performanceSpan, success: false)
+            return []
+        }
 
+        PerformanceMonitor.shared.end(performanceSpan)
         return json
     }
 
@@ -3402,30 +3642,6 @@ private func relativeTimeText(_ date: Date, language: WidgetLanguage) -> String 
     return language.text("\(hours / 24) 天前", "\(hours / 24)d ago")
 }
 
-private func scheduleSummary(_ rrule: String?) -> String {
-    guard let rrule, !rrule.isEmpty else { return "" }
-
-    var timeText = ""
-    if let range = rrule.range(of: #"T(\d{2})(\d{2})(\d{2})"#, options: .regularExpression) {
-        let match = String(rrule[range])
-        let start = match.index(after: match.startIndex)
-        let hourEnd = match.index(start, offsetBy: 2)
-        let minuteEnd = match.index(hourEnd, offsetBy: 2)
-        timeText = "\(match[start..<hourEnd]):\(match[hourEnd..<minuteEnd])"
-    }
-
-    if rrule.contains("FREQ=DAILY") {
-        return timeText.isEmpty ? "每天" : "每天 \(timeText)"
-    }
-    if rrule.contains("FREQ=WEEKLY") {
-        return timeText.isEmpty ? "每周" : "每周 \(timeText)"
-    }
-    if rrule.contains("FREQ=HOURLY") {
-        return "每小时"
-    }
-    return timeText
-}
-
 private func intValue(_ value: Any?) -> Int? {
     if let int = value as? Int { return int }
     if let int64 = value as? Int64 { return Int(int64) }
@@ -3842,11 +4058,13 @@ struct UsageWidgetView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var selectedDashboardTab: DashboardTab = .tasks
+    @State private var focusedThreadID: String?
 
-    static let widgetWidth: CGFloat = 820
+    static let widgetDefaultWidth: CGFloat = 820
+    static let widgetMinWidth: CGFloat = 820
+    static let widgetMaxWidth: CGFloat = 1280
     static let widgetDefaultHeight: CGFloat = 720
     static let widgetMinHeight: CGFloat = 620
-    static let widgetMaxHeight: CGFloat = 920
     static let windowCornerRadius: CGFloat = 18
 
     private var snapshot: UsageSnapshot { store.snapshot }
@@ -3866,8 +4084,13 @@ struct UsageWidgetView: View {
                 .accessibilityHidden(true)
             widgetContent
         }
-        .frame(width: Self.widgetWidth, alignment: .topLeading)
-        .frame(minHeight: Self.widgetMinHeight, maxHeight: .infinity, alignment: .topLeading)
+        .frame(
+            minWidth: Self.widgetMinWidth,
+            maxWidth: Self.widgetMaxWidth,
+            minHeight: Self.widgetMinHeight,
+            maxHeight: .infinity,
+            alignment: .topLeading
+        )
         .appVisualEnvironment(
             catalog: settings.paletteCatalog,
             paletteID: settings.paletteID,
@@ -3885,6 +4108,17 @@ struct UsageWidgetView: View {
         }
         .onChange(of: selectedDashboardTab) { tab in
             store.setTaskBoardSelected(tab == .tasks)
+        }
+        .onChange(of: store.taskFocusRequest) { request in
+            guard let request else { return }
+            selectedDashboardTab = .tasks
+            focusedThreadID = request.threadID
+            let requestID = request.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                if store.taskFocusRequest?.id == requestID {
+                    focusedThreadID = nil
+                }
+            }
         }
     }
 
@@ -3984,6 +4218,7 @@ struct UsageWidgetView: View {
                     DualQuotaRing(
                         fiveHourQuota: snapshot.fiveHourQuota,
                         sevenDayQuota: snapshot.sevenDayQuota,
+                        monthlyQuota: snapshot.monthlyQuota,
                         quotaReadSucceeded: snapshot.quotaReadSucceeded,
                         quotaIsStale: selectedQuotaIsStale,
                         language: language,
@@ -3995,6 +4230,7 @@ struct UsageWidgetView: View {
                     QuotaResetSummary(
                         fiveHourQuota: snapshot.fiveHourQuota,
                         sevenDayQuota: snapshot.sevenDayQuota,
+                        monthlyQuota: snapshot.monthlyQuota,
                         language: language
                     )
                     .frame(width: 154, height: 26)
@@ -4008,6 +4244,7 @@ struct UsageWidgetView: View {
                         .frame(width: 154)
                     }
                 }
+                .zIndex(1)
             }
 
             VStack(alignment: .leading, spacing: 13) {
@@ -4130,7 +4367,15 @@ struct UsageWidgetView: View {
     private var taskBoardContent: some View {
         HStack(alignment: .top, spacing: 8) {
             ForEach(taskBoardColumns) { column in
-                TaskBoardColumnView(column: column, language: language)
+                TaskBoardColumnView(
+                    column: column,
+                    runtimeScope: store.selectedRuntimeScope,
+                    language: language,
+                    focusedThreadID: focusedThreadID,
+                    onOpenSession: { threadID in
+                        CodexSessionOpener.open(threadID: threadID)
+                    }
+                )
                     .frame(maxWidth: .infinity, alignment: .top)
             }
         }
@@ -4143,12 +4388,24 @@ struct UsageWidgetView: View {
             Text("\(language.text("刷新", "Refreshed")) \(timeOnly(snapshot.refreshedAt, language: language))")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
+                .help(dataTrustHelp)
             if let shortcut = settings.globalShortcut {
                 Text(shortcut.displayName)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
         }
+    }
+
+    private var dataTrustHelp: String {
+        guard let runtime = store.runtimeSnapshot(for: store.selectedRuntimeScope) else {
+            return language.text("数据暂不可用", "Data unavailable")
+        }
+        let status = runtime.status.localized(language)
+        return language.text(
+            "状态：\(status)\n额度：\(runtime.quotaSourceLabel)\n用量：\(runtime.usageSourceLabel)\n最后成功刷新：\(timeOnly(snapshot.refreshedAt, language: language))",
+            "Status: \(status)\nQuota: \(runtime.quotaSourceLabel)\nUsage: \(runtime.usageSourceLabel)\nLast refresh: \(timeOnly(snapshot.refreshedAt, language: language))"
+        )
     }
 
     private var taskBoardSummary: String {
@@ -4183,10 +4440,10 @@ struct UsageWidgetView: View {
 
     private var taskBoardColumns: [TaskColumn] {
         snapshot.taskBoard?.columns ?? [
-            TaskColumn(id: .active, title: localizedTaskColumnTitle(.active, language: language), count: 0, items: []),
-            TaskColumn(id: .pending, title: localizedTaskColumnTitle(.pending, language: language), count: 0, items: []),
-            TaskColumn(id: .scheduled, title: localizedTaskColumnTitle(.scheduled, language: language), count: 0, items: []),
-            TaskColumn(id: .done, title: localizedTaskColumnTitle(.done, language: language), count: 0, items: [])
+            TaskColumn(id: .active, title: localizedTaskColumnTitle(.active, runtimeScope: store.selectedRuntimeScope, language: language), count: 0, items: []),
+            TaskColumn(id: .pending, title: localizedTaskColumnTitle(.pending, runtimeScope: store.selectedRuntimeScope, language: language), count: 0, items: []),
+            TaskColumn(id: .scheduled, title: localizedTaskColumnTitle(.scheduled, runtimeScope: store.selectedRuntimeScope, language: language), count: 0, items: []),
+            TaskColumn(id: .done, title: localizedTaskColumnTitle(.done, runtimeScope: store.selectedRuntimeScope, language: language), count: 0, items: [])
         ]
     }
 
@@ -4195,7 +4452,9 @@ struct UsageWidgetView: View {
         if store.selectedRuntimeScope == .mimoCode {
             return snapshot.local == nil
         }
-        let quotaUnavailable = snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil
+        let quotaUnavailable = snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil
         let hasQuotaProtocolWarning = snapshot.messages.contains { $0.contains("额度窗口") }
         return (!snapshot.messages.isEmpty && (quotaUnavailable || hasQuotaProtocolWarning || snapshot.local == nil))
             || snapshot.account == nil
@@ -4268,7 +4527,9 @@ struct UsageWidgetView: View {
             return items
         }
 
-        if (snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil) || snapshot.account == nil {
+        if (snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil) || snapshot.account == nil {
             if messages.contains("未找到 codex") {
                 items.append(DiagnosticItem(
                     id: "codex-missing",
@@ -5333,42 +5594,49 @@ private enum QuotaRingGeometry {
     static let center = CGPoint(x: outerDiameter / 2, y: outerDiameter / 2)
 }
 
-private enum QuotaWindowKind: String, Hashable {
-    case fiveHour
-    case sevenDay
-
+private extension QuotaWindowKind {
     var compactTitle: String {
         switch self {
-        case .fiveHour: return "5h"
-        case .sevenDay: return "7d"
+        case .fiveHour: "5h"
+        case .sevenDay: "7d"
+        case .monthly: "mo"
         }
     }
+}
 
+private extension QuotaPaletteRole {
     func tokens(in visualTokens: ResolvedVisualTokens) -> QuotaRoleTokenSet {
         switch self {
-        case .fiveHour: visualTokens.quota.primary
-        case .sevenDay: visualTokens.quota.secondary
+        case .primary: visualTokens.quota.primary
+        case .secondary: visualTokens.quota.secondary
         }
     }
 
     var ringAssetSlot: PaletteAssetSlot {
         switch self {
-        case .fiveHour: .quotaRingPrimary
-        case .sevenDay: .quotaRingSecondary
+        case .primary: .quotaRingPrimary
+        case .secondary: .quotaRingSecondary
         }
     }
 
     var capAssetSlot: PaletteAssetSlot {
         switch self {
-        case .fiveHour: .quotaCapPrimary
-        case .sevenDay: .quotaCapSecondary
+        case .primary: .quotaCapPrimary
+        case .secondary: .quotaCapSecondary
         }
     }
+}
+
+private enum QuotaRingPosition: Equatable {
+    case outer
+    case inner
 }
 
 private struct QuotaRingItem: Identifiable, Equatable {
     let kind: QuotaWindowKind
     let window: RateWindow
+    let paletteRole: QuotaPaletteRole
+    let position: QuotaRingPosition
 
     var id: QuotaWindowKind { kind }
 
@@ -5398,15 +5666,29 @@ private struct QuotaRingPresentation: Equatable {
 
     let items: [QuotaRingItem]
 
-    init(fiveHourQuota: RateWindow?, sevenDayQuota: RateWindow?) {
-        var items: [QuotaRingItem] = []
+    init(fiveHourQuota: RateWindow?, sevenDayQuota: RateWindow?, monthlyQuota: RateWindow?) {
+        var windows: [(QuotaWindowKind, RateWindow)] = []
         if let fiveHourQuota {
-            items.append(QuotaRingItem(kind: .fiveHour, window: fiveHourQuota))
+            windows.append((.fiveHour, fiveHourQuota))
         }
         if let sevenDayQuota {
-            items.append(QuotaRingItem(kind: .sevenDay, window: sevenDayQuota))
+            windows.append((.sevenDay, sevenDayQuota))
         }
-        self.items = items
+        if let monthlyQuota {
+            windows.append((.monthly, monthlyQuota))
+        }
+        let activeKinds = Set(windows.map(\.0))
+        self.items = windows.enumerated().map { index, entry in
+            QuotaRingItem(
+                kind: entry.0,
+                window: entry.1,
+                paletteRole: QuotaPaletteRoleResolver.role(
+                    for: entry.0,
+                    activeKinds: activeKinds
+                ),
+                position: index == 0 ? .outer : .inner
+            )
+        }
     }
 
     var topology: Topology {
@@ -5453,7 +5735,7 @@ private struct QuotaRingPresentation: Equatable {
     }
 
     func diameter(for item: QuotaRingItem) -> CGFloat {
-        guard topology == .dual, item.kind == .sevenDay else {
+        guard topology == .dual, item.position == .inner else {
             return QuotaRingGeometry.outerDiameter
         }
         return QuotaRingGeometry.innerDiameter
@@ -5482,6 +5764,7 @@ private enum QuotaRingHoverTarget {
 struct DualQuotaRing: View {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let quotaReadSucceeded: Bool
     let quotaIsStale: Bool
     let language: WidgetLanguage
@@ -5494,7 +5777,8 @@ struct DualQuotaRing: View {
     private var presentation: QuotaRingPresentation {
         QuotaRingPresentation(
             fiveHourQuota: fiveHourQuota,
-            sevenDayQuota: sevenDayQuota
+            sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota
         )
     }
 
@@ -5503,9 +5787,9 @@ struct DualQuotaRing: View {
             ForEach(presentation.items) { item in
                 QuotaRingSegment(
                     percent: item.window.remainingPercent,
-                    tokens: item.kind.tokens(in: visualTokens),
-                    ringAsset: visualTokens.assets[item.kind.ringAssetSlot],
-                    capAsset: visualTokens.assets[item.kind.capAssetSlot],
+                    tokens: item.paletteRole.tokens(in: visualTokens),
+                    ringAsset: visualTokens.assets[item.paletteRole.ringAssetSlot],
+                    capAsset: visualTokens.assets[item.paletteRole.capAssetSlot],
                     lineWidth: QuotaRingGeometry.lineWidth
                 )
                 .frame(
@@ -5562,7 +5846,7 @@ struct DualQuotaRing: View {
                         QuotaRingLabel(
                             title: item.kind.compactTitle,
                             value: item.remainingText,
-                            color: item.kind.tokens(in: visualTokens).label.color
+                            color: item.paletteRole.tokens(in: visualTokens).label.color
                         )
                     }
                     Text(
@@ -6362,21 +6646,36 @@ private enum QuotaParticleAnimationSelfTest {
 
         let fullFiveHour = quotaWindow(usedPercent: 0, durationMins: 300)
         let fullSevenDay = quotaWindow(usedPercent: 0, durationMins: 10_080)
+        let fullMonthly = quotaWindow(usedPercent: 0, durationMins: 43_800)
         let noQuotaPresentation = QuotaRingPresentation(
             fiveHourQuota: nil,
-            sevenDayQuota: nil
+            sevenDayQuota: nil,
+            monthlyQuota: nil
         )
         let fiveHourOnlyPresentation = QuotaRingPresentation(
             fiveHourQuota: fullFiveHour,
-            sevenDayQuota: nil
+            sevenDayQuota: nil,
+            monthlyQuota: nil
         )
         let sevenDayOnlyPresentation = QuotaRingPresentation(
             fiveHourQuota: nil,
-            sevenDayQuota: fullSevenDay
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: nil
+        )
+        let monthlyOnlyPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: nil,
+            monthlyQuota: fullMonthly
         )
         let dualPresentation = QuotaRingPresentation(
             fiveHourQuota: fullFiveHour,
-            sevenDayQuota: fullSevenDay
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: nil
+        )
+        let bothLongPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: fullMonthly
         )
 
         expect(noQuotaPresentation.topology == .none, "zero quota windows should use the empty presentation")
@@ -6385,12 +6684,20 @@ private enum QuotaParticleAnimationSelfTest {
         expect(fiveHourOnlyPresentation.topology == .single, "5h-only quota should use a single ring")
         expect(
             fiveHourOnlyPresentation.items.map(\.kind) == [.fiveHour],
-            "5h-only presentation should preserve the blue 5h semantic"
+            "5h-only presentation should preserve the 5h semantic"
         )
         expect(sevenDayOnlyPresentation.topology == .single, "7d-only quota should use a single ring")
         expect(
             sevenDayOnlyPresentation.items.map(\.kind) == [.sevenDay],
-            "7d-only presentation should preserve the purple 7d semantic"
+            "7d-only presentation should preserve the 7d semantic"
+        )
+        expect(
+            sevenDayOnlyPresentation.items.map(\.paletteRole) == [.secondary],
+            "7d-only presentation must preserve the quota.secondary identity"
+        )
+        expect(
+            monthlyOnlyPresentation.items.map(\.paletteRole) == [.secondary],
+            "monthly-only presentation should use the documented secondary fallback"
         )
         expect(
             sevenDayOnlyPresentation.particleLanes.count == 1
@@ -6404,6 +6711,16 @@ private enum QuotaParticleAnimationSelfTest {
             "dual presentation should retain the stable 5h then 7d order"
         )
         expect(
+            dualPresentation.items.map(\.paletteRole) == [.primary, .secondary],
+            "5h and 7d must preserve their Palette Package semantic identities"
+        )
+        expect(
+            bothLongPresentation.items.map(\.kind) == [.sevenDay, .monthly]
+                && bothLongPresentation.items.map(\.paletteRole) == [.secondary, .primary]
+                && bothLongPresentation.items.map(\.position) == [.outer, .inner],
+            "7d should remain secondary while monthly uses the free primary fallback independent of ring geometry"
+        )
+        expect(
             dualPresentation.activeRadii == [
                 QuotaRingGeometry.outerRadius,
                 QuotaRingGeometry.innerRadius
@@ -6413,7 +6730,9 @@ private enum QuotaParticleAnimationSelfTest {
         expect(
             fiveHourOnlyPresentation.items.count == 1
                 && sevenDayOnlyPresentation.items.count == 1
-                && dualPresentation.items.count == 2,
+                && monthlyOnlyPresentation.items.count == 1
+                && dualPresentation.items.count == 2
+                && bothLongPresentation.items.count == 2,
             "reset summary should receive only real quota rows"
         )
         expect(
@@ -6734,7 +7053,7 @@ private struct SingleQuotaRingLabel: View {
         VStack(spacing: 1) {
             Text(item.kind.compactTitle)
                 .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(item.kind.tokens(in: visualTokens).label.color)
+                .foregroundStyle(item.paletteRole.tokens(in: visualTokens).label.color)
             Text(item.remainingText)
                 .font(.system(size: 28, weight: .bold, design: .rounded))
                 .monospacedDigit()
@@ -6778,13 +7097,15 @@ private struct QuotaUnavailablePlaceholder: View {
 struct QuotaResetSummary: View {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let language: WidgetLanguage
     @Environment(\.visualTokens) private var visualTokens
 
     private var presentation: QuotaRingPresentation {
         QuotaRingPresentation(
             fiveHourQuota: fiveHourQuota,
-            sevenDayQuota: sevenDayQuota
+            sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota
         )
     }
 
@@ -6794,7 +7115,7 @@ struct QuotaResetSummary: View {
                 QuotaResetLine(
                     title: item.kind.compactTitle,
                     window: item.window,
-                    color: item.kind.tokens(in: visualTokens).label.color,
+                    color: item.paletteRole.tokens(in: visualTokens).label.color,
                     language: language
                 )
             }
@@ -6841,7 +7162,12 @@ private struct ResetCreditAvailability: View {
     let details: [ResetCreditDetail]?
     let language: WidgetLanguage
     @Environment(\.visualTokens) private var visualTokens
-    @State private var isHovering = false
+    @State private var isHoveringInlineDetails = false
+    @State private var inlineDetailsHoverLocation: CGPoint?
+
+    private var effectiveTooltipLocation: CGPoint {
+        inlineDetailsHoverLocation ?? CGPoint(x: 142, y: 4)
+    }
 
     private var disclosure: ResetCreditDisclosure {
         ResetCreditDisclosure(totalCount: count, details: details ?? [])
@@ -6863,30 +7189,48 @@ private struct ResetCreditAvailability: View {
                     .foregroundStyle(.primary)
             }
 
-            ForEach(Array(disclosure.inlineDetails.enumerated()), id: \.element.id) { index, detail in
-                HStack(spacing: 5) {
-                    Text(language.text("第 \(index + 1) 次", "Reset \(index + 1)"))
-                        .font(.system(size: 8.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    Text(expirationText(detail.expiresAt))
-                        .font(.system(size: 8.5, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+            if !disclosure.inlineDetails.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(Array(disclosure.inlineDetails.enumerated()), id: \.element.id) { index, detail in
+                        HStack(spacing: 5) {
+                            Text(language.text("第 \(index + 1) 次", "Reset \(index + 1)"))
+                                .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 4)
+                            Text(expirationText(detail.expiresAt))
+                                .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                 }
-            }
-
-            if disclosure.showsExpandedTooltip {
-                HStack(spacing: 4) {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 8, weight: .semibold))
-                    Text(expandedTooltipHint)
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    isHoveringInlineDetails = hovering
+                    if !hovering {
+                        inlineDetailsHoverLocation = nil
+                    }
                 }
-                    .font(.system(size: 8.2, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if disclosure.missingDetailCount > 0 {
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        isHoveringInlineDetails = true
+                        inlineDetailsHoverLocation = location
+                    case .ended:
+                        inlineDetailsHoverLocation = nil
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if isHoveringInlineDetails, disclosure.showsHoverTooltip {
+                        ChartTooltipView(payload: tooltipPayload, prefersOpaqueSurface: true)
+                            .frame(width: chartTooltipWidth)
+                            .offset(x: effectiveTooltipLocation.x + 12, y: effectiveTooltipLocation.y + 10)
+                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                            .zIndex(20)
+                    }
+                }
+            } else if !disclosure.showsHoverTooltip, disclosure.missingDetailCount > 0 {
                 Text(language.text(
                     "另有 \(disclosure.missingDetailCount) 次未提供到期时间",
                     "\(disclosure.missingDetailCount) expiry times unavailable"
@@ -6898,18 +7242,11 @@ private struct ResetCreditAvailability: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
-        .overlay(alignment: .topLeading) {
-            if isHovering, disclosure.showsExpandedTooltip {
-                ChartTooltipView(payload: tooltipPayload)
-                    .frame(width: chartTooltipWidth)
-                    .offset(x: 160, y: -4)
-                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
-                    .zIndex(20)
-            }
+        .zIndex(isHoveringInlineDetails ? 20 : 0)
+        .onDisappear {
+            isHoveringInlineDetails = false
+            inlineDetailsHoverLocation = nil
         }
-        .zIndex(isHovering ? 20 : 0)
         .accessibilityElement(children: .combine)
     }
 
@@ -6931,19 +7268,6 @@ private struct ResetCreditAvailability: View {
         return ChartTooltipPayload(
             title: language.text("可用重置次数 \(count)", "\(count) available resets"),
             rows: rows
-        )
-    }
-
-    private var expandedTooltipHint: String {
-        if disclosure.inlineDetails.isEmpty {
-            return language.text(
-                "\(disclosure.hiddenCount) 次 · 悬停查看",
-                "\(disclosure.hiddenCount) resets · hover"
-            )
-        }
-        return language.text(
-            "其余 \(disclosure.hiddenCount) 次 · 悬停查看",
-            "\(disclosure.hiddenCount) more · hover"
         )
     }
 
@@ -7808,6 +8132,7 @@ struct ChartTooltipPayload: Equatable {
 struct ChartTooltipView: View {
     @Environment(\.colorScheme) private var colorScheme
     let payload: ChartTooltipPayload
+    var prefersOpaqueSurface = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -7837,7 +8162,11 @@ struct ChartTooltipView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(FixedVisualPalette.cardFill(colorScheme, elevated: true))
+                .fill(
+                    prefersOpaqueSurface
+                        ? FixedVisualPalette.tooltipFill(colorScheme)
+                        : FixedVisualPalette.cardFill(colorScheme, elevated: true)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .strokeBorder(FixedVisualPalette.cardStroke(colorScheme, elevated: true), lineWidth: 0.9)
@@ -8980,17 +9309,22 @@ struct SkillUsageRow: View {
 
     private var staticTokenText: String {
         guard let tokens = skill.staticTokenEstimate else {
-            return language.text("文件缺失", "missing file")
+            return language.text("当前未定位", "not located")
         }
         return language.text("Skill.md \(formatTokens(tokens))", "Skill.md \(formatTokens(tokens))")
     }
 
     private var skillHelpText: String {
-        let staticTokens = skill.staticTokenEstimate.map { formatTokens($0) } ?? "--"
+        guard let staticTokenEstimate = skill.staticTokenEstimate else {
+            return language.text(
+                "\(skill.name) · \(skill.loadCount) 次加载 · \(skill.threadCount) 线程 · Skill.md 当前未定位",
+                "\(skill.name) · \(skill.loadCount)x loads · \(skill.threadCount) threads · Skill.md not currently located"
+            )
+        }
         let size = formatBytes(skill.staticByteCount)
         return language.text(
-            "\(skill.name) · \(skill.loadCount) 次加载 · \(skill.threadCount) 线程 · Skill.md Token数 \(staticTokens) · 文件 \(size) · \(displayHomePath(skill.path))",
-            "\(skill.name) · \(skill.loadCount)x loads · \(skill.threadCount) threads · Skill.md tokens \(staticTokens) · file \(size) · \(displayHomePath(skill.path))"
+            "\(skill.name) · \(skill.loadCount) 次加载 · \(skill.threadCount) 线程 · Skill.md Token数 \(formatTokens(staticTokenEstimate)) · 当前文件 \(size) · \(displayHomePath(skill.path))",
+            "\(skill.name) · \(skill.loadCount)x loads · \(skill.threadCount) threads · Skill.md tokens \(formatTokens(staticTokenEstimate)) · current file \(size) · \(displayHomePath(skill.path))"
         )
     }
 }
@@ -9069,16 +9403,19 @@ struct DashboardCardHeader<Trailing: View>: View {
 
 struct TaskBoardColumnView: View {
     let column: TaskColumn
+    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
+    let focusedThreadID: String?
+    let onOpenSession: (String) -> Bool
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: taskColumnIcon(column.id))
+                Image(systemName: taskColumnIcon(column.id, runtimeScope: runtimeScope))
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(taskAccentForegroundColor(column.id, colorScheme: colorScheme))
-                Text(localizedTaskColumnTitle(column.id, language: language))
+                    .foregroundStyle(taskAccentForegroundColor(column.id, runtimeScope: runtimeScope, colorScheme: colorScheme))
+                Text(localizedTaskColumnTitle(column.id, runtimeScope: runtimeScope, language: language))
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                 Text("\(column.count)")
@@ -9086,11 +9423,10 @@ struct TaskBoardColumnView: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
             }
             .frame(height: dashboardCardHeaderHeight, alignment: .center)
+            .help(localizedTaskColumnHelp(column.id, runtimeScope: runtimeScope, language: language))
+            .accessibilityElement(children: .combine)
 
             if column.items.isEmpty {
                 VStack(spacing: 5) {
@@ -9105,7 +9441,12 @@ struct TaskBoardColumnView: View {
                 .frame(height: 66)
             } else {
                 ForEach(column.items) { item in
-                    TaskIssueCard(item: item, language: language)
+                    TaskIssueCard(
+                        item: item,
+                        language: language,
+                        isFocused: item.threadID != nil && item.threadID == focusedThreadID,
+                        onOpenSession: onOpenSession
+                    )
                 }
                 if column.count > column.items.count {
                     Text(language.text("+ \(column.count - column.items.count) 项", "+ \(column.count - column.items.count) more"))
@@ -9120,10 +9461,10 @@ struct TaskBoardColumnView: View {
         .frame(minHeight: 274, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: dashboardCardCornerRadius, style: .continuous)
-                .fill(taskColumnFill(column.id))
+                .fill(taskColumnFill(column.id, runtimeScope: runtimeScope))
                 .overlay(
                     RoundedRectangle(cornerRadius: dashboardCardCornerRadius, style: .continuous)
-                        .strokeBorder(taskAccentColor(column.id).opacity(0.12), lineWidth: 0.8)
+                        .strokeBorder(taskAccentColor(column.id, runtimeScope: runtimeScope).opacity(0.12), lineWidth: 0.8)
                 )
         )
     }
@@ -9132,69 +9473,163 @@ struct TaskBoardColumnView: View {
 struct TaskIssueCard: View {
     let item: TaskItem
     let language: WidgetLanguage
+    let isFocused: Bool
+    let onOpenSession: (String) -> Bool
+    @Environment(\.visualTokens) private var visualTokens
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var sessionOpenFailed = false
+    @State private var isHovering = false
+    @State private var hasPointingHandCursor = false
+    @FocusState private var hasKeyboardFocus: Bool
 
+    @ViewBuilder
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(item.code)
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 4)
-                if let updatedAt = item.updatedAt {
-                    Text(relativeTimeText(updatedAt, language: language))
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+        if canOpenSession {
+            Button {
+                openSession()
+            } label: {
+                cardSurface
             }
+            .buttonStyle(.plain)
+            .focused($hasKeyboardFocus)
+            .help(taskCardHelp)
+            .accessibilityLabel(Text(accessibilityLabel))
+            .accessibilityHint(language.text("打开对应的 Codex Session", "Opens the matching Codex session"))
+            .onHover(perform: updateHoverState)
+            .onDisappear(perform: releasePointingHandCursor)
+        } else {
+            cardSurface
+                .help(taskCardHelp)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(accessibilityLabel))
+        }
+    }
 
+    private var canOpenSession: Bool {
+        guard let threadID = item.threadID else { return false }
+        return CodexSessionLink.url(threadID: threadID) != nil
+    }
+
+    private var cardSurface: some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(item.title)
                 .font(.system(size: 11, weight: .semibold))
                 .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
                 .minimumScaleFactor(0.9)
+                .frame(minHeight: 28, alignment: .topLeading)
 
-            if !item.detail.isEmpty {
-                Text(localizedTaskDetail(item.detail, language: language))
+            HStack(spacing: 5) {
+                if !item.detail.isEmpty {
+                    Text(localizedTaskDetail(item.detail, language: language))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 4)
+                if let timeText = localizedTaskTime(item, language: language) {
+                    Text(timeText)
+                        .lineLimit(1)
+                }
+            }
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(.secondary)
+            .frame(height: 13)
+
+            if sessionOpenFailed {
+                Text(language.text("无法打开 Codex Session", "Could not open Codex session"))
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .foregroundStyle(FixedVisualPalette.statusWarning)
             }
 
             HStack(spacing: 5) {
-                TaskChip(text: item.chip, kind: item.kind)
+                TaskChip(
+                    text: localizedTaskState(item, language: language),
+                    displayState: item.displayState
+                )
                 Spacer(minLength: 4)
-                TaskAvatar(text: taskAvatarText(item), kind: item.kind)
+                Text(item.code)
+                    .font(.system(size: 8, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                if let tokens = item.tokens, tokens > 0 {
+                    Text(formatTokens(tokens))
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(dashboardRowPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
+                .fill(isHovering ? visualTokens.selection.fill.color : Color.clear)
+        )
         .cardBackground(cornerRadius: dashboardRowCornerRadius, elevated: true)
+        .overlay(
+            RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
+                .strokeBorder(
+                    (isFocused || hasKeyboardFocus)
+                        ? FixedVisualPalette.statusInfo
+                        : (isHovering ? visualTokens.selection.stroke.color : Color.clear),
+                    lineWidth: (isFocused || hasKeyboardFocus) ? 1.5 : (isHovering ? 1.0 : 0)
+                )
+        )
+        .contentShape(RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous))
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isFocused)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: hasKeyboardFocus)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isHovering)
     }
-}
 
-struct TaskAvatar: View {
-    let text: String
-    let kind: TaskColumnKind
-    @Environment(\.colorScheme) private var colorScheme
+    private func updateHoverState(_ hovering: Bool) {
+        isHovering = hovering
+        guard hovering != hasPointingHandCursor else { return }
+        if hovering {
+            NSCursor.pointingHand.push()
+        } else {
+            NSCursor.pop()
+        }
+        hasPointingHandCursor = hovering
+    }
 
-    var body: some View {
-        Text(text)
-            .font(.system(size: 9, weight: .bold, design: .rounded))
-            .foregroundStyle(taskAccentForegroundColor(kind, colorScheme: colorScheme))
-            .frame(width: 18, height: 18)
-            .background(
-                Circle()
-                    .fill(taskAccentColor(kind).opacity(0.13))
-            )
+    private func releasePointingHandCursor() {
+        isHovering = false
+        guard hasPointingHandCursor else { return }
+        NSCursor.pop()
+        hasPointingHandCursor = false
+    }
+
+    private func openSession() {
+        guard let threadID = item.threadID else { return }
+        sessionOpenFailed = !onOpenSession(threadID)
+    }
+
+    private var taskCardHelp: String {
+        var lines = [item.title]
+        if !item.detail.isEmpty { lines.append(localizedTaskDetail(item.detail, language: language)) }
+        lines.append(localizedTaskStateBasis(item, language: language))
+        if canOpenSession { lines.append(language.text("点击在 Codex 中打开", "Click to open in Codex")) }
+        return lines.joined(separator: "\n")
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [
+            item.title,
+            localizedTaskState(item, language: language)
+        ]
+        if !item.detail.isEmpty { parts.append(localizedTaskDetail(item.detail, language: language)) }
+        if let time = localizedTaskTime(item, language: language) { parts.append(time) }
+        parts.append(canOpenSession
+            ? language.text("可打开", "Openable")
+            : language.text("不可打开", "Not openable"))
+        return parts.joined(separator: "，")
     }
 }
 
 struct TaskChip: View {
     let text: String
-    let kind: TaskColumnKind
+    let displayState: TaskDisplayState
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -9212,49 +9647,64 @@ struct TaskChip: View {
             Capsule(style: .continuous)
                 .fill(chipAccentColor.opacity(0.13))
         )
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var chipAccentColor: Color {
-        switch text.lowercased() {
-        case "high", "urgent":
+        switch displayState {
+        case .failed:
             return FixedVisualPalette.statusDanger
-        case "medium":
+        case .running:
             return FixedVisualPalette.statusWarning
-        case "active":
-            return FixedVisualPalette.statusWarning
-        case "cron", "wake":
-            return FixedVisualPalette.statusScheduled
-        case "done":
+        case .completed:
             return FixedVisualPalette.statusSuccess
-        default:
-            return taskAccentColor(kind)
+        case .blocked:
+            return FixedVisualPalette.statusWarning
+        case .recentlyActive:
+            return FixedVisualPalette.statusWarning
+        case .scheduled:
+            return FixedVisualPalette.statusScheduled
+        case .continueLater, .archived, .pending, .unknown:
+            return FixedVisualPalette.statusNeutral
         }
     }
 
     private var chipForegroundColor: Color {
         guard colorScheme == .light else { return chipAccentColor }
-        switch text.lowercased() {
-        case "high", "urgent":
+        switch displayState {
+        case .failed:
             return FixedVisualPalette.statusDangerLightText
-        case "medium", "active":
+        case .running, .blocked, .recentlyActive:
             return FixedVisualPalette.statusWarningLightText
-        case "cron", "wake":
-            return FixedVisualPalette.statusScheduledLightText
-        case "done":
+        case .completed:
             return FixedVisualPalette.statusSuccessLightText
-        default:
-            return taskAccentForegroundColor(kind, colorScheme: colorScheme)
+        case .scheduled:
+            return FixedVisualPalette.statusScheduledLightText
+        case .continueLater, .archived, .pending, .unknown:
+            return FixedVisualPalette.statusNeutralLightText
         }
     }
 
     private var chipIcon: String {
-        switch text.lowercased() {
-        case "cron", "wake":
-            return "clock.fill"
-        case "done":
+        switch displayState {
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        case .running:
+            return "record.circle"
+        case .completed:
             return "checkmark.circle.fill"
-        default:
-            return "chart.bar.fill"
+        case .blocked:
+            return "pause.circle.fill"
+        case .scheduled:
+            return "clock.fill"
+        case .archived:
+            return "archivebox.fill"
+        case .unknown:
+            return "questionmark.circle"
+        case .recentlyActive:
+            return "clock.badge.checkmark"
+        case .continueLater, .pending:
+            return "circle"
         }
     }
 }
@@ -9365,6 +9815,12 @@ enum FixedVisualPalette {
         return Color.white.opacity(elevated ? 0.680 : 0.520)
     }
 
+    static func tooltipFill(_ colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark
+            ? Color.black.opacity(0.41)
+            : Color.white.opacity(0.46)
+    }
+
     static func cardStroke(
         _ colorScheme: ColorScheme,
         elevated: Bool = false,
@@ -9450,8 +9906,11 @@ private let usageHeatmapMonthLabelHeight: CGFloat = 16
 private let heatmapCellSize: CGFloat = 10
 private let chartTooltipWidth: CGFloat = 188
 
-func runtimeStatusPopoverHeight(for runtimeCount: Int) -> CGFloat {
-    runtimeCount <= 1 ? 352 : 478
+func runtimeStatusPopoverHeight(for runtimeCount: Int, hasAttention: Bool) -> CGFloat {
+    if runtimeCount <= 1 {
+        return hasAttention ? 302 : 246
+    }
+    return hasAttention ? 430 : 374
 }
 
 private func chartTooltipPosition(anchor: CGPoint, containerSize: CGSize, rowCount: Int) -> CGPoint {
@@ -9749,7 +10208,7 @@ private func localizedToolCategory(_ category: String, language: WidgetLanguage)
     }
 }
 
-private func taskAccentColor(_ kind: TaskColumnKind) -> Color {
+private func taskAccentColor(_ kind: TaskColumnKind, runtimeScope: RuntimeScope) -> Color {
     switch kind {
     case .active:
         return FixedVisualPalette.statusWarning
@@ -9758,12 +10217,18 @@ private func taskAccentColor(_ kind: TaskColumnKind) -> Color {
     case .scheduled:
         return FixedVisualPalette.statusScheduled
     case .done:
-        return FixedVisualPalette.statusSuccess
+        return runtimeScope == .codex
+            ? FixedVisualPalette.statusNeutral
+            : FixedVisualPalette.statusSuccess
     }
 }
 
-private func taskAccentForegroundColor(_ kind: TaskColumnKind, colorScheme: ColorScheme) -> Color {
-    guard colorScheme == .light else { return taskAccentColor(kind) }
+private func taskAccentForegroundColor(
+    _ kind: TaskColumnKind,
+    runtimeScope: RuntimeScope,
+    colorScheme: ColorScheme
+) -> Color {
+    guard colorScheme == .light else { return taskAccentColor(kind, runtimeScope: runtimeScope) }
     switch kind {
     case .active:
         return FixedVisualPalette.statusWarningLightText
@@ -9772,15 +10237,17 @@ private func taskAccentForegroundColor(_ kind: TaskColumnKind, colorScheme: Colo
     case .scheduled:
         return FixedVisualPalette.statusScheduledLightText
     case .done:
-        return FixedVisualPalette.statusSuccessLightText
+        return runtimeScope == .codex
+            ? FixedVisualPalette.statusNeutralLightText
+            : FixedVisualPalette.statusSuccessLightText
     }
 }
 
-private func taskColumnFill(_ kind: TaskColumnKind) -> Color {
-    taskAccentColor(kind).opacity(0.065)
+private func taskColumnFill(_ kind: TaskColumnKind, runtimeScope: RuntimeScope) -> Color {
+    taskAccentColor(kind, runtimeScope: runtimeScope).opacity(0.065)
 }
 
-private func taskColumnIcon(_ kind: TaskColumnKind) -> String {
+private func taskColumnIcon(_ kind: TaskColumnKind, runtimeScope: RuntimeScope) -> String {
     switch kind {
     case .active:
         return "record.circle"
@@ -9789,20 +10256,67 @@ private func taskColumnIcon(_ kind: TaskColumnKind) -> String {
     case .scheduled:
         return "clock"
     case .done:
-        return "checkmark.circle.fill"
+        return runtimeScope == .codex ? "archivebox.fill" : "checkmark.circle.fill"
     }
 }
 
-private func localizedTaskColumnTitle(_ kind: TaskColumnKind, language: WidgetLanguage) -> String {
+private func localizedTaskColumnTitle(
+    _ kind: TaskColumnKind,
+    runtimeScope: RuntimeScope,
+    language: WidgetLanguage
+) -> String {
     switch kind {
     case .active:
-        return language.text("进行中", "Active")
+        return runtimeScope == .codex
+            ? language.text("最近活跃", "Recent")
+            : language.text("进行中", "Active")
     case .pending:
-        return language.text("待处理", "Pending")
+        return runtimeScope == .codex
+            ? language.text("待继续", "To continue")
+            : language.text("待处理", "Pending")
     case .scheduled:
-        return language.text("定时", "Scheduled")
+        return runtimeScope == .codex
+            ? language.text("定时", "Scheduled")
+            : language.text("计划中", "Planned")
     case .done:
-        return language.text("完成", "Done")
+        return runtimeScope == .codex
+            ? language.text("今日归档", "Archived today")
+            : language.text("已完成", "Completed")
+    }
+}
+
+private func localizedTaskColumnHelp(
+    _ kind: TaskColumnKind,
+    runtimeScope: RuntimeScope,
+    language: WidgetLanguage
+) -> String {
+    if runtimeScope == .claudeCode {
+        return language.text(
+            "状态来自本机 Claude Code task 记录。",
+            "Status comes from local Claude Code task records."
+        )
+    }
+    switch kind {
+    case .active:
+        return language.text(
+            "最近 2 小时有本地活动，不代表任务仍在执行。",
+            "Local activity in the last 2 hours; this does not mean the task is still running."
+        )
+    case .pending:
+        return language.text(
+            "今天未归档、但最近 2 小时没有活动的 Session。",
+            "Today's unarchived sessions without activity in the last 2 hours."
+        )
+    case .scheduled:
+        return language.text(
+            "来自本机启用中的 Codex automation 配置。",
+            "From enabled local Codex automation configurations."
+        )
+    case .done:
+        return language.text(
+            "今天归档的 Codex Session，不代表任务结果成功。",
+            "Codex sessions archived today; this does not imply a successful result."
+        )
     }
 }
 
@@ -9815,10 +10329,140 @@ private func localizedDayLabel(_ label: String, language: WidgetLanguage) -> Str
 
 private func localizedTaskDetail(_ detail: String, language: WidgetLanguage) -> String {
     guard !language.isChinese else { return detail }
+    if detail.hasPrefix("工作日") {
+        return detail.replacingOccurrences(of: "工作日", with: "Weekdays")
+    }
+    if detail.hasPrefix("每天") {
+        return detail.replacingOccurrences(of: "每天", with: "Daily")
+    }
+    if detail.hasPrefix("每周") {
+        let suffix = detail.dropFirst(2)
+        let components = suffix.split(separator: " ", maxSplits: 1).map(String.init)
+        let weekdays = components.first?.compactMap { character -> String? in
+            switch character {
+            case "一": return "Mon"
+            case "二": return "Tue"
+            case "三": return "Wed"
+            case "四": return "Thu"
+            case "五": return "Fri"
+            case "六": return "Sat"
+            case "日": return "Sun"
+            default: return nil
+            }
+        }.joined(separator: "/") ?? "Weekly"
+        return [weekdays.isEmpty ? "Weekly" : weekdays, components.count > 1 ? components[1] : nil]
+            .compactMap { $0 }
+            .joined(separator: " ")
+    }
+    if detail.hasPrefix("每 "), detail.hasSuffix(" 分钟") {
+        return detail
+            .replacingOccurrences(of: "每 ", with: "Every ")
+            .replacingOccurrences(of: " 分钟", with: " minutes")
+    }
     return detail
-        .replacingOccurrences(of: "每天", with: "Daily")
-        .replacingOccurrences(of: "每周", with: "Weekly")
         .replacingOccurrences(of: "每小时", with: "Hourly")
+        .replacingOccurrences(of: "每分钟", with: "Every minute")
+        .replacingOccurrences(of: "定时", with: "Scheduled")
+}
+
+private func localizedTaskState(_ item: TaskItem, language: WidgetLanguage) -> String {
+    switch item.displayState {
+    case .recentlyActive:
+        return language.text("最近活跃", "Recently active")
+    case .continueLater:
+        return language.text("待继续", "To continue")
+    case .scheduled:
+        return item.sourceKind == .claudeTask
+            ? language.text("计划中", "Planned")
+            : language.text("定时", "Scheduled")
+    case .archived:
+        return language.text("今日归档", "Archived today")
+    case .running:
+        return language.text("进行中", "Running")
+    case .pending:
+        return language.text("待处理", "Pending")
+    case .failed:
+        return language.text("失败", "Failed")
+    case .blocked:
+        return language.text("阻塞", "Blocked")
+    case .completed:
+        return language.text("已完成", "Completed")
+    case .unknown:
+        return language.text("状态未知", "Unknown status")
+    }
+}
+
+private func localizedTaskStateBasis(_ item: TaskItem, language: WidgetLanguage) -> String {
+    switch item.stateBasis {
+    case .activityWindow:
+        if item.sourceKind == .mimoSession {
+            return language.text(
+                "依据：本机 MimoCode Session 最近 2 小时活动时间。",
+                "Basis: local MimoCode session activity in the last 2 hours."
+            )
+        }
+        return language.text(
+            "依据：本机 Codex Session 最近 2 小时活动时间。",
+            "Basis: local Codex session activity in the last 2 hours."
+        )
+    case .archive:
+        if item.sourceKind == .mimoSession {
+            return language.text(
+                "依据：本机 MimoCode Session 今天已归档；不代表成功。",
+                "Basis: the local MimoCode session was archived today; this does not imply success."
+            )
+        }
+        return language.text(
+            "依据：本机 Codex Session 今天已归档；不代表成功。",
+            "Basis: the local Codex session was archived today; this does not imply success."
+        )
+    case .scheduleConfig:
+        return language.text(
+            "依据：本机已启用的 automation 配置。",
+            "Basis: an enabled local automation configuration."
+        )
+    case .explicit:
+        if item.sourceKind == .mimoTask {
+            return language.text(
+                "依据：本机 MimoCode 数据库中的 task 状态。",
+                "Basis: the task status stored in the local MimoCode database."
+            )
+        }
+        return language.text(
+            "依据：本机 Claude Code task 状态。",
+            "Basis: the local Claude Code task status."
+        )
+    }
+}
+
+private func localizedTaskTime(_ item: TaskItem, language: WidgetLanguage) -> String? {
+    if let nextRunAt = item.nextRunAt {
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
+        if calendar.isDateInToday(nextRunAt) {
+            formatter.dateFormat = "HH:mm"
+            return language.text("下次 今天 \(formatter.string(from: nextRunAt))", "Next today \(formatter.string(from: nextRunAt))")
+        }
+        let currentYear = calendar.component(.year, from: Date())
+        formatter.dateFormat = calendar.component(.year, from: nextRunAt) == currentYear
+            ? "M/d HH:mm"
+            : "yyyy/M/d HH:mm"
+        return language.text("下次 \(formatter.string(from: nextRunAt))", "Next \(formatter.string(from: nextRunAt))")
+    }
+
+    guard let updatedAt = item.updatedAt else { return nil }
+    let relative = relativeTimeText(updatedAt, language: language)
+    switch item.stateBasis {
+    case .activityWindow:
+        return language.text("活动 \(relative)", "Active \(relative)")
+    case .archive:
+        return language.text("归档 \(relative)", "Archived \(relative)")
+    case .explicit:
+        return language.text("更新 \(relative)", "Updated \(relative)")
+    case .scheduleConfig:
+        return nil
+    }
 }
 
 private func localizedReaderMessage(_ message: String, language: WidgetLanguage) -> String {
@@ -9845,7 +10489,13 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
     }
     if message.contains("重复的 5 小时额度窗口") { return "Codex returned duplicate 5-hour quota windows, so that quota is hidden" }
     if message.contains("重复的 7 天额度窗口") { return "Codex returned duplicate 7-day quota windows, so that quota is hidden" }
-    if message.contains("缺少时长的额度窗口") { return "Codex returned a quota window without a duration, so it was not labeled as 5h or 7d" }
+    if message.contains("重复的月额度窗口") { return "Codex returned duplicate monthly quota windows, so that quota is hidden" }
+    if message.contains("同时返回了 7 天与月额度窗口") {
+        return "Codex returned both 7-day and monthly quota windows; the 7-day window is shown first"
+    }
+    if message.contains("缺少时长的额度窗口") {
+        return "Codex returned a quota window without a duration, so it was not labeled as 5h, 7d, or monthly"
+    }
     if message.contains("未识别的额度窗口") {
         return message
             .replacingOccurrences(
@@ -9853,21 +10503,16 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
                 with: "Codex returned an unknown quota window ("
             )
             .replacingOccurrences(
+                of: " 分钟），未将其标注为 5 小时、7 天或月额度",
+                with: " minutes), so it was not labeled as 5h, 7d, or monthly"
+            )
+            .replacingOccurrences(
                 of: " 分钟），未将其标注为 5 小时或 7 天",
-                with: " minutes), so it was not labeled as 5h or 7d"
+                with: " minutes), so it was not labeled as 5h, 7d, or monthly"
             )
     }
     if message.contains("app-server") { return message.replacingOccurrences(of: "未知错误", with: "Unknown error") }
     return message
-}
-
-private func taskAvatarText(_ item: TaskItem) -> String {
-    if item.code.hasPrefix("AUTO") { return "B" }
-    let source = item.detail.split(separator: "·").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if let first = source.first {
-        return String(first).uppercased()
-    }
-    return "C"
 }
 
 private func timeOnly(_ date: Date, language: WidgetLanguage = .zh) -> String {
@@ -9979,6 +10624,15 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         ] as [String: Any]
     }
 
+    if let monthly = snapshot.monthlyQuota {
+        object["monthly"] = [
+            "usedPercent": monthly.usedPercent,
+            "remainingPercent": monthly.remainingPercent,
+            "windowDurationMins": jsonValue(monthly.windowDurationMins),
+            "resetsAt": jsonValue(isoString(monthly.resetsAt))
+        ] as [String: Any]
+    }
+
     if let credits = snapshot.credits {
         object["credits"] = [
             "hasCredits": credits.hasCredits,
@@ -10070,6 +10724,11 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
                             "title": item.title,
                             "detail": item.detail,
                             "chip": item.chip,
+                            "sourceKind": item.sourceKind.rawValue,
+                            "displayState": item.displayState.rawValue,
+                            "stateBasis": item.stateBasis.rawValue,
+                            "rawStatus": jsonValue(item.rawStatus),
+                            "nextRunAt": jsonValue(isoString(item.nextRunAt)),
                             "updatedAt": jsonValue(isoString(item.updatedAt)),
                             "tokens": jsonValue(item.tokens)
                         ] as [String: Any]
@@ -10191,6 +10850,7 @@ final class MainAppWindow: NSWindow {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
+    private let startupPerformanceSpan = PerformanceMonitor.shared.begin(.appStartup)
     private let store = UsageStore()
     private let paletteCatalog = PaletteCatalog.loadFromMainBundle()
     private lazy var settings = AppSettings(paletteCatalog: paletteCatalog)
@@ -10248,10 +10908,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         store.updateVisibleRuntimeScopes(settings.visibleRuntimeScopes)
         store.start()
         updateStore.startAutomaticCheck()
+        PerformanceMonitor.shared.end(startupPerformanceSpan)
     }
 
     private func createMainWindow() {
-        let width = UsageWidgetView.widgetWidth
+        let width = UsageWidgetView.widgetDefaultWidth
         let height = UsageWidgetView.widgetDefaultHeight
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let origin = CGPoint(
@@ -10261,8 +10922,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
         let mainWindow = MainAppWindow(contentRect: NSRect(origin: origin, size: CGSize(width: width, height: height)))
         mainWindow.delegate = self
-        mainWindow.minSize = CGSize(width: UsageWidgetView.widgetWidth, height: UsageWidgetView.widgetMinHeight)
-        mainWindow.maxSize = CGSize(width: UsageWidgetView.widgetWidth, height: UsageWidgetView.widgetMaxHeight)
+        mainWindow.minSize = CGSize(width: UsageWidgetView.widgetMinWidth, height: UsageWidgetView.widgetMinHeight)
+        mainWindow.maxSize = CGSize(width: UsageWidgetView.widgetMaxWidth, height: .greatestFiniteMagnitude)
         mainWindow.contentMinSize = mainWindow.minSize
         mainWindow.contentMaxSize = mainWindow.maxSize
         mainWindow.contentView = GlassHostingContainer(
@@ -10274,6 +10935,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             cornerRadius: UsageWidgetView.windowCornerRadius
         )
         installTitlebarToolbar(on: mainWindow)
+        _ = mainWindow.setFrameAutosaveName("codexU.mainWindow")
         window = mainWindow
         applyMainWindowLevel()
         showMainWindow()
@@ -10289,7 +10951,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 }
             )
         )
-        toolbarView.frame = NSRect(x: 0, y: 0, width: UsageWidgetView.widgetWidth - 24, height: 44)
+        toolbarView.frame = NSRect(x: 0, y: 0, width: UsageWidgetView.widgetDefaultWidth - 24, height: 44)
 
         let controller = NSTitlebarAccessoryViewController()
         controller.layoutAttribute = .right
@@ -10609,7 +11271,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 self.store.updateVisibleRuntimeScopes(scopes)
                 self.statusPopover?.contentSize = CGSize(
                     width: 380,
-                    height: runtimeStatusPopoverHeight(for: scopes.count)
+                    height: runtimeStatusPopoverHeight(
+                        for: scopes.count,
+                        hasAttention: self.currentPopoverAttention != nil
+                    )
                 )
                 self.updateStatusItem()
             }
@@ -10648,7 +11313,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         popover.animates = true
         popover.contentSize = CGSize(
             width: 380,
-            height: runtimeStatusPopoverHeight(for: settings.visibleRuntimeScopes.count)
+            height: runtimeStatusPopoverHeight(
+                for: settings.visibleRuntimeScopes.count,
+                hasAttention: currentPopoverAttention != nil
+            )
         )
         popover.delegate = self
         popover.contentViewController = NSHostingController(
@@ -10662,6 +11330,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 openCurrent: { [weak self] in
                     self?.openMainWindow(selecting: nil)
                 },
+                openAttention: { [weak self] item in
+                    self?.openAttentionItem(item)
+                },
                 openSettings: { [weak self] in
                     self?.openSettingsWindow()
                 },
@@ -10671,6 +11342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             )
         )
         statusPopover = popover
+        store.setStatusPopoverVisible(true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         updateTaskBoardPollingActivity()
         configureStatusPopoverWindow()
@@ -10698,10 +11370,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         showMainWindow()
     }
 
+    private var currentPopoverAttention: TaskAttentionItem? {
+        store.highestPriorityAttention(
+            for: settings.visibleRuntimeScopes,
+            updateResult: updateStore.result
+        )
+    }
+
+    private func openAttentionItem(_ item: TaskAttentionItem) {
+        if item.kind == .update {
+            updateStore.openPreferredUpdateURL()
+            return
+        }
+        let scope = item.runtimeScope ?? store.selectedRuntimeScope
+        if item.threadID != nil {
+            store.requestTaskFocus(scope: scope, threadID: item.threadID)
+        } else {
+            store.selectRuntime(scope)
+        }
+        showMainWindow()
+    }
+
+    private func updateStatusPopoverSize() {
+        guard statusPopover?.isShown == true else { return }
+        statusPopover?.contentSize = CGSize(
+            width: 380,
+            height: runtimeStatusPopoverHeight(
+                for: settings.visibleRuntimeScopes.count,
+                hasAttention: currentPopoverAttention != nil
+            )
+        )
+    }
+
     func popoverDidClose(_ notification: Notification) {
         statusPopover = nil
         removeStatusPopoverEventMonitors()
         updateTaskBoardPollingActivity()
+        store.setStatusPopoverVisible(false)
     }
 
     private func closeStatusPopover() {
@@ -10709,6 +11414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         statusPopover = nil
         removeStatusPopoverEventMonitors()
         updateTaskBoardPollingActivity()
+        store.setStatusPopoverVisible(false)
     }
 
     private func updateTaskBoardPollingActivity() {
@@ -10807,6 +11513,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             .receive(on: RunLoop.main)
             .sink { [weak self] _, _, _ in
                 self?.updateStatusItem()
+                self?.updateStatusPopoverSize()
+            }
+            .store(in: &cancellables)
+
+        store.$runtimeSnapshots
+            .combineLatest(updateStore.$result)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in
+                self?.updateStatusPopoverSize()
             }
             .store(in: &cancellables)
     }
@@ -10831,6 +11546,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         lastRenderedStatusItemAppearanceName = appearance.name
         lastRenderedStatusItemPaletteIdentity = visualTokens.identity
 
+        let performanceSpan = PerformanceMonitor.shared.begin(.statusRender)
         statusItem?.length = presentation.itemLength
         button.image = statusItemRenderer.render(
             presentation,
@@ -10840,6 +11556,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         button.toolTip = presentation.tooltip
         button.setAccessibilityLabel(AppBrand.displayName)
         button.setAccessibilityValue(presentation.accessibilityValue)
+        PerformanceMonitor.shared.end(performanceSpan)
     }
 
     private func selectedRuntimeSummary() -> RuntimeMenuSummary? {
@@ -11036,6 +11753,30 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-token-counter") {
             exit(CodexTokenCounterNormalizerSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-task-runtime") {
+            exit(TaskRuntimeSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-claude-skill-paths") {
+            exit(ClaudeSkillPathResolverSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-codex-session-link") {
+            exit(CodexSessionLinkSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-performance-monitor") {
+            exit(PerformanceMonitorSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-phase-one-gate") {
+            exit(PhaseOneGateSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--evaluate-phase-one-gate") {
+            exit(PhaseOneGateCommand.run(arguments: CommandLine.arguments))
         }
 
         if CommandLine.arguments.contains("--dump-json") {

@@ -22,6 +22,7 @@ struct MimoCodeRuntimeProvider: RuntimeUsageProvider {
             quotaReadSucceeded: false,
             fiveHourQuota: nil,
             sevenDayQuota: nil,
+            monthlyQuota: nil,
             credits: nil,
             cloudLifetimeTokens: nil,
             local: local,
@@ -519,12 +520,26 @@ private final class MimoCodeLocalReader {
 
     private func makeTaskItem(session: MimoSession, tokens: Int64?, kind: TaskColumnKind) -> TaskItem {
         let compactId = session.id.replacingOccurrences(of: "-", with: "")
+        let displayState: TaskDisplayState
+        let stateBasis: TaskStateBasis
         let chip: String
         switch kind {
-        case .active: chip = "Active"
-        case .pending: chip = "Idle"
-        case .scheduled: chip = "Cron"
-        case .done: chip = "Done"
+        case .active:
+            chip = "Active"
+            displayState = .recentlyActive
+            stateBasis = .activityWindow
+        case .pending:
+            chip = "Idle"
+            displayState = .continueLater
+            stateBasis = .activityWindow
+        case .scheduled:
+            chip = "Cron"
+            displayState = .scheduled
+            stateBasis = .scheduleConfig
+        case .done:
+            chip = "Done"
+            displayState = .archived
+            stateBasis = .archive
         }
         return TaskItem(
             id: session.id + kind.rawValue,
@@ -534,7 +549,10 @@ private final class MimoCodeLocalReader {
             chip: chip,
             updatedAt: session.updatedAt,
             tokens: tokens,
-            kind: kind
+            kind: kind,
+            sourceKind: .mimoSession,
+            displayState: displayState,
+            stateBasis: stateBasis
         )
     }
 
@@ -552,6 +570,7 @@ private final class MimoCodeLocalReader {
         let compactID = taskID.replacingOccurrences(of: "-", with: "")
         let trimmedSummary = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTitle = sessionTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayState = mimoTaskDisplayState(status, kind: kind)
         return TaskItem(
             id: sessionID + taskID + kind.rawValue,
             code: "MIMO-" + compactID.suffix(4).uppercased(),
@@ -562,7 +581,12 @@ private final class MimoCodeLocalReader {
             chip: mimoTaskChip(status, kind: kind),
             updatedAt: updatedAt,
             tokens: tokens,
-            kind: kind
+            kind: kind,
+            runtimeState: mimoTaskRuntimeState(displayState),
+            sourceKind: .mimoTask,
+            displayState: displayState,
+            stateBasis: .explicit,
+            rawStatus: status
         )
     }
 
@@ -1009,6 +1033,47 @@ private func mimoTaskChip(_ status: String, kind: TaskColumnKind) -> String {
     case .pending: return "Open"
     case .scheduled: return "Cron"
     case .done: return "Done"
+    }
+}
+
+private func mimoTaskDisplayState(_ status: String, kind: TaskColumnKind) -> TaskDisplayState {
+    switch status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "in_progress", "running", "active":
+        return .running
+    case "pending", "open", "todo":
+        return .pending
+    case "failed", "error":
+        return .failed
+    case "blocked":
+        return .blocked
+    case "scheduled", "cron":
+        return .scheduled
+    case "done", "completed", "success":
+        return .completed
+    case "abandoned", "cancelled", "canceled":
+        return .unknown
+    default:
+        switch kind {
+        case .active: return .running
+        case .pending: return .unknown
+        case .scheduled: return .scheduled
+        case .done: return .unknown
+        }
+    }
+}
+
+private func mimoTaskRuntimeState(_ displayState: TaskDisplayState) -> TaskRuntimeState {
+    switch displayState {
+    case .running:
+        return .running
+    case .failed:
+        return .failed
+    case .blocked:
+        return .waitingInput
+    case .completed:
+        return .completed
+    default:
+        return .recorded
     }
 }
 

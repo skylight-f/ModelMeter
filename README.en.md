@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **Upgrade to v1.1.0 or later.** v1.1.0 adds six reviewed built-in palettes and a Liquid Glass palette gallery, Codex reset-credit counts with expiry details, macOS 13 support, and more reliable cumulative token accounting across missing fields, regressions, and counter resets. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
+> **Upgrade to v1.1.1 or later.** v1.1.1 adds source-aware task classification and next-run times, Codex Team monthly-quota compatibility, Claude Code Skill path resolution, a resizable main window, and stronger local performance and graduation checks. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
 
 codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex, Claude Code, and MimoCode quota availability, local token usage, and today's task status. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, and daily work progress.
 
@@ -22,7 +22,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Adds a menu bar runtime menu with separate Codex, Claude Code, and MimoCode cards, currently available quota windows, today's token usage, and total tokens today.
 - Offers transparent Minimal, Classic, and Rich menu bar modes: Minimal keeps thicker quota rings, Classic keeps the quota number inside each progress ring, and Rich keeps full labels, bars, and reset times. A single active window automatically collapses to a single-quota layout.
 - Preserves the full ring particle effect while rendering it only when the main window is visible, frontmost, and focused by default. Power Saving mode renders particles only while the ring is hovered, and animation stops in the background or under Low Power, thermal, and Reduce Motion constraints.
-- Lets you switch menu bar quotas between used and remaining, choose 5-hour, 7-day, today tokens, and reset countdown, and keeps 5h/7d progress colors aligned with the main blue-purple quota rings.
+- Lets you switch menu bar quotas between used and remaining, choose 5-hour, 7-day or monthly, today tokens, and reset countdown, and keeps 5h/7d/mo progress colors aligned with the main blue-purple quota rings. Team monthly windows (for example 43800 minutes) are classified and shown correctly instead of being treated as unknown.
 - Uses progress direction instead of extra labels: used runs clockwise/left-to-right, while remaining runs counterclockwise/right-to-left.
 - Uses monochrome templates derived exactly from the original Runtime logos and resolves icon/text colors from the menu bar's effective appearance; branded color icons remain in the main window and popover.
 - Shows today's total tokens as one vertically centered number in the menu bar, without an extra `T` label.
@@ -35,11 +35,12 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - The overview keeps its four core periods—today, last 7 days, this month, and all time—with uncached input, cached input, and output splits.
 - Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value. The bar uses a segmented nonlinear scale, so movement past Pro 200 remains visible and is not a linear dollar ratio.
 - Adds lower dashboard tabs for today's tasks, usage trend, project ranking, and Skill usage.
-- Builds a daily task board from local Codex threads and enabled Codex automations, grouped into active, pending, scheduled, and done columns.
+- Organizes today's tasks according to each factual source: Codex uses Recent, To continue, Scheduled, and Archived today; Claude Code uses explicit local task states for Active, Pending, Planned, and Completed. Recent activity and archival are not presented as proof of running or success.
+- Task cards prioritize title, workspace, factual time, and trusted state. Automations show the next run only when it can be determined, and only cards with a valid session deep link expose whole-card click, hover, pointer, and keyboard-focus feedback.
 - Shows a six-month daily token heatmap, a last-7-day trend summary, and previous-period comparison.
 - Shows recent and all-time project rankings with tokens, estimated value, thread counts, and recent activity.
 - Shows top tool calls and top Skill usage to explain the structure of local Codex work.
-- Runs as a standard macOS window with Dock, system window controls, minimization, and optional background running after the main window is closed. Closing the main window hides the Dock icon and keeps the menu bar item.
+- Runs as a standard macOS window with a compact default layout, resizing from 820 to 1280 points without changing card order or information structure, and restoration of the previous window size. It supports Dock, system window controls, minimization, and optional background running after the main window is closed; closing the main window hides the Dock icon and keeps the menu bar item.
 - Uses `Command + U` by default to show or hide the main window, and the shortcut can be customized in Settings. The menu bar runtime menu can also open the main window, open settings, or quit.
 - Includes a Settings window for Chinese/English UI text, system/light/dark appearance, menu bar content with live preview, always-on-top behavior, close-window behavior, system status, and update check configuration.
 - Checks GitHub Releases for newer versions by default, including beta releases, and offers the DMG that matches the current Mac architecture. It does not silently download or install updates, and automatic checks can be turned off.
@@ -135,10 +136,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/AgentDesk-1.1.0-mac-arm64.dmg
-dist/AgentDesk-1.1.0-mac-arm64.dmg.sha256
-dist/AgentDesk-1.1.0-mac-x86_64.dmg
-dist/AgentDesk-1.1.0-mac-x86_64.dmg.sha256
+dist/AgentDesk-1.1.1-mac-arm64.dmg
+dist/AgentDesk-1.1.1-mac-arm64.dmg.sha256
+dist/AgentDesk-1.1.1-mac-x86_64.dmg
+dist/AgentDesk-1.1.1-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).
@@ -148,12 +149,12 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 - Account and quota: `codex app-server` JSON-RPC methods `account/read`, `account/rateLimits/read`, and `account/usage/read`.
 - Local token totals: `~/.codex/state_5.sqlite`.
 - Detailed token splits: `token_count` events in `~/.codex/sessions/**/rollout-*.jsonl` and `~/.codex/archived_sessions/*.jsonl`.
-- Today's board: unarchived and archived Codex threads in the local SQLite database.
+- Today's board: unarchived and archived Codex threads in the local SQLite database. The two-hour activity window means only “recent,” while archival does not imply running or success.
 - Usage trends and project rankings: aggregated from local session `token_count` events, with an approximate thread-updated-time fallback when detailed events are unavailable.
 - Tool and Skill usage: tool call and Skill load records parsed from local session events.
-- Scheduled tasks: enabled automation metadata under `~/.codex/automations/**/automation.toml`.
+- Scheduled tasks: enabled automation metadata under `~/.codex/automations/**/automation.toml`. The next run is computed locally only when cadence, timezone, and time are sufficiently explicit.
 - Claude Code historical tokens: assistant `message.usage` fields in `~/.claude/projects/**/*.jsonl`.
-- Claude Code tools, Skills, and tasks: transcript `tool_use.name` / explicit Skill attribution, plus `~/.claude/tasks/**/*.json`.
+- Claude Code tools, Skills, and tasks: transcript `tool_use.name` / explicit Skill attribution, plus `~/.claude/tasks/**/*.json`. When a Skill path is absent, codexU infers it from Claude Code's current personal, project, nested, plugin, and legacy-command locations; unresolved history is shown as “not located.”
 - Claude Code active quota: optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`; without it, 5-hour and 7-day quota show `--`.
 - MimoCode local tokens, trends, projects, tools, Skills, and tasks: structured message, session, project, part, and task fields in `~/.local/share/mimocode/mimocode.db`. Projects and trends aggregate message token events, tool tokens are estimated from each session's call share, and static Skill tokens come from locally readable `SKILL.md` files.
 - Update checks: default access to the GitHub Releases API for public `shanggqm/codexU` release metadata, cached in `~/Library/Caches/codexU/update-check.json`.

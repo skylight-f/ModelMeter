@@ -20,6 +20,11 @@ xcuserdata/
 .env.*
 !.env.example
 
+# Generated project-local skill links
+/.codex/skills
+/.cursor/skills
+/.claude/skills
+
 # macOS packaging leftovers
 *.dmg
 *.pkg

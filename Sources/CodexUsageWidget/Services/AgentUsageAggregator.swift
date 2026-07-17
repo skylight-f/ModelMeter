@@ -16,6 +16,7 @@ struct AgentUsageAggregator {
             quotaReadSucceeded: false,
             fiveHourQuota: nil,
             sevenDayQuota: nil,
+            monthlyQuota: nil,
             credits: nil,
             cloudLifetimeTokens: nil,
             local: local,

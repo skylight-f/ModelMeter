@@ -21,12 +21,13 @@ enum QuotaDisplayMode: String, CaseIterable, Codable, Identifiable, Equatable {
 enum StatusItemMetric: String, CaseIterable, Codable, Identifiable, Hashable {
     case fiveHourQuota
     case sevenDayQuota
+    case monthlyQuota
     case todayTokens
 
     var id: String { rawValue }
 
     var isQuota: Bool {
-        self == .fiveHourQuota || self == .sevenDayQuota
+        self == .fiveHourQuota || self == .sevenDayQuota || self == .monthlyQuota
     }
 }
 
@@ -44,7 +45,7 @@ struct StatusItemPreferences: Equatable {
     static let `default` = StatusItemPreferences(
         displayMode: .rich,
         quotaMode: .used,
-        visibleMetrics: [.fiveHourQuota, .sevenDayQuota],
+        visibleMetrics: [.fiveHourQuota, .sevenDayQuota, .monthlyQuota],
         showsResetCountdown: true
     )
 
@@ -82,7 +83,9 @@ enum StatusItemPreferencesStore {
     static let displayModeKey = "codexU.statusItem.displayMode"
     static let quotaModeKey = "codexU.statusItem.quotaMode"
     static let visibleMetricsKey = "codexU.statusItem.visibleMetrics"
+    static let metricsSchemaVersionKey = "codexU.statusItem.metricsSchemaVersion"
     static let showsResetCountdownKey = "codexU.statusItem.showsResetCountdown"
+    static let currentMetricsSchemaVersion = 2
 
     static func load(defaults: UserDefaults = .standard) -> StatusItemPreferences {
         let fallback = StatusItemPreferences.default
@@ -93,7 +96,12 @@ enum StatusItemPreferencesStore {
 
         let visibleMetrics: Set<StatusItemMetric>
         if let rawMetrics = defaults.array(forKey: visibleMetricsKey) as? [String] {
-            visibleMetrics = Set(rawMetrics.compactMap(StatusItemMetric.init(rawValue:)))
+            var migratedMetrics = Set(rawMetrics.compactMap(StatusItemMetric.init(rawValue:)))
+            if defaults.integer(forKey: metricsSchemaVersionKey) < currentMetricsSchemaVersion,
+               migratedMetrics.contains(.sevenDayQuota) {
+                migratedMetrics.insert(.monthlyQuota)
+            }
+            visibleMetrics = migratedMetrics
         } else {
             visibleMetrics = fallback.visibleMetrics
         }
@@ -118,6 +126,7 @@ enum StatusItemPreferencesStore {
         defaults.set(normalized.displayMode.rawValue, forKey: displayModeKey)
         defaults.set(normalized.quotaMode.rawValue, forKey: quotaModeKey)
         defaults.set(normalized.orderedVisibleMetrics.map(\.rawValue), forKey: visibleMetricsKey)
+        defaults.set(currentMetricsSchemaVersion, forKey: metricsSchemaVersionKey)
         defaults.set(normalized.showsResetCountdown, forKey: showsResetCountdownKey)
     }
 
@@ -125,6 +134,7 @@ enum StatusItemPreferencesStore {
         defaults.removeObject(forKey: displayModeKey)
         defaults.removeObject(forKey: quotaModeKey)
         defaults.removeObject(forKey: visibleMetricsKey)
+        defaults.removeObject(forKey: metricsSchemaVersionKey)
         defaults.removeObject(forKey: showsResetCountdownKey)
     }
 }

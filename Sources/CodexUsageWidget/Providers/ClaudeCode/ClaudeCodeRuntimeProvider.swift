@@ -25,6 +25,7 @@ struct ClaudeCodeRuntimeProvider: RuntimeUsageProvider {
             quotaReadSucceeded: statusLine.hasQuota,
             fiveHourQuota: statusLine.primary,
             sevenDayQuota: statusLine.secondary,
+            monthlyQuota: nil,
             credits: nil,
             cloudLifetimeTokens: nil,
             local: local,
@@ -119,7 +120,7 @@ private final class ClaudeCodeTranscriptReader {
             messages.append("Claude Code 本地缓存写入失败")
         }
 
-        return makeLocalUsage(from: summaries, statistics: context.statistics, messages: &messages)
+        return makeLocalUsage(from: summaries, context: context, messages: &messages)
     }
 
     private func enumerateJSONLFiles(under root: URL) -> [URL] {
@@ -256,9 +257,10 @@ private final class ClaudeCodeTranscriptReader {
 
     private func makeLocalUsage(
         from summaries: [ClaudeTranscriptSummary],
-        statistics: StatisticsContext,
+        context: RuntimeLoadContext,
         messages: inout [String]
     ) -> LocalUsage? {
+        let statistics = context.statistics
         let now = statistics.now
         var uniqueDeltas: [ClaudeUsageDelta] = []
         var seenMessageIds = Set<String>()
@@ -378,7 +380,7 @@ private final class ClaudeCodeTranscriptReader {
             }
         let recentThreads = makeRecentThreads(from: summaries)
         let toolUsages = makeToolUsages(from: summaries, lifetime: lifetime)
-        let skillUsages = makeSkillUsages(from: summaries)
+        let skillUsages = makeSkillUsages(from: summaries, context: context)
 
         let unknownModelCount = uniqueDeltas.filter { claudeModelPrice(for: $0.model) == nil }.count
         if unknownModelCount > 0 {
@@ -555,12 +557,41 @@ private final class ClaudeCodeTranscriptReader {
         .sorted { $0.callCount > $1.callCount }
     }
 
-    private func makeSkillUsages(from summaries: [ClaudeTranscriptSummary]) -> [SkillUsage] {
+    private func makeSkillUsages(
+        from summaries: [ClaudeTranscriptSummary],
+        context: RuntimeLoadContext
+    ) -> [SkillUsage] {
+        let resolver = ClaudeSkillPathResolver()
+        var resolutionCache: [String: ClaudeSkillFileResolution?] = [:]
         var map: [String: ClaudeSkillAccumulator] = [:]
         for summary in summaries {
             for skill in summary.skillLoads {
-                let key = skill.path ?? skill.name
-                var current = map[key] ?? ClaudeSkillAccumulator(name: skill.name, path: skill.path ?? key)
+                let resolutionKey = "\(summary.projectPath)|\(skill.path ?? "")|\(skill.name)"
+                let resolution: ClaudeSkillFileResolution?
+                if let cached = resolutionCache[resolutionKey] {
+                    resolution = cached
+                } else {
+                    let resolved = resolver.resolve(
+                        name: skill.name,
+                        explicitPath: skill.path,
+                        projectPath: summary.projectPath,
+                        homeDirectory: context.homeDirectory
+                    )
+                    resolutionCache[resolutionKey] = resolved
+                    resolution = resolved
+                }
+
+                let key = resolution?.path ?? "claude-skill:\(skill.name)"
+                var current = map[key] ?? ClaudeSkillAccumulator(
+                    id: key,
+                    name: skill.name,
+                    path: resolution?.path ?? skill.name,
+                    sourceLabel: resolution == nil
+                        ? "Claude Code transcript"
+                        : "Claude Code transcript · inferred path",
+                    staticTokenEstimate: resolution?.staticTokenEstimate,
+                    staticByteCount: resolution?.staticByteCount
+                )
                 current.add(sessionId: summary.sessionId, at: skill.date)
                 map[key] = current
             }
@@ -696,6 +727,7 @@ private final class ClaudeCodeGlobalStateReader {
             return []
         }
 
+        let resolver = ClaudeSkillPathResolver()
         return skillUsage.compactMap { name, rawValue in
             let count: Int
             let lastLoadedAt: Date?
@@ -708,15 +740,22 @@ private final class ClaudeCodeGlobalStateReader {
             } else {
                 return nil
             }
-            return SkillUsage(
-                id: "claude-global-\(name)",
+            let resolution = resolver.resolve(
                 name: name,
-                path: name,
-                sourceLabel: "Claude Code global state",
+                projectPath: nil,
+                homeDirectory: context.homeDirectory
+            )
+            return SkillUsage(
+                id: resolution?.path ?? "claude-skill:\(name)",
+                name: name,
+                path: resolution?.path ?? name,
+                sourceLabel: resolution == nil
+                    ? "Claude Code global state"
+                    : "Claude Code global state · inferred path",
                 loadCount: max(count, 1),
                 threadCount: 0,
-                staticTokenEstimate: nil,
-                staticByteCount: nil,
+                staticTokenEstimate: resolution?.staticTokenEstimate,
+                staticByteCount: resolution?.staticByteCount,
                 lastLoadedAt: lastLoadedAt
             )
         }
@@ -802,8 +841,8 @@ private final class ClaudeCodeTaskReader {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        let status = claudeStringValue(object["status"]) ?? "pending"
-        let kind = taskKind(for: status)
+        let status = claudeStringValue(object["status"])
+        let classification = TaskSourceClassifier.claudeTask(rawStatus: status)
         let title = claudeStringValue(object["subject"])
             ?? claudeStringValue(object["title"])
             ?? url.deletingPathExtension().lastPathComponent
@@ -811,35 +850,54 @@ private final class ClaudeCodeTaskReader {
             ?? claudeDateValue(object["updated_at"])
             ?? (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
 
+        let project = ["project", "projectPath", "project_path", "cwd"]
+            .compactMap { claudeStringValue(object[$0]) }
+            .first
+            .map { URL(fileURLWithPath: $0).lastPathComponent }
+        let runtimeState: TaskRuntimeState
+        switch classification.displayState {
+        case .running:
+            runtimeState = .running
+        case .failed:
+            runtimeState = .failed
+        case .completed:
+            runtimeState = .completed
+        default:
+            runtimeState = .recorded
+        }
+
         return TaskItem(
             id: url.path,
-            code: status,
+            code: status ?? "unknown",
             title: title,
-            detail: "Claude Code task",
-            chip: status,
+            detail: project ?? "",
+            chip: classification.displayState.rawValue,
             updatedAt: updatedAt,
             tokens: nil,
-            kind: kind
+            kind: classification.columnKind,
+            runtimeState: runtimeState,
+            sourceKind: .claudeTask,
+            displayState: classification.displayState,
+            stateBasis: .explicit,
+            rawStatus: status
         )
-    }
-
-    private func taskKind(for status: String) -> TaskColumnKind {
-        switch status.lowercased() {
-        case "in_progress", "active", "running":
-            return .active
-        case "completed", "done", "success":
-            return .done
-        case "scheduled":
-            return .scheduled
-        default:
-            return .pending
-        }
     }
 
     private func makeColumn(_ kind: TaskColumnKind, title: String, items: [TaskItem]) -> TaskColumn {
         let columnItems = items
             .filter { $0.kind == kind }
-            .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+            .sorted { lhs, rhs in
+                switch (lhs.updatedAt, rhs.updatedAt) {
+                case let (left?, right?) where left != right:
+                    return left > right
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return lhs.id < rhs.id
+                }
+            }
         return TaskColumn(id: kind, title: title, count: columnItems.count, items: columnItems)
     }
 }
@@ -971,8 +1029,12 @@ private struct ClaudeProjectAccumulator {
 }
 
 private struct ClaudeSkillAccumulator {
+    let id: String
     let name: String
     let path: String
+    let sourceLabel: String
+    let staticTokenEstimate: Int64?
+    let staticByteCount: Int64?
     var loadCount = 0
     var sessionIds = Set<String>()
     var lastLoadedAt: Date?
@@ -985,14 +1047,14 @@ private struct ClaudeSkillAccumulator {
 
     func makeSkillUsage() -> SkillUsage {
         SkillUsage(
-            id: path,
+            id: id,
             name: name,
             path: path,
-            sourceLabel: "Claude Code transcript",
+            sourceLabel: sourceLabel,
             loadCount: max(loadCount, 1),
             threadCount: max(sessionIds.count, 1),
-            staticTokenEstimate: nil,
-            staticByteCount: nil,
+            staticTokenEstimate: staticTokenEstimate,
+            staticByteCount: staticByteCount,
             lastLoadedAt: lastLoadedAt
         )
     }
@@ -1098,16 +1160,47 @@ private func claudeModelUsageTrendDays(
 }
 
 private func mergeClaudeSkillUsages(_ skills: [SkillUsage]) -> [SkillUsage] {
+    let resolvedByName = Dictionary(grouping: skills.filter { skill in
+        skill.path.hasPrefix("/") && skill.staticTokenEstimate != nil
+    }, by: \.name)
+    let uniqueResolvedByName = resolvedByName.compactMapValues { matches in
+        let uniqueIDs = Set(matches.map(\.id))
+        return uniqueIDs.count == 1 ? matches[0] : nil
+    }
+
     var map: [String: SkillUsage] = [:]
-    for skill in skills {
+    for original in skills {
+        let skill: SkillUsage
+        if !original.path.hasPrefix("/"), let resolved = uniqueResolvedByName[original.name] {
+            skill = SkillUsage(
+                id: resolved.id,
+                name: original.name,
+                path: resolved.path,
+                sourceLabel: original.sourceLabel,
+                loadCount: original.loadCount,
+                threadCount: original.threadCount,
+                staticTokenEstimate: resolved.staticTokenEstimate,
+                staticByteCount: resolved.staticByteCount,
+                lastLoadedAt: original.lastLoadedAt
+            )
+        } else {
+            skill = original
+        }
+
         if let existing = map[skill.id] {
+            let includesGlobalState = existing.sourceLabel.contains("global state")
+                || skill.sourceLabel.contains("global state")
             map[skill.id] = SkillUsage(
                 id: existing.id,
                 name: existing.name,
                 path: existing.path,
-                sourceLabel: existing.sourceLabel,
-                loadCount: existing.loadCount + skill.loadCount,
-                threadCount: max(existing.threadCount, 0) + max(skill.threadCount, 0),
+                sourceLabel: existing.sourceLabel.contains("transcript") ? existing.sourceLabel : skill.sourceLabel,
+                loadCount: includesGlobalState
+                    ? max(existing.loadCount, skill.loadCount)
+                    : existing.loadCount + skill.loadCount,
+                threadCount: includesGlobalState
+                    ? max(existing.threadCount, skill.threadCount)
+                    : max(existing.threadCount, 0) + max(skill.threadCount, 0),
                 staticTokenEstimate: existing.staticTokenEstimate ?? skill.staticTokenEstimate,
                 staticByteCount: existing.staticByteCount ?? skill.staticByteCount,
                 lastLoadedAt: maxDate(existing.lastLoadedAt, skill.lastLoadedAt)

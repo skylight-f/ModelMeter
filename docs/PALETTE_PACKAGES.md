@@ -73,6 +73,8 @@ Both `tokens/light.json` and `tokens/dark.json` must independently provide:
 
 Colors must be `#RRGGBB` or `#RRGGBBAA` sRGB. Status, window/card surfaces, text hierarchy, neutral controls, and motion are deliberately not configurable.
 
+Quota roles are semantic rather than geometric: 5h always uses `quota.primary`, and 7d always uses `quota.secondary`, including single-window layouts. Palette Package v1 has no dedicated monthly role. Monthly falls back to `quota.secondary` by default; for a `7d + monthly` response without 5h, monthly uses the otherwise unused `quota.primary` while 7d remains `quota.secondary`.
+
 Use `Resources/Palettes/codexu.default/tokens/light.json` as the field-complete reference. Do not remove fields merely because the two variants share a value.
 
 ## SVG assets
@@ -81,10 +83,10 @@ Use `Resources/Palettes/codexu.default/tokens/light.json` as the field-complete 
 
 | Slot | Render mode | Use |
 | --- | --- | --- |
-| `quota.ring.primary` | `fullRing` | 5h ring artwork |
-| `quota.ring.secondary` | `fullRing` | 7d ring artwork |
-| `quota.cap.primary` | `fixed` | 5h dynamic endpoint |
-| `quota.cap.secondary` | `fixed` | 7d dynamic endpoint |
+| `quota.ring.primary` | `fullRing` | 5h ring artwork; monthly fallback only beside 7d |
+| `quota.ring.secondary` | `fullRing` | 7d ring artwork; default monthly fallback |
+| `quota.cap.primary` | `fixed` | 5h endpoint; monthly fallback only beside 7d |
+| `quota.cap.secondary` | `fixed` | 7d endpoint; default monthly fallback |
 | `progress.linear` | `tileX` | main linear progress |
 | `chart.bar` | `tileY` | daily token columns |
 
@@ -100,7 +102,7 @@ Ring assets contain a complete transparent ring and no baked percentage. codexU 
 
 1. Run `make test-palettes` and `./scripts/test-status-item.sh`.
 2. Inspect Light and Dark variants at 1× and 2× in the fixed 820 × 720 app window.
-3. Check 0%, 1%, 35%, 73%, 93%, 99%, and 100% ring progress, including single 7d and dual-ring topology.
+3. Check 0%, 1%, 35%, 73%, 93%, 99%, and 100% ring progress, including single 7d, single monthly, 5h + monthly, and 7d + monthly topology.
 4. Verify data hierarchy, text contrast, cultural/design attribution, and that decoration does not change layout.
 5. Attach Light/Dark screenshots to the PR. The maintainers may decline visually inconsistent packages even when schema validation passes.
 6. Complete the palette section in `.github/pull_request_template.md`, including source, license, status-conflict analysis, and visual evidence links.

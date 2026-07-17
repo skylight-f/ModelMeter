@@ -16,13 +16,14 @@ final class MultiRuntimeUsageReader {
         statisticsPreference: StatisticsTimeZonePreference = .default,
         generation: UInt64 = 0
     ) -> MultiRuntimeUsageSnapshot {
+        let span = PerformanceMonitor.shared.begin(.runtimeLoad)
         let context = RuntimeLoadContext.live(statisticsPreference: statisticsPreference)
         let runtimeSnapshots = registry.providers.map { provider in
             provider.loadSnapshot(context: context)
         }
         let refreshedAt = Date()
         let aggregate = aggregator.aggregate(runtimeSnapshots, at: refreshedAt)
-        return MultiRuntimeUsageSnapshot(
+        let snapshot = MultiRuntimeUsageSnapshot(
             refreshedAt: refreshedAt,
             runtimes: runtimeSnapshots,
             aggregate: aggregate,
@@ -33,13 +34,18 @@ final class MultiRuntimeUsageReader {
                 now: context.now
             )
         )
+        PerformanceMonitor.shared.end(span)
+        return snapshot
     }
 
     func loadTaskBoard(
         scope: RuntimeScope,
         statisticsPreference: StatisticsTimeZonePreference = .default
     ) -> TaskBoard? {
+        let span = PerformanceMonitor.shared.begin(.taskLoad)
         let context = RuntimeLoadContext.live(statisticsPreference: statisticsPreference)
-        return registry.provider(for: scope)?.loadTaskBoard(context: context)
+        let board = registry.provider(for: scope)?.loadTaskBoard(context: context)
+        PerformanceMonitor.shared.end(span, success: board != nil)
+        return board
     }
 }

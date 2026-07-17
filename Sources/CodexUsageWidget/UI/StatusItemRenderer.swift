@@ -4,7 +4,7 @@ private struct StatusItemQuotaPalette {
     let start: NSColor
     let end: NSColor
 
-    static func palette(for role: StatusItemQuotaPaletteRole?, tokens: ResolvedVisualTokens) -> StatusItemQuotaPalette {
+    static func palette(for role: QuotaPaletteRole?, tokens: ResolvedVisualTokens) -> StatusItemQuotaPalette {
         switch role {
         case .primary:
             return StatusItemQuotaPalette(
@@ -378,7 +378,7 @@ struct StatusItemRenderer {
     private func drawCircularProgress(
         in rect: NSRect,
         fraction: CGFloat?,
-        role: StatusItemQuotaPaletteRole?,
+        role: QuotaPaletteRole?,
         quotaMode: QuotaDisplayMode,
         tokens: ResolvedVisualTokens,
         lineWidth: CGFloat
@@ -445,7 +445,7 @@ struct StatusItemRenderer {
     private func drawLinearProgress(
         in rect: NSRect,
         fraction: CGFloat?,
-        role: StatusItemQuotaPaletteRole?,
+        role: QuotaPaletteRole?,
         quotaMode: QuotaDisplayMode,
         tokens: ResolvedVisualTokens
     ) -> NSBezierPath? {

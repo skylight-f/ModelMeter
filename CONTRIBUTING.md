@@ -4,6 +4,15 @@ Thanks for helping improve codexU.
 
 ## Development
 
+Initialize the project-local skills for Codex, Cursor, and Claude Code. The
+canonical content stays under `.agents/skills`; `.codex/skills`,
+`.cursor/skills`, and `.claude/skills` are compatibility symlinks only:
+
+```sh
+./scripts/init-agent-skills.sh
+./scripts/init-agent-skills.sh --apply
+```
+
 Build the app:
 
 ```sh

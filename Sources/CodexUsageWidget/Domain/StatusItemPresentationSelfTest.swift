@@ -35,6 +35,24 @@ enum StatusItemPresentationSelfTest {
         expect(QuotaDisplayMode.used.startsAtLeadingEdge, "used linear bar should start at the leading edge")
         expect(!QuotaDisplayMode.remaining.startsAtLeadingEdge, "remaining linear bar should start at the trailing edge")
 
+        defaults.set(
+            [StatusItemMetric.fiveHourQuota.rawValue, StatusItemMetric.sevenDayQuota.rawValue],
+            forKey: StatusItemPreferencesStore.visibleMetricsKey
+        )
+        defaults.removeObject(forKey: StatusItemPreferencesStore.metricsSchemaVersionKey)
+        let migratedPreferences = StatusItemPreferencesStore.load(defaults: defaults)
+        expect(
+            migratedPreferences.visibleMetrics == [.fiveHourQuota, .sevenDayQuota, .monthlyQuota],
+            "legacy 7d/month preference should migrate to separate 7d and monthly metrics"
+        )
+
+        defaults.set(StatusItemPreferencesStore.currentMetricsSchemaVersion, forKey: StatusItemPreferencesStore.metricsSchemaVersionKey)
+        let explicitCurrentPreferences = StatusItemPreferencesStore.load(defaults: defaults)
+        expect(
+            explicitCurrentPreferences.visibleMetrics == [.fiveHourQuota, .sevenDayQuota],
+            "current preferences should preserve an explicit monthly deselection"
+        )
+
         defaults.set("unknown-mode", forKey: StatusItemPreferencesStore.displayModeKey)
         defaults.set("unknown-direction", forKey: StatusItemPreferencesStore.quotaModeKey)
         defaults.set([], forKey: StatusItemPreferencesStore.visibleMetricsKey)
@@ -42,8 +60,8 @@ enum StatusItemPresentationSelfTest {
         expect(repairedPreferences.displayMode == .rich, "unknown display mode should fall back to rich")
         expect(repairedPreferences.quotaMode == .used, "unknown quota mode should fall back to used")
         expect(
-            repairedPreferences.visibleMetrics == [.fiveHourQuota, .sevenDayQuota],
-            "empty visible metrics should be repaired to both quota windows"
+            repairedPreferences.visibleMetrics == [.fiveHourQuota, .sevenDayQuota, .monthlyQuota],
+            "empty visible metrics should be repaired to all supported quota windows"
         )
 
         var noMetrics = StatusItemPreferences.default
@@ -69,6 +87,8 @@ enum StatusItemPresentationSelfTest {
             fiveHourResetsAt: now.addingTimeInterval(90 * 60),
             sevenDayRemainingPercent: 76,
             sevenDayResetsAt: now.addingTimeInterval(26 * 60 * 60),
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: 1_234_567
         )
         let builder = StatusItemPresentationBuilder()
@@ -132,6 +152,8 @@ enum StatusItemPresentationSelfTest {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: 110,
             sevenDayResetsAt: nil,
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil
         )
         let clamped = builder.build(
@@ -151,6 +173,8 @@ enum StatusItemPresentationSelfTest {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: 76,
             sevenDayResetsAt: now.addingTimeInterval(26 * 60 * 60),
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: 1_234_567
         )
         let sevenDayOnly = builder.build(
@@ -166,12 +190,77 @@ enum StatusItemPresentationSelfTest {
         )
         expect(
             sevenDayOnly.quotaMetrics.first?.paletteRole == .secondary,
-            "a promoted 7d ring should keep its purple palette identity"
+            "a single 7d quota must preserve its secondary Palette identity"
         )
         expect(!sevenDayOnly.tooltip.contains("5h"), "tooltip should omit a collapsed 5h quota")
         expect(
             !sevenDayOnly.accessibilityValue.contains("5h"),
             "accessibility text should omit a collapsed 5h quota"
+        )
+
+        let monthlyOnlySource = StatusItemSourceSnapshot(
+            runtime: .codex,
+            fiveHourRemainingPercent: nil,
+            fiveHourResetsAt: nil,
+            sevenDayRemainingPercent: nil,
+            sevenDayResetsAt: nil,
+            monthlyRemainingPercent: 62,
+            monthlyResetsAt: now.addingTimeInterval(12 * 24 * 60 * 60),
+            todayTokens: nil
+        )
+        let monthlyOnly = builder.build(
+            source: monthlyOnlySource,
+            preferences: StatusItemPreferences.default,
+            language: .zh,
+            now: now
+        )
+        expect(monthlyOnly.quotaMetrics.count == 1, "monthly-only data should collapse to one quota")
+        expect(
+            monthlyOnly.quotaMetrics.first?.label == "mo",
+            "monthly long-period quota should use the mo status-item label"
+        )
+        expect(
+            monthlyOnly.quotaMetrics.first?.paletteRole == .secondary,
+            "monthly-only status should use the documented secondary fallback"
+        )
+        expect(
+            monthlyOnly.tooltip.contains("月额度"),
+            "Chinese tooltip should name monthly quota"
+        )
+        let monthlyEnglish = builder.build(
+            source: monthlyOnlySource,
+            preferences: StatusItemPreferences.default,
+            language: .en,
+            now: now
+        )
+        expect(
+            monthlyEnglish.tooltip.contains("monthly quota"),
+            "English tooltip should name monthly quota"
+        )
+
+        let bothLongSource = StatusItemSourceSnapshot(
+            runtime: .codex,
+            fiveHourRemainingPercent: nil,
+            fiveHourResetsAt: nil,
+            sevenDayRemainingPercent: 76,
+            sevenDayResetsAt: now.addingTimeInterval(6 * 24 * 60 * 60),
+            monthlyRemainingPercent: 62,
+            monthlyResetsAt: now.addingTimeInterval(12 * 24 * 60 * 60),
+            todayTokens: nil
+        )
+        let bothLong = builder.build(
+            source: bothLongSource,
+            preferences: .default,
+            language: .en,
+            now: now
+        )
+        expect(
+            bothLong.quotaMetrics.map(\.metric) == [.sevenDayQuota, .monthlyQuota],
+            "7d and monthly quotas should both remain visible when returned together"
+        )
+        expect(
+            bothLong.quotaMetrics.map(\.paletteRole) == [.secondary, .primary],
+            "7d should remain secondary while monthly uses the free primary fallback"
         )
 
         var disappearedSelection = StatusItemPreferences.default
@@ -430,6 +519,8 @@ enum StatusItemPresentationSelfTest {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: 76,
             sevenDayResetsAt: now.addingTimeInterval(59 * 60),
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil
         )
         let minuteResetSingle = builder.build(
@@ -464,6 +555,8 @@ enum StatusItemPresentationSelfTest {
             fiveHourResetsAt: now.addingTimeInterval(59 * 60),
             sevenDayRemainingPercent: 76,
             sevenDayResetsAt: now.addingTimeInterval(23 * 60 * 60),
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil
         )
         let minuteResetDual = builder.build(
@@ -501,7 +594,7 @@ enum StatusItemPresentationSelfTest {
             unavailable.itemLength == classic.itemLength,
             "initial loading should preserve configured quota placeholders instead of collapsing to zero"
         )
-        expect(unavailable.quotaMetrics.count == 2, "loading should retain both configured quota slots")
+        expect(unavailable.quotaMetrics.count == 2, "loading should retain two topology-neutral quota placeholders")
         expect(unavailable.quotaMetrics.allSatisfy { !$0.isAvailable }, "missing quotas should stay unavailable")
 
         let emptyAvailableSource = StatusItemSourceSnapshot(
@@ -511,6 +604,8 @@ enum StatusItemPresentationSelfTest {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: nil,
             sevenDayResetsAt: nil,
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil
         )
         let emptyAvailable = builder.build(
@@ -558,6 +653,8 @@ enum StatusItemPresentationSelfTest {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: nil,
             sevenDayResetsAt: nil,
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil
         )
         let staleEmpty = builder.build(
@@ -576,6 +673,8 @@ enum StatusItemPresentationSelfTest {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: 76,
             sevenDayResetsAt: nil,
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil
         )
         let uncertainTopology = builder.build(

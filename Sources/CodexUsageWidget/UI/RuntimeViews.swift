@@ -62,6 +62,7 @@ struct RuntimeStatusMenuView: View {
     @ObservedObject var updateStore: AppUpdateStore
     let openRuntime: (RuntimeScope) -> Void
     let openCurrent: () -> Void
+    let openAttention: (TaskAttentionItem) -> Void
     let openSettings: () -> Void
     let quit: () -> Void
 
@@ -82,12 +83,20 @@ struct RuntimeStatusMenuView: View {
                     }
                 }
             }
-            totalRow
-            AppUpdateMenuRow(updateStore: updateStore, language: language)
+            if let attentionItem {
+                attentionRow(attentionItem)
+            }
             footer
         }
         .padding(14)
-        .frame(width: 380, height: runtimeStatusPopoverHeight(for: displayedScopes.count), alignment: .top)
+        .frame(
+            width: 380,
+            height: runtimeStatusPopoverHeight(
+                for: displayedScopes.count,
+                hasAttention: attentionItem != nil
+            ),
+            alignment: .top
+        )
         .appVisualEnvironment(
             catalog: settings.paletteCatalog,
             paletteID: settings.paletteID,
@@ -125,29 +134,104 @@ struct RuntimeStatusMenuView: View {
         }
     }
 
-    private var totalRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sum")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
-            Text(language.text("今日总 token", "Total tokens today"))
-                .font(.system(size: 11, weight: .semibold))
-            Spacer()
-            Text(TokenFormatter.format(store.totalTodayTokens(for: displayedScopes)))
-                .font(.system(size: 13, weight: .bold, design: .rounded))
-                .monospacedDigit()
+    private var attentionItem: TaskAttentionItem? {
+        store.highestPriorityAttention(for: displayedScopes, updateResult: updateStore.result)
+    }
+
+    private func attentionRow(_ item: TaskAttentionItem) -> some View {
+        Button {
+            if item.kind == .update {
+                updateStore.openPreferredUpdateURL()
+            } else {
+                openAttention(item)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: attentionIcon(item.kind))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(attentionColor(item.kind))
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(attentionTitle(item.kind))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(attentionDetail(item))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: item.kind == .update ? "arrow.up.right" : "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(FixedVisualPalette.controlFill(colorScheme))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                    )
+            )
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(FixedVisualPalette.controlFill(colorScheme))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
-                )
-        )
+        .buttonStyle(.plain)
+    }
+
+    private func attentionTitle(_ kind: TaskAttentionKind) -> String {
+        switch kind {
+        case .userInput:
+            return language.text("等待回答", "Input needed")
+        case .failure:
+            return language.text("任务失败", "Task failed")
+        case .dataIssue:
+            return language.text("数据读取异常", "Data unavailable")
+        case .update:
+            return language.text("发现新版本", "Update available")
+        }
+    }
+
+    private func attentionDetail(_ item: TaskAttentionItem) -> String {
+        let runtime = item.runtimeScope?.displayName
+        let wait = item.since.map(attentionWaitText)
+        return [runtime, item.title, wait]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+
+    private func attentionWaitText(_ date: Date) -> String {
+        let seconds = max(0, Int(Date().timeIntervalSince(date)))
+        if seconds < 60 { return language.text("刚刚", "now") }
+        let minutes = seconds / 60
+        if minutes < 60 { return language.text("等待 \(minutes) 分钟", "waiting \(minutes)m") }
+        let hours = minutes / 60
+        return language.text("等待 \(hours) 小时", "waiting \(hours)h")
+    }
+
+    private func attentionIcon(_ kind: TaskAttentionKind) -> String {
+        switch kind {
+        case .userInput:
+            return "questionmark.bubble.fill"
+        case .failure:
+            return "exclamationmark.triangle.fill"
+        case .dataIssue:
+            return "externaldrive.badge.exclamationmark"
+        case .update:
+            return "arrow.down.circle.fill"
+        }
+    }
+
+    private func attentionColor(_ kind: TaskAttentionKind) -> Color {
+        switch kind {
+        case .failure:
+            return FixedVisualPalette.statusDanger
+        case .userInput, .dataIssue:
+            return FixedVisualPalette.statusWarning
+        case .update:
+            return FixedVisualPalette.statusInfo
+        }
     }
 
     private var footer: some View {
@@ -197,6 +281,8 @@ struct RuntimeStatusMenuView: View {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: nil,
             sevenDayResetsAt: nil,
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil,
             sourceLabel: language.text("等待本机统计", "Waiting for local records")
         )
@@ -289,6 +375,14 @@ struct RuntimeSummaryCard: View {
                 title: language.text("7日剩余", "7d left"),
                 value: value,
                 resetsAt: summary.sevenDayResetsAt
+            ))
+        }
+        if let value = summary.monthlyRemainingPercent {
+            items.append(RuntimeQuotaSummaryItem(
+                id: "monthly",
+                title: language.text("月剩余", "mo left"),
+                value: value,
+                resetsAt: summary.monthlyResetsAt
             ))
         }
         return items
@@ -416,6 +510,7 @@ struct RuntimeSummaryCard: View {
     private var localizedSourceLabel: String {
         let hasQuota = summary.fiveHourRemainingPercent != nil
             || summary.sevenDayRemainingPercent != nil
+            || summary.monthlyRemainingPercent != nil
         if language.isChinese {
             switch summary.scope {
             case .codex:

@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **建议升级到 v1.1.0 或更高版本。** v1.1.0 新增六套经过审核的内置配色与 Liquid Glass 配色图库、Codex 额度重置次数及到期详情，支持 macOS 13，并强化累计 Token 计数在字段缺失、回退和重置场景下的准确性。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
+> **建议升级到 v1.1.1 或更高版本。** v1.1.1 带来源感知的今日任务分类与下次运行时间，新增 Codex Team 月额度兼容、Claude Code Skill 路径定位和可调整主窗口，并强化本地性能与阶段验收门禁。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
 [产品官网](https://shanggqm.github.io/codexU-site/) · [下载最新版本](https://github.com/shanggqm/codexU/releases/latest) · [English](README.en.md)
 
@@ -34,7 +34,7 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 - 新增状态栏 Runtime 菜单：点击菜单栏图标后展示 Codex / Claude Code / MimoCode 卡片、当前可用额度窗口、今日 token 与总 token。
 - 状态栏支持简约、经典、丰富三档透明显示：简约保留加粗额度环，经典在独立进度环内显示额度数字，丰富展示完整标签、进度条和重置时间；只有一个有效额度窗口时会自动收敛为单额度布局。
 - 环形额度保留完整粒子效果；默认只在主窗口可见、置前且聚焦时渲染，省电模式只在鼠标悬停额度环时渲染，后台、低电量、温控或“减少动态效果”状态下自动停用。
-- 状态栏额度可切换“已用量 / 剩余量”口径，并可选择显示 5 小时、7 天、今日 token 和重置倒计时；5h/7d 进度色与主界面蓝紫双环一致。
+- 状态栏额度可切换“已用量 / 剩余量”口径，并可选择显示 5 小时、7 天或月额度、今日 token 和重置倒计时；5h/7d/月 进度色与主界面蓝紫双环一致。Team 账号的月额度窗口（如 43800 分钟）会正确归类并显示，不再提示未识别。
 - 状态栏用进度方向区分口径：已用为顺时针/左到右，剩余为逆时针/右到左，不额外占用文字空间。
 - 状态栏 Runtime 使用从原始 Logo 精确派生的单色模板，文字与图标按菜单栏实际深浅自动切换黑白；彩色品牌图标继续用于主窗口和浮窗。
 - 今日总 token 在状态栏中只显示垂直居中的总量数字，不增加 `T` 标签。
@@ -47,11 +47,12 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 - 总览保持今日、近 7 天、本月和累计四个核心维度，并细分未缓存输入、命中缓存输入和输出。
 - 按 OpenAI API token 价格估算本月 API 等效价值，并在 Plus、Pro 100、Pro 200 和满额月价值之间展示进度刻度。
 - 下方仪表盘支持今日任务、用量趋势、项目排行和 Skill 使用视图。
-- 从本机 Codex 线程和启用中的 automations 生成今日任务看板，按进行中、待处理、定时、完成四类组织任务。
+- 今日任务按事实源自适应组织：Codex 使用“最近活跃、待继续、定时、今日归档”，Claude Code 使用本机 task 的“进行中、待处理、计划中、已完成”；近期活动与归档都不会被包装成仍在执行或成功完成。
+- 任务卡片优先展示标题、工作区、事实时间和可信状态；可确定时显示 automation 下次运行时间，只有存在有效 Session Deep Link 的卡片才提供整卡点击、hover、手型和键盘焦点反馈。
 - 展示最近半年的每日 token 热力图、最近 7 日趋势摘要和同周期变化。
 - 展示最近 7 天与全部项目排行，包含 token、估算价值、线程数和最近活跃时间。
 - 展示工具调用 TOP 列表和 Skill 使用 TOP 列表，帮助判断本地 Codex 工作结构。
-- 以标准 macOS 窗口运行，支持 Dock、系统窗口控制、最小化和关闭主窗口后继续后台运行；关闭主窗口会隐藏 Dock 图标并保留菜单栏图标。
+- 以标准 macOS 窗口运行，主窗口默认保持紧凑布局，也可在 820–1280pt 范围内调整宽度；增加宽度不会改变卡片顺序和信息结构，并会恢复上次窗口尺寸。支持 Dock、系统窗口控制、最小化和关闭主窗口后继续后台运行，关闭主窗口会隐藏 Dock 图标并保留菜单栏图标。
 - 默认使用 `Command + U` 显示或隐藏主窗口，并可在设置中自定义；菜单栏 Runtime 菜单也可以快速打开主窗口、设置或退出。
 - 设置窗口支持中文/英文界面、自动/浅色/深色外观、状态栏内容与实时预览、主窗口置顶、关闭行为、系统状态和更新检查配置。
 - 默认自动检查 GitHub Release 新版本并接收 beta 版本，发现新版时提供匹配当前 Mac 架构的 DMG 下载入口；不会静默下载安装，自动检查可关闭。
@@ -162,10 +163,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/AgentDesk-1.1.0-mac-arm64.dmg
-dist/AgentDesk-1.1.0-mac-arm64.dmg.sha256
-dist/AgentDesk-1.1.0-mac-x86_64.dmg
-dist/AgentDesk-1.1.0-mac-x86_64.dmg.sha256
+dist/AgentDesk-1.1.1-mac-arm64.dmg
+dist/AgentDesk-1.1.1-mac-arm64.dmg.sha256
+dist/AgentDesk-1.1.1-mac-x86_64.dmg
+dist/AgentDesk-1.1.1-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
@@ -175,12 +176,12 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 - 账户与额度：`codex app-server` 的 `account/read`、`account/rateLimits/read`、`account/usage/read`。
 - 本机 token 总量：`~/.codex/state_5.sqlite`。
 - 精细 token 拆分：`~/.codex/sessions/**/rollout-*.jsonl` 和 `~/.codex/archived_sessions/*.jsonl` 中的 `token_count` 事件。
-- 今日任务看板：本机 SQLite 中未归档和今日归档的 Codex 线程。
+- 今日任务看板：本机 SQLite 中未归档和今日归档的 Codex 线程；两小时活动窗口只表达“最近活跃”，归档只表达记录归档，不代表运行或成功。
 - 用量趋势和项目排行：本机 session `token_count` 事件聚合；缺失精细事件时回退到线程更新时间的粗略口径。
 - 工具和 Skill 使用：本机 session 事件中的工具调用与 Skill 加载记录。
-- 定时任务：`~/.codex/automations/**/automation.toml` 中启用的 automation 元数据。
+- 定时任务：`~/.codex/automations/**/automation.toml` 中启用的 automation 元数据；周期、时区和时间足够明确时在本机计算下次运行，规则不完整时不猜测。
 - Claude Code 历史 token：`~/.claude/projects/**/*.jsonl` 中 assistant message 的 `message.usage` 字段。
-- Claude Code 工具、Skill 和任务：transcript 中的 `tool_use.name` / 显式 Skill attribution，以及 `~/.claude/tasks/**/*.json`。
+- Claude Code 工具、Skill 和任务：transcript 中的 `tool_use.name` / 显式 Skill attribution，以及 `~/.claude/tasks/**/*.json`；Skill 路径缺失时按 Claude Code 的个人、项目、嵌套、插件和旧版 command 路径在当前文件系统中回退推断，无法确认时显示“当前未定位”。
 - Claude Code active 额度：可选读取 `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`；缺失时 5 小时/7 日额度显示为 `--`。
 - MimoCode 本机 token、趋势、项目、工具、Skill 与任务：读取 `~/.local/share/mimocode/mimocode.db` 中的 message、session、project、part 和 task 结构化字段；项目和趋势按消息 token 事件聚合，工具 Token 按 session 内调用占比估算，Skill 静态 Token 来自仍可读取的本机 `SKILL.md`。
 - 更新检测：默认访问 GitHub Releases API，读取 `shanggqm/codexU` 的公开 release 元数据，并把检查结果缓存到 `~/Library/Caches/codexU/update-check.json`。

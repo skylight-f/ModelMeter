@@ -81,7 +81,7 @@ After copying the generated SHA-256 values into `docs/release-notes-v<version>.m
 make release-check
 ```
 
-This validates version/document consistency, release assets, checksums, release notes, and tag/release conflicts. It intentionally does not tag, push, or publish; those external writes remain explicit steps documented in `AGENTS.md` and `.codex/skills/codexu-release/SKILL.md`.
+This validates version/document consistency, release assets, checksums, release notes, and tag/release conflicts. It intentionally does not tag, push, or publish; those external writes remain explicit steps documented in `AGENTS.md` and `.agents/skills/codexu-release/SKILL.md`.
 
 ## Developer ID signed build
 
