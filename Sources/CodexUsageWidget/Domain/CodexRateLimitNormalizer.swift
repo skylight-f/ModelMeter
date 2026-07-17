@@ -8,6 +8,13 @@ struct CodexNormalizedRateWindows: Equatable {
     let sevenDayMatchCount: Int
 }
 
+enum CodexResetCreditNormalizer {
+    static func normalizeAvailableCount(_ value: Int?) -> Int? {
+        guard let value, value >= 0 else { return nil }
+        return value
+    }
+}
+
 enum CodexRateLimitNormalizer {
     static let fiveHourDurationMins = 300
     static let sevenDayDurationMins = 10_080

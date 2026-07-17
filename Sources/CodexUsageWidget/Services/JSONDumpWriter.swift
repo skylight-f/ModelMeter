@@ -66,7 +66,12 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
             "hasCredits": credits.hasCredits,
             "unlimited": credits.unlimited,
             "balance": runtimeJSONValue(credits.balance),
-            "resetCredits": runtimeJSONValue(credits.resetCredits)
+            "resetCredits": runtimeJSONValue(credits.resetCredits),
+            "resetCreditDetails": credits.resetCreditDetails.map { details in
+                details.map { detail in
+                    ["expiresAt": runtimeJSONValue(runtimeISOString(detail.expiresAt))]
+                }
+            } ?? NSNull()
         ] as [String: Any]
     }
 

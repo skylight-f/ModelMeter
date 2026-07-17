@@ -137,6 +137,7 @@ enum RuntimeQuotaContinuity {
                 snapshot: next.snapshot.replacingQuotaWindows(
                     fiveHourQuota: last.snapshot.fiveHourQuota,
                     sevenDayQuota: last.snapshot.sevenDayQuota,
+                    credits: last.snapshot.credits,
                     quotaReadSucceeded: false
                 ),
                 status: .stale,

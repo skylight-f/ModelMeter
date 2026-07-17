@@ -20,6 +20,7 @@ git diff --check
 make test-macos-compatibility
 make build >/dev/null
 build/codexU.app/Contents/MacOS/codexU --self-test-statistics-time-zone
+build/codexU.app/Contents/MacOS/codexU --self-test-token-counter
 build/codexU.app/Contents/MacOS/codexU --self-test-status-item
 build/codexU.app/Contents/MacOS/codexU --self-test-rate-limits
 build/codexU.app/Contents/MacOS/codexU --self-test-particle-animation

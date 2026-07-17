@@ -18,6 +18,39 @@ struct CreditsInfo: Equatable {
     let unlimited: Bool
     let balance: String?
     let resetCredits: Int?
+    let resetCreditDetails: [ResetCreditDetail]?
+}
+
+struct ResetCreditDetail: Identifiable, Equatable {
+    let id: String
+    let expiresAt: Date?
+}
+
+struct ResetCreditDisclosure: Equatable {
+    static let inlineDetailLimit = 2
+
+    let totalCount: Int
+    let details: [ResetCreditDetail]
+
+    var fullDetails: [ResetCreditDetail] {
+        Array(details.prefix(max(0, totalCount)))
+    }
+
+    var inlineDetails: [ResetCreditDetail] {
+        Array(fullDetails.prefix(Self.inlineDetailLimit))
+    }
+
+    var hiddenCount: Int {
+        max(0, totalCount - inlineDetails.count)
+    }
+
+    var missingDetailCount: Int {
+        max(0, totalCount - fullDetails.count)
+    }
+
+    var showsExpandedTooltip: Bool {
+        totalCount > Self.inlineDetailLimit
+    }
 }
 
 struct AccountInfo: Equatable {
@@ -84,14 +117,6 @@ struct TokenBreakdown: Equatable, Codable {
             && outputTokens == 0
             && reasoningOutputTokens == 0
             && totalTokens == 0
-    }
-
-    var hasNegativeValue: Bool {
-        inputTokens < 0
-            || cachedInputTokens < 0
-            || outputTokens < 0
-            || reasoningOutputTokens < 0
-            || totalTokens < 0
     }
 
     mutating func add(_ other: TokenBreakdown) {
@@ -394,6 +419,7 @@ struct UsageSnapshot: Equatable {
     func replacingQuotaWindows(
         fiveHourQuota: RateWindow?,
         sevenDayQuota: RateWindow?,
+        credits: CreditsInfo?,
         quotaReadSucceeded: Bool
     ) -> UsageSnapshot {
         UsageSnapshot(
@@ -1059,8 +1085,8 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
-    private let localAnalyticsCacheVersion = 10
-    private let sessionUsageCacheVersion = 5
+    private let localAnalyticsCacheVersion = 11
+    private let sessionUsageCacheVersion = 7
     private static let sessionUsageCacheLimit = 1_024
     private static let persistentSessionUsageCacheWriteInterval: TimeInterval = 15 * 60
     private static var sessionUsageCache: [String: SessionUsageCacheEntry] = [:]
@@ -1324,8 +1350,27 @@ final class CodexUsageReader {
         snapshot.rateLimitDiagnostics = diagnostics
 
         var resetCredits: Int?
+        var resetCreditDetails: [ResetCreditDetail]?
         if let reset = result["rateLimitResetCredits"] as? [String: Any] {
-            resetCredits = intValue(reset["availableCount"])
+            resetCredits = CodexResetCreditNormalizer.normalizeAvailableCount(
+                intValue(reset["availableCount"])
+            )
+            if let rawDetails = reset["credits"] as? [[String: Any]] {
+                resetCreditDetails = rawDetails
+                    .compactMap(parseResetCreditDetail)
+                    .sorted { lhs, rhs in
+                        switch (lhs.expiresAt, rhs.expiresAt) {
+                        case let (left?, right?):
+                            return left == right ? lhs.id < rhs.id : left < right
+                        case (.some, .none):
+                            return true
+                        case (.none, .some):
+                            return false
+                        case (.none, .none):
+                            return lhs.id < rhs.id
+                        }
+                    }
+            }
         }
 
         if let credits = limits["credits"] as? [String: Any] {
@@ -1333,11 +1378,28 @@ final class CodexUsageReader {
                 hasCredits: credits["hasCredits"] as? Bool ?? false,
                 unlimited: credits["unlimited"] as? Bool ?? false,
                 balance: stringValue(credits["balance"]),
-                resetCredits: resetCredits
+                resetCredits: resetCredits,
+                resetCreditDetails: resetCreditDetails
             )
         } else if resetCredits != nil {
-            snapshot.credits = CreditsInfo(hasCredits: false, unlimited: false, balance: nil, resetCredits: resetCredits)
+            snapshot.credits = CreditsInfo(
+                hasCredits: false,
+                unlimited: false,
+                balance: nil,
+                resetCredits: resetCredits,
+                resetCreditDetails: resetCreditDetails
+            )
         }
+    }
+
+    private func parseResetCreditDetail(_ object: [String: Any]) -> ResetCreditDetail? {
+        guard let id = object["id"] as? String,
+              object["status"] as? String == "available"
+        else { return nil }
+
+        let expiresAt = doubleValue(object["expiresAt"])
+            .map(Date.init(timeIntervalSince1970:))
+        return ResetCreditDetail(id: id, expiresAt: expiresAt)
     }
 
     private func parseRateWindow(_ value: Any?) -> RateWindow? {
@@ -1483,12 +1545,20 @@ final class CodexUsageReader {
             )
         }
 
-        let analytics = readLocalAnalytics(
+        let approximateTodayTokens = int64Value(totalsObject["todayTokens"]) ?? 0
+        let approximateSevenDayTokens = int64Value(totalsObject["sevenDayTokens"]) ?? 0
+        let rawAnalytics = readLocalAnalytics(
             sqlitePath: sqlitePath,
             dbPath: dbPath,
             dayStart: dayStart,
             sevenDayStart: sevenDayStart,
             statistics: context.statistics,
+            messages: &messages
+        )
+        let analytics = validatedLocalAnalytics(
+            rawAnalytics,
+            approximateTodayTokens: approximateTodayTokens,
+            approximateSevenDayTokens: approximateSevenDayTokens,
             messages: &messages
         )
         let allProjects = readAllTimeProjects(sqlitePath: sqlitePath, dbPath: dbPath)
@@ -1501,8 +1571,8 @@ final class CodexUsageReader {
 
         return LocalUsage(
             lifetimeTokens: int64Value(totalsObject["lifetimeTokens"]) ?? 0,
-            todayTokens: int64Value(totalsObject["todayTokens"]) ?? 0,
-            sevenDayTokens: int64Value(totalsObject["sevenDayTokens"]) ?? 0,
+            todayTokens: approximateTodayTokens,
+            sevenDayTokens: approximateSevenDayTokens,
             threadCount: intValue(totalsObject["threadCount"]) ?? 0,
             lastUpdatedAt: dateFromEpoch(totalsObject["lastUpdatedAt"]),
             dailyBuckets: dailyBuckets,
@@ -1519,6 +1589,44 @@ final class CodexUsageReader {
             toolUsages: analytics.toolUsages,
             skillUsages: analytics.skillUsages,
             modelUsage: analytics.modelUsage
+        )
+    }
+
+    private func validatedLocalAnalytics(
+        _ analytics: LocalAnalytics,
+        approximateTodayTokens: Int64,
+        approximateSevenDayTokens: Int64,
+        messages: inout [String]
+    ) -> LocalAnalytics {
+        guard let detailed = analytics.detailedUsage else { return analytics }
+
+        let suspiciousToday = CodexDetailedUsageSanity.isSuspicious(
+            detailed.today.tokens.visibleTotalTokens,
+            comparedWith: approximateTodayTokens
+        )
+        let suspiciousSevenDay = CodexDetailedUsageSanity.isSuspicious(
+            detailed.sevenDay.tokens.visibleTotalTokens,
+            comparedWith: approximateSevenDayTokens
+        )
+        guard suspiciousToday || suspiciousSevenDay else { return analytics }
+
+        messages.append("Codex token_count 精细统计与本机线程统计差异异常，已回退到线程口径")
+        return LocalAnalytics(
+            detailedUsage: nil,
+            usageTrend: nil,
+            recentProjects: [],
+            toolUsages: analytics.toolUsages.map { usage in
+                ToolUsage(
+                    id: usage.id,
+                    name: usage.name,
+                    category: usage.category,
+                    callCount: usage.callCount,
+                    estimatedTokens: nil,
+                    estimatedCostUSD: nil
+                )
+            },
+            skillUsages: analytics.skillUsages,
+            modelUsage: .empty
         )
     }
 
@@ -2160,7 +2268,7 @@ final class CodexUsageReader {
         defer { try? handle.close() }
 
         var buffer = Data()
-        var previous = TokenBreakdown.zero
+        var counterState = CodexTokenCounterState()
         var currentModel = source.model
         var currentProvider = source.modelProvider
         var sawTokenEvent = false
@@ -2190,7 +2298,7 @@ final class CodexUsageReader {
                     providerNeedle: providerNeedle,
                     fractionalFormatter: fractionalFormatter,
                     plainFormatter: plainFormatter,
-                    previous: &previous,
+                    counterState: &counterState,
                     currentModel: &currentModel,
                     currentProvider: &currentProvider,
                     sawTokenEvent: &sawTokenEvent,
@@ -2214,7 +2322,7 @@ final class CodexUsageReader {
                 providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
-                previous: &previous,
+                counterState: &counterState,
                 currentModel: &currentModel,
                 currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
@@ -2300,7 +2408,7 @@ final class CodexUsageReader {
         }
 
         var buffer = data
-        var previous = TokenBreakdown.zero
+        var counterState = CodexTokenCounterState()
         var currentModel: String?
         var currentProvider: String?
         var sawTokenEvent = false
@@ -2323,7 +2431,7 @@ final class CodexUsageReader {
                 providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
-                previous: &previous,
+                counterState: &counterState,
                 currentModel: &currentModel,
                 currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
@@ -2346,7 +2454,7 @@ final class CodexUsageReader {
                 providerNeedle: providerNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
-                previous: &previous,
+                counterState: &counterState,
                 currentModel: &currentModel,
                 currentProvider: &currentProvider,
                 sawTokenEvent: &sawTokenEvent,
@@ -2371,7 +2479,7 @@ final class CodexUsageReader {
         providerNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
         plainFormatter: ISO8601DateFormatter,
-        previous: inout TokenBreakdown,
+        counterState: inout CodexTokenCounterState,
         currentModel: inout String?,
         currentProvider: inout String?,
         sawTokenEvent: inout Bool,
@@ -2425,28 +2533,26 @@ final class CodexUsageReader {
 
         guard isTokenEvent, payloadType == "token_count",
               let timestamp = object["timestamp"] as? String,
-              !totalUsage.isEmpty,
+              !info.isEmpty,
               let date = fractionalFormatter.date(from: timestamp) ?? plainFormatter.date(from: timestamp)
         else { return }
+
+        let cumulativeSample = (info["total_token_usage"] as? [String: Any]).map { usage in
+            tokenCounterSample(from: usage)
+        }
+        let lastUsageSample = (info["last_token_usage"] as? [String: Any]).map { usage in
+            tokenCounterSample(from: usage)
+        }
+        guard cumulativeSample != nil || lastUsageSample != nil else { return }
 
         sawTokenEvent = true
         tokenEventCount += 1
 
-        let current = TokenBreakdown(
-            inputTokens: int64Value(totalUsage["input_tokens"]) ?? 0,
-            cachedInputTokens: int64Value(totalUsage["cached_input_tokens"]) ?? 0,
-            outputTokens: int64Value(totalUsage["output_tokens"]) ?? 0,
-            reasoningOutputTokens: int64Value(totalUsage["reasoning_output_tokens"]) ?? 0,
-            totalTokens: int64Value(totalUsage["total_tokens"]) ?? 0
-        )
-
-        var delta = current.delta(from: previous)
-        if delta.hasNegativeValue {
-            delta = current
-        }
-        previous = current
-
-        guard !delta.isZero else { return }
+        guard let delta = CodexTokenCounterNormalizer.consume(
+            cumulative: cumulativeSample,
+            lastUsage: lastUsageSample,
+            state: &counterState
+        ) else { return }
         deltas.append(SessionUsageDelta(
             date: date,
             tokens: delta,
@@ -2833,6 +2939,16 @@ final class CodexUsageReader {
         }
         return components.joined(separator: "|")
     }
+}
+
+private func tokenCounterSample(from usage: [String: Any]) -> CodexTokenCounterSample {
+    CodexTokenCounterSample(
+        inputTokens: int64Value(usage["input_tokens"]),
+        cachedInputTokens: int64Value(usage["cached_input_tokens"]),
+        outputTokens: int64Value(usage["output_tokens"]),
+        reasoningOutputTokens: int64Value(usage["reasoning_output_tokens"]),
+        totalTokens: int64Value(usage["total_tokens"])
+    )
 }
 
 private func skillLoadPaths(in payload: [String: Any]) -> [String] {
@@ -3445,14 +3561,25 @@ enum ParticleAnimationMode: String, CaseIterable, Equatable {
     }
 }
 
+enum PaletteSelectionResult: Equatable {
+    case selected
+    case unavailable
+}
+
+struct PaletteFallbackNotice: Equatable {
+    let unavailableID: String
+}
+
 final class AppSettings: ObservableObject {
     private static let keepMainWindowOnTopKey = "codexU.keepMainWindowOnTop"
     private static let keepRunningWhenMainWindowClosedKey = "codexU.keepRunningWhenMainWindowClosed"
     private static let visibleRuntimeScopesKey = "codexU.visibleRuntimeScopes"
     private static let automaticUpdateChecksEnabledKey = "codexU.update.autoCheckEnabled"
     private static let skippedUpdateVersionKey = "codexU.update.skippedVersion"
+    private static let paletteIDKey = "codexU.paletteID"
 
     private let defaults: UserDefaults
+    let paletteCatalog: PaletteCatalog
 
     @Published var language: WidgetLanguage {
         didSet {
@@ -3472,6 +3599,9 @@ final class AppSettings: ObservableObject {
             particleAnimationMode.persist(defaults: defaults)
         }
     }
+
+    @Published private(set) var paletteID: String
+    @Published private(set) var paletteFallbackNotice: PaletteFallbackNotice?
 
     @Published var keepMainWindowOnTop: Bool {
         didSet {
@@ -3513,8 +3643,18 @@ final class AppSettings: ObservableObject {
     var globalShortcutRegistration: ((GlobalShortcut) -> Result<Void, GlobalShortcutRegistrationFailure>)?
     var globalShortcutUnregistration: (() -> Result<Void, GlobalShortcutRegistrationFailure>)?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, paletteCatalog: PaletteCatalog = .loadFromMainBundle()) {
         self.defaults = defaults
+        self.paletteCatalog = paletteCatalog
+        let storedPaletteID = defaults.string(forKey: Self.paletteIDKey)
+        if let storedPaletteID, paletteCatalog.contains(storedPaletteID) {
+            paletteID = storedPaletteID
+            paletteFallbackNotice = nil
+        } else {
+            paletteID = PaletteCatalog.defaultPaletteID
+            paletteFallbackNotice = storedPaletteID.map(PaletteFallbackNotice.init(unavailableID:))
+            defaults.set(PaletteCatalog.defaultPaletteID, forKey: Self.paletteIDKey)
+        }
         language = WidgetLanguage.storedOrAutomatic(defaults: defaults)
         themeMode = WidgetThemeMode.storedOrAutomatic(defaults: defaults)
         particleAnimationMode = ParticleAnimationMode.storedOrDefault(defaults: defaults)
@@ -3540,6 +3680,22 @@ final class AppSettings: ObservableObject {
             globalShortcut = storedShortcut
         }
         globalShortcutError = nil
+    }
+
+    @discardableResult
+    func selectPalette(_ id: String) -> PaletteSelectionResult {
+        guard paletteCatalog.contains(id) else {
+            paletteFallbackNotice = PaletteFallbackNotice(unavailableID: id)
+            return .unavailable
+        }
+        paletteID = id
+        paletteFallbackNotice = nil
+        defaults.set(id, forKey: Self.paletteIDKey)
+        return .selected
+    }
+
+    func resetPalette() {
+        _ = selectPalette(PaletteCatalog.defaultPaletteID)
     }
 
     func isRuntimeVisible(_ scope: RuntimeScope) -> Bool {
@@ -3712,6 +3868,11 @@ struct UsageWidgetView: View {
         }
         .frame(width: Self.widgetWidth, alignment: .topLeading)
         .frame(minHeight: Self.widgetMinHeight, maxHeight: .infinity, alignment: .topLeading)
+        .appVisualEnvironment(
+            catalog: settings.paletteCatalog,
+            paletteID: settings.paletteID,
+            appearance: PaletteAppearance(effectiveColorScheme)
+        )
         .environment(\.colorScheme, effectiveColorScheme)
         .preferredColorScheme(themeMode.preferredColorScheme)
         .readableForegroundHierarchy(effectiveColorScheme)
@@ -3730,7 +3891,7 @@ struct UsageWidgetView: View {
     @ViewBuilder
     private var windowSurface: some View {
         staticWindowSurface(
-            fill: WidgetPalette.windowScrim(
+            fill: FixedVisualPalette.windowScrim(
                 effectiveColorScheme,
                 reduceTransparency: reduceTransparency
             )
@@ -3743,7 +3904,7 @@ struct UsageWidgetView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
                     .strokeBorder(
-                        WidgetPalette.sectionStroke(
+                        FixedVisualPalette.sectionStroke(
                             effectiveColorScheme,
                             increasedContrast: colorSchemeContrast == .increased
                         ),
@@ -3807,10 +3968,10 @@ struct UsageWidgetView: View {
             .padding(.vertical, 5)
             .background(
                 Capsule(style: .continuous)
-                    .fill(WidgetPalette.controlFill(effectiveColorScheme))
+                    .fill(FixedVisualPalette.controlFill(effectiveColorScheme))
                     .overlay(
                         Capsule(style: .continuous)
-                            .strokeBorder(WidgetPalette.controlStroke(effectiveColorScheme), lineWidth: 0.8)
+                            .strokeBorder(FixedVisualPalette.controlStroke(effectiveColorScheme), lineWidth: 0.8)
                     )
             )
     }
@@ -3837,6 +3998,15 @@ struct UsageWidgetView: View {
                         language: language
                     )
                     .frame(width: 154, height: 26)
+
+                    if let resetCredits = snapshot.credits?.resetCredits, resetCredits >= 1 {
+                        ResetCreditAvailability(
+                            count: resetCredits,
+                            details: snapshot.credits?.resetCreditDetails,
+                            language: language
+                        )
+                        .frame(width: 154)
+                    }
                 }
             }
 
@@ -4043,7 +4213,7 @@ struct UsageWidgetView: View {
                     title: language.text("未找到 MimoCode 数据库", "MimoCode database not found"),
                     detail: language.text("打开 MimoCode 并至少完成一次会话后再刷新。", "Open MimoCode, complete at least one session, then refresh."),
                     systemName: "externaldrive.badge.questionmark",
-                    tint: WidgetPalette.statusWarning
+                    tint: FixedVisualPalette.statusWarning
                 ))
             } else if messages.contains("MimoCode token") {
                 items.append(DiagnosticItem(
@@ -4051,7 +4221,7 @@ struct UsageWidgetView: View {
                     title: language.text("暂无 MimoCode token 记录", "No MimoCode token records"),
                     detail: language.text("当前本机数据库中还没有可统计的 token 事件。", "The local database does not contain token events yet."),
                     systemName: "chart.bar.doc.horizontal",
-                    tint: WidgetPalette.statusInfo
+                    tint: FixedVisualPalette.statusInfo
                 ))
             }
             return items
@@ -4069,7 +4239,7 @@ struct UsageWidgetView: View {
                         ? language.text("打开 Claude Code 后刷新；本机 token 统计仍可继续显示。", "Open Claude Code and refresh. Local token stats can still be shown.")
                         : language.text("首版只读取本地 statusLine 快照；没有快照时 5 小时和 7 日额度显示为 --。", "This version only reads a local statusLine snapshot. 5-hour and 7-day quota show -- without it."),
                     systemName: isStale ? "clock.badge.exclamationmark" : "waveform.path.ecg",
-                    tint: isStale ? WidgetPalette.statusInfo : WidgetPalette.statusWarning
+                    tint: isStale ? FixedVisualPalette.statusInfo : FixedVisualPalette.statusWarning
                 ))
             }
 
@@ -4079,7 +4249,7 @@ struct UsageWidgetView: View {
                     title: language.text("暂无 Claude Code 本机用量记录", "No local Claude Code usage records yet"),
                     detail: language.text("本机 token 统计来自 ~/.claude/projects 下的 transcript JSONL，只读取 usage 和工具名称等结构化字段。", "Local token stats come from transcript JSONL under ~/.claude/projects and only read structured usage and tool names."),
                     systemName: "doc.text.magnifyingglass",
-                    tint: WidgetPalette.statusInfo
+                    tint: FixedVisualPalette.statusInfo
                 ))
             }
 
@@ -4090,7 +4260,7 @@ struct UsageWidgetView: View {
                         title: language.text("运行提示", "Runtime note"),
                         detail: localizedReaderMessage(message, language: language),
                         systemName: "info.circle.fill",
-                        tint: WidgetPalette.statusInfo
+                        tint: FixedVisualPalette.statusInfo
                     )
                 }
             }
@@ -4105,7 +4275,7 @@ struct UsageWidgetView: View {
                     title: language.text("未找到 Codex", "Codex not found"),
                     detail: language.text("请先安装 ChatGPT/Codex App，或确认 codex CLI 位于标准安装目录。", "Install the ChatGPT/Codex app first, or make sure the codex CLI is in a standard installation directory."),
                     systemName: "magnifyingglass",
-                    tint: WidgetPalette.statusWarning
+                    tint: FixedVisualPalette.statusWarning
                 ))
             } else if messages.contains("app-server") {
                 items.append(DiagnosticItem(
@@ -4113,7 +4283,7 @@ struct UsageWidgetView: View {
                     title: language.text("Codex 账户接口暂不可用", "Codex account API unavailable"),
                     detail: language.text("确认 Codex 已登录后点击刷新；本机 token 统计仍可继续显示。", "Make sure Codex is signed in, then refresh. Local token stats can still be shown."),
                     systemName: "exclamationmark.triangle.fill",
-                    tint: WidgetPalette.statusWarning
+                    tint: FixedVisualPalette.statusWarning
                 ))
             } else {
                 items.append(DiagnosticItem(
@@ -4121,7 +4291,7 @@ struct UsageWidgetView: View {
                     title: language.text("账户额度读取中", "Reading account quota"),
                     detail: language.text("如果长时间无数据，请确认 Codex 已安装并完成登录。", "If data does not appear, make sure Codex is installed and signed in."),
                     systemName: "person.crop.circle.badge.questionmark",
-                    tint: WidgetPalette.statusInfo
+                    tint: FixedVisualPalette.statusInfo
                 ))
             }
         }
@@ -4133,7 +4303,7 @@ struct UsageWidgetView: View {
                     title: language.text("未找到本机 Codex 统计库", "Local Codex database not found"),
                     detail: language.text("打开 Codex 并至少完成一次会话后，再回到小组件点击刷新。", "Open Codex and complete at least one session, then refresh this widget."),
                     systemName: "externaldrive.badge.questionmark",
-                    tint: WidgetPalette.statusWarning
+                    tint: FixedVisualPalette.statusWarning
                 ))
             } else if messages.contains("sqlite3") {
                 items.append(DiagnosticItem(
@@ -4141,7 +4311,7 @@ struct UsageWidgetView: View {
                     title: language.text("未找到 sqlite3", "sqlite3 not found"),
                     detail: language.text("请安装 macOS Command Line Tools，或通过 Homebrew 安装 sqlite。", "Install macOS Command Line Tools, or install sqlite with Homebrew."),
                     systemName: "terminal",
-                    tint: WidgetPalette.statusWarning
+                    tint: FixedVisualPalette.statusWarning
                 ))
             } else {
                 items.append(DiagnosticItem(
@@ -4149,7 +4319,7 @@ struct UsageWidgetView: View {
                     title: language.text("本机统计暂不可用", "Local stats unavailable"),
                     detail: language.text("本机 token 和任务看板依赖 ~/.codex 的本地状态文件。", "Local tokens and the task board depend on Codex state files under ~/.codex."),
                     systemName: "chart.bar.doc.horizontal",
-                    tint: WidgetPalette.statusInfo
+                    tint: FixedVisualPalette.statusInfo
                 ))
             }
         }
@@ -4161,7 +4331,7 @@ struct UsageWidgetView: View {
                     title: language.text("运行提示", "Runtime note"),
                     detail: localizedReaderMessage(message, language: language),
                     systemName: "info.circle.fill",
-                    tint: WidgetPalette.statusInfo
+                    tint: FixedVisualPalette.statusInfo
                 )
             }
         }
@@ -4233,6 +4403,7 @@ struct ThemeSwitch: View {
 
 struct HeaderActionButton: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.visualTokens) private var visualTokens
     @State private var isHovering = false
 
     let systemName: String
@@ -4245,7 +4416,7 @@ struct HeaderActionButton: View {
 
     private var foregroundColor: Color {
         if isActive {
-            return WidgetPalette.brandPrimary
+            return visualTokens.selection.foreground.color
         }
         if isHovering, let hoverTint {
             return hoverTint
@@ -4255,10 +4426,10 @@ struct HeaderActionButton: View {
 
     private var fillColor: Color {
         if isActive {
-            return WidgetPalette.brandPrimary.opacity(colorScheme == .dark ? 0.24 : 0.14)
+            return visualTokens.selection.fill.color
         }
         if isHovering {
-            return WidgetPalette.controlSelectedFill(colorScheme)
+            return FixedVisualPalette.controlSelectedFill(colorScheme)
         }
         return Color.clear
     }
@@ -4276,7 +4447,7 @@ struct HeaderActionButton: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .strokeBorder(
-                            isActive ? WidgetPalette.brandPrimary.opacity(0.42) : Color.clear,
+                            isActive ? visualTokens.selection.stroke.color : Color.clear,
                             lineWidth: 0.8
                         )
                 )
@@ -4336,10 +4507,10 @@ struct TitlebarToolbarView: View {
             .padding(3)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(WidgetPalette.controlFill(effectiveColorScheme))
+                    .fill(FixedVisualPalette.controlFill(effectiveColorScheme))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(WidgetPalette.controlStroke(effectiveColorScheme), lineWidth: 0.8)
+                            .strokeBorder(FixedVisualPalette.controlStroke(effectiveColorScheme), lineWidth: 0.8)
                     )
             )
         }
@@ -4347,6 +4518,11 @@ struct TitlebarToolbarView: View {
         .padding(.bottom, 2)
         .padding(.trailing, 18)
         .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: .topTrailing)
+        .appVisualEnvironment(
+            catalog: settings.paletteCatalog,
+            paletteID: settings.paletteID,
+            appearance: PaletteAppearance(effectiveColorScheme)
+        )
         .environment(\.colorScheme, effectiveColorScheme)
         .preferredColorScheme(themeMode.preferredColorScheme)
         .readableForegroundHierarchy(effectiveColorScheme)
@@ -4357,13 +4533,17 @@ struct SettingsPanelView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
     @ObservedObject var updateStore: AppUpdateStore
+    let onOpenPaletteLibrary: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     private var language: WidgetLanguage { settings.language }
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16) {
+        ZStack {
+            LiquidGlassWindowBackdrop(colorScheme: colorScheme)
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
                 settingsHeader
                 settingsSection(
                     title: language.text("通用", "General"),
@@ -4379,7 +4559,7 @@ struct SettingsPanelView: View {
                                 SettingsSegmentOption(value: .zh, title: "中文"),
                                 SettingsSegmentOption(value: .en, title: "English")
                             ],
-                            width: 156
+                            width: settingsAccessoryColumnWidth
                         )
                     }
 
@@ -4394,8 +4574,16 @@ struct SettingsPanelView: View {
                                 SettingsSegmentOption(value: .light, title: language.text("浅色", "Light")),
                                 SettingsSegmentOption(value: .dark, title: language.text("深色", "Dark"))
                             ],
-                            width: 190
+                            width: settingsAccessoryColumnWidth
                         )
+                    }
+
+                    SettingsPickerRow(
+                        title: language.text("配色", "Color palette"),
+                        detail: language.text("精选内置配色，同时适配浅色与深色", "Curated palettes for both Light and Dark appearances")
+                    ) {
+                        PaletteSettingsView(settings: settings, onOpenLibrary: onOpenPaletteLibrary)
+                            .frame(width: settingsAccessoryColumnWidth)
                     }
 
                     SettingsPickerRow(
@@ -4411,7 +4599,7 @@ struct SettingsPanelView: View {
                                 SettingsSegmentOption(value: .standard, title: language.text("默认", "Default")),
                                 SettingsSegmentOption(value: .powerSaving, title: language.text("省电", "Power Saving"))
                             ],
-                            width: 190
+                            width: settingsAccessoryColumnWidth
                         )
                     }
                 }
@@ -4455,7 +4643,7 @@ struct SettingsPanelView: View {
                                 SettingsSegmentOption(value: .utc, title: "UTC"),
                                 SettingsSegmentOption(value: .fixed, title: language.text("固定", "Fixed"))
                             ],
-                            width: 250
+                            width: settingsAccessoryColumnWidth
                         )
                     }
 
@@ -4470,7 +4658,11 @@ struct SettingsPanelView: View {
                                 }
                             }
                             .labelsHidden()
-                            .frame(width: 250)
+                            .controlSize(.small)
+                            .frame(
+                                width: settingsAccessoryColumnWidth,
+                                height: settingsControlVisualHeight
+                            )
                         }
                     }
                 }
@@ -4516,11 +4708,20 @@ struct SettingsPanelView: View {
                             )
                             .frame(
                                 width: settingsShortcutRecorderWidth,
-                                height: settingsSegmentHeight
+                                height: settingsControlVisualHeight
                             )
 
-                            Button(language.text("恢复默认", "Restore Default")) {
+                            Button {
                                 settings.resetGlobalShortcut()
+                            } label: {
+                                Text(language.text("恢复默认", "Restore Default"))
+                                    .font(.system(size: settingsControlFontSize, weight: .medium))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.78)
+                                    .frame(
+                                        width: settingsShortcutActionWidth,
+                                        height: settingsControlVisualHeight
+                                    )
                             }
                             .buttonStyle(.borderless)
                             .disabled(
@@ -4528,6 +4729,7 @@ struct SettingsPanelView: View {
                                     && settings.globalShortcutError == nil
                             )
                         }
+                        .frame(width: settingsAccessoryColumnWidth, alignment: .trailing)
                     }
 
                     if let error = settings.globalShortcutError {
@@ -4561,11 +4763,18 @@ struct SettingsPanelView: View {
                         language: language
                     )
                 }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, settingsContentTopInset)
+                .padding(.bottom, 20)
             }
         }
-        .padding(20)
         .frame(width: 480, alignment: .topLeading)
-        .background(WidgetPalette.sectionFill(colorScheme).opacity(0.35))
+        .appVisualEnvironment(
+            catalog: settings.paletteCatalog,
+            paletteID: settings.paletteID,
+            appearance: PaletteAppearance(colorScheme)
+        )
         .readableForegroundHierarchy(colorScheme)
     }
 
@@ -4634,7 +4843,7 @@ struct SettingsPanelView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: title, detail: detail)
+            SettingsSectionTitle(title: title, detail: detail)
             VStack(spacing: 0) {
                 content()
             }
@@ -4672,6 +4881,24 @@ struct SettingsPickerRow<Control: View>: View {
     }
 }
 
+private struct SettingsSectionTitle: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .font(.system(size: settingsSectionTitleFontSize, weight: .semibold))
+                .lineLimit(1)
+            Spacer(minLength: 12)
+            Text(detail)
+                .font(.system(size: settingsSectionDetailFontSize, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+}
+
 struct SettingsSegmentOption<Value: Hashable>: Identifiable {
     let value: Value
     let title: String
@@ -4681,6 +4908,7 @@ struct SettingsSegmentOption<Value: Hashable>: Identifiable {
 
 struct SettingsSegmentedControl<Value: Hashable>: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.visualTokens) private var visualTokens
     @Binding var selection: Value
     let options: [SettingsSegmentOption<Value>]
     let width: CGFloat
@@ -4692,14 +4920,14 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
                     selection = option.value
                 } label: {
                     Text(option.title)
-                        .font(.system(size: 12, weight: selection == option.value ? .semibold : .medium))
+                        .font(.system(size: settingsControlFontSize, weight: selection == option.value ? .semibold : .medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
                         .foregroundStyle(selection == option.value ? Color.white : Color.secondary)
                         .frame(maxWidth: .infinity, minHeight: settingsSegmentHeight)
                         .background(
                             RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
-                                .fill(selection == option.value ? WidgetPalette.brandPrimary : Color.clear)
+                                .fill(selection == option.value ? visualTokens.accent.primary.color : Color.clear)
                         )
                         .contentShape(Rectangle())
                 }
@@ -4709,20 +4937,20 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
 
                 if index < options.count - 1 {
                     Rectangle()
-                        .fill(WidgetPalette.controlStroke(colorScheme))
+                        .fill(FixedVisualPalette.controlStroke(colorScheme))
                         .frame(width: 1, height: 16)
                         .padding(.horizontal, 1)
                 }
             }
         }
         .padding(3)
-        .frame(width: width, height: settingsSegmentHeight + 6)
+        .frame(width: width, height: settingsControlVisualHeight)
         .background(
             RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
-                .fill(WidgetPalette.controlFill(colorScheme))
+                .fill(FixedVisualPalette.controlFill(colorScheme))
                 .overlay(
                     RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
-                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                        .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous))
@@ -4731,6 +4959,7 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
 
 struct SettingsRuntimeMultiSelectControl: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.visualTokens) private var visualTokens
     let selectedScopes: [RuntimeScope]
     let language: WidgetLanguage
     let onToggle: (RuntimeScope) -> Void
@@ -4744,7 +4973,7 @@ struct SettingsRuntimeMultiSelectControl: View {
                     HStack(spacing: 6) {
                         RuntimeLogoView(scope: scope, size: 16)
                         Text(label(for: scope))
-                            .font(.system(size: 12, weight: isSelected(scope) ? .semibold : .medium))
+                            .font(.system(size: settingsControlFontSize, weight: isSelected(scope) ? .semibold : .medium))
                             .lineLimit(1)
                             .minimumScaleFactor(0.82)
                     }
@@ -4752,7 +4981,7 @@ struct SettingsRuntimeMultiSelectControl: View {
                     .frame(maxWidth: .infinity, minHeight: settingsSegmentHeight)
                     .background(
                         RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
-                            .fill(isSelected(scope) ? WidgetPalette.brandPrimary : Color.clear)
+                            .fill(isSelected(scope) ? visualTokens.accent.primary.color : Color.clear)
                     )
                     .contentShape(Rectangle())
                 }
@@ -4762,20 +4991,20 @@ struct SettingsRuntimeMultiSelectControl: View {
 
                 if index < RuntimeScope.allCases.count - 1 {
                     Rectangle()
-                        .fill(WidgetPalette.controlStroke(colorScheme))
+                        .fill(FixedVisualPalette.controlStroke(colorScheme))
                         .frame(width: 1, height: 16)
                         .padding(.horizontal, 1)
                 }
             }
         }
         .padding(3)
-        .frame(width: settingsAccessoryColumnWidth, height: settingsSegmentHeight + 6)
+        .frame(width: settingsAccessoryColumnWidth, height: settingsControlVisualHeight)
         .background(
             RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
-                .fill(WidgetPalette.controlFill(colorScheme))
+                .fill(FixedVisualPalette.controlFill(colorScheme))
                 .overlay(
                     RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
-                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                        .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous))
@@ -4798,6 +5027,7 @@ struct SettingsRuntimeMultiSelectControl: View {
 }
 
 struct SettingsSwitchToggle: View {
+    @Environment(\.visualTokens) private var visualTokens
     let isOn: Binding<Bool>
     var isDisabled = false
     var help: String?
@@ -4807,7 +5037,7 @@ struct SettingsSwitchToggle: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.regular)
-            .tint(WidgetPalette.brandPrimary)
+            .tint(visualTokens.accent.primary.color)
             .frame(width: settingsSwitchWidth, alignment: .trailing)
             .disabled(isDisabled)
             .help(help ?? "")
@@ -4840,7 +5070,7 @@ struct SettingsValueRow: View {
     var body: some View {
         SettingsBaseRow(title: title, detail: detail) {
             Text(value)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .font(.system(size: settingsControlFontSize, weight: .semibold, design: .rounded))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -4858,20 +5088,20 @@ struct SettingsErrorRow: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(WidgetPalette.statusDanger)
+                .foregroundStyle(FixedVisualPalette.statusDanger)
                 .frame(width: 18, height: 18)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(WidgetPalette.statusDanger)
+                    .font(.system(size: settingsRowTitleFontSize, weight: .semibold))
+                    .foregroundStyle(FixedVisualPalette.statusDanger)
                 Text(message)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: settingsRowDetailFontSize, weight: .regular))
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(currentValue)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .font(.system(size: settingsRowDetailFontSize, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -4881,10 +5111,10 @@ struct SettingsErrorRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
-                .fill(WidgetPalette.statusDangerFill(colorScheme))
+                .fill(FixedVisualPalette.statusDangerFill(colorScheme))
                 .overlay(
                     RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
-                        .strokeBorder(WidgetPalette.statusDangerStroke(colorScheme), lineWidth: 0.8)
+                        .strokeBorder(FixedVisualPalette.statusDangerStroke(colorScheme), lineWidth: 0.8)
                 )
         )
         .padding(.horizontal, 8)
@@ -4908,10 +5138,10 @@ struct SettingsBaseRow<Accessory: View>: View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: settingsRowTitleFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text(detail)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: settingsRowDetailFontSize, weight: .regular))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -4953,7 +5183,7 @@ struct DashboardTabSwitch: View {
                     .frame(width: dashboardTabSegmentWidth)
                     .background(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(selectedTab == tab ? WidgetPalette.controlSelectedFill(colorScheme) : Color.clear)
+                            .fill(selectedTab == tab ? FixedVisualPalette.controlSelectedFill(colorScheme) : Color.clear)
                     )
                     .contentShape(Rectangle())
                 }
@@ -4962,7 +5192,7 @@ struct DashboardTabSwitch: View {
 
                 if index < DashboardTab.allCases.count - 1 {
                     Rectangle()
-                        .fill(WidgetPalette.controlStroke(colorScheme))
+                        .fill(FixedVisualPalette.controlStroke(colorScheme))
                         .frame(width: 1, height: 14)
                         .padding(.horizontal, 2)
                 }
@@ -4971,10 +5201,10 @@ struct DashboardTabSwitch: View {
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(WidgetPalette.controlFill(colorScheme))
+                .fill(FixedVisualPalette.controlFill(colorScheme))
                 .overlay(
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                        .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                 )
         )
         .fixedSize(horizontal: true, vertical: false)
@@ -4993,7 +5223,7 @@ struct SectionBackgroundModifier: ViewModifier {
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(
-                        WidgetPalette.sectionFill(
+                        FixedVisualPalette.sectionFill(
                             colorScheme,
                             reduceTransparency: reduceTransparency
                         )
@@ -5001,7 +5231,7 @@ struct SectionBackgroundModifier: ViewModifier {
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(
-                                WidgetPalette.sectionStroke(
+                                FixedVisualPalette.sectionStroke(
                                     colorScheme,
                                     increasedContrast: colorSchemeContrast == .increased
                                 ),
@@ -5024,7 +5254,7 @@ struct CardBackgroundModifier: ViewModifier {
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(
-                        WidgetPalette.cardFill(
+                        FixedVisualPalette.cardFill(
                             colorScheme,
                             elevated: elevated,
                             reduceTransparency: reduceTransparency
@@ -5033,7 +5263,7 @@ struct CardBackgroundModifier: ViewModifier {
                     .overlay(
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                             .strokeBorder(
-                                WidgetPalette.cardStroke(
+                                FixedVisualPalette.cardStroke(
                                     colorScheme,
                                     elevated: elevated,
                                     increasedContrast: colorSchemeContrast == .increased
@@ -5049,8 +5279,8 @@ extension View {
     func readableForegroundHierarchy(_ colorScheme: ColorScheme) -> some View {
         foregroundStyle(
             Color.primary,
-            WidgetPalette.secondaryText(colorScheme),
-            WidgetPalette.tertiaryText(colorScheme)
+            FixedVisualPalette.secondaryText(colorScheme),
+            FixedVisualPalette.tertiaryText(colorScheme)
         )
     }
 
@@ -5067,20 +5297,21 @@ struct GaugeRing: View {
     let percent: Double
     let available: Bool
     let lineWidth: CGFloat
+    @Environment(\.visualTokens) private var visualTokens
 
     var body: some View {
         ZStack {
             Circle()
-                .stroke(WidgetPalette.surfaceTrack, lineWidth: lineWidth)
+                .stroke(FixedVisualPalette.surfaceTrack, lineWidth: lineWidth)
             Circle()
                 .trim(from: 0, to: available ? CGFloat(max(0, min(1, percent / 100))) : 0.0)
                 .stroke(
                     AngularGradient(
                         colors: [
-                            WidgetPalette.brandPrimary,
-                            WidgetPalette.brandPrimaryLight,
-                            WidgetPalette.brandHighlight,
-                            WidgetPalette.brandPrimary
+                            visualTokens.accent.primary.color,
+                            visualTokens.accent.primaryLight.color,
+                            visualTokens.accent.highlight.color,
+                            visualTokens.accent.primary.color
                         ],
                         center: .center
                     ),
@@ -5113,24 +5344,24 @@ private enum QuotaWindowKind: String, Hashable {
         }
     }
 
-    var startColor: RingRGBColor {
+    func tokens(in visualTokens: ResolvedVisualTokens) -> QuotaRoleTokenSet {
         switch self {
-        case .fiveHour: return quotaPrimaryStartColor
-        case .sevenDay: return quotaSecondaryStartColor
+        case .fiveHour: visualTokens.quota.primary
+        case .sevenDay: visualTokens.quota.secondary
         }
     }
 
-    var endColor: RingRGBColor {
+    var ringAssetSlot: PaletteAssetSlot {
         switch self {
-        case .fiveHour: return quotaPrimaryEndColor
-        case .sevenDay: return quotaSecondaryEndColor
+        case .fiveHour: .quotaRingPrimary
+        case .sevenDay: .quotaRingSecondary
         }
     }
 
-    var color: Color {
+    var capAssetSlot: PaletteAssetSlot {
         switch self {
-        case .fiveHour: return quotaPrimaryColor
-        case .sevenDay: return quotaSecondaryColor
+        case .fiveHour: .quotaCapPrimary
+        case .sevenDay: .quotaCapSecondary
         }
     }
 }
@@ -5257,6 +5488,7 @@ struct DualQuotaRing: View {
     let visualEnergyMode: VisualEnergyMode
     let animationMode: ParticleAnimationMode
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualTokens) private var visualTokens
     @State private var isPointerOverRing = false
 
     private var presentation: QuotaRingPresentation {
@@ -5271,9 +5503,9 @@ struct DualQuotaRing: View {
             ForEach(presentation.items) { item in
                 QuotaRingSegment(
                     percent: item.window.remainingPercent,
-                    startColor: item.kind.startColor,
-                    endColor: item.kind.endColor,
-                    trackColor: WidgetPalette.surfaceTrack,
+                    tokens: item.kind.tokens(in: visualTokens),
+                    ringAsset: visualTokens.assets[item.kind.ringAssetSlot],
+                    capAsset: visualTokens.assets[item.kind.capAssetSlot],
                     lineWidth: QuotaRingGeometry.lineWidth
                 )
                 .frame(
@@ -5306,7 +5538,7 @@ struct DualQuotaRing: View {
                 )
             case .single:
                 Circle()
-                    .fill(WidgetPalette.surfaceTrack)
+                    .fill(FixedVisualPalette.surfaceTrack)
                     .frame(
                         width: QuotaRingGeometry.singleCenterDiameter,
                         height: QuotaRingGeometry.singleCenterDiameter
@@ -5320,7 +5552,7 @@ struct DualQuotaRing: View {
                 }
             case .dual:
                 Circle()
-                    .fill(WidgetPalette.surfaceTrack)
+                    .fill(FixedVisualPalette.surfaceTrack)
                     .frame(
                         width: QuotaRingGeometry.dualCenterDiameter,
                         height: QuotaRingGeometry.dualCenterDiameter
@@ -5330,7 +5562,7 @@ struct DualQuotaRing: View {
                         QuotaRingLabel(
                             title: item.kind.compactTitle,
                             value: item.remainingText,
-                            color: item.kind.color
+                            color: item.kind.tokens(in: visualTokens).label.color
                         )
                     }
                     Text(
@@ -5381,31 +5613,38 @@ struct DualQuotaRing: View {
 
 struct QuotaRingSegment: View {
     let percent: Double
-    let startColor: RingRGBColor
-    let endColor: RingRGBColor
-    let trackColor: Color
+    let tokens: QuotaRoleTokenSet
+    let ringAsset: PaletteAssetDescriptor?
+    let capAsset: PaletteAssetDescriptor?
     let lineWidth: CGFloat
 
     var body: some View {
         let progress = CGFloat(max(0, min(1, percent / 100)))
         ZStack {
             Circle()
-                .strokeBorder(trackColor, lineWidth: lineWidth)
+                .strokeBorder(tokens.track.color, lineWidth: lineWidth)
 
             if progress > 0.001 {
-                Circle()
-                    .inset(by: lineWidth / 2)
-                    .trim(from: 0, to: progress)
-                    .stroke(
-                        AngularGradient(
-                            colors: [startColor.color, endColor.color],
-                            center: .center,
-                            startAngle: .degrees(0),
-                            endAngle: .degrees(max(1, Double(progress) * 360))
-                        ),
-                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
+                if let ringAsset {
+                    PaletteRingArtwork(descriptor: ringAsset, progress: progress, lineWidth: lineWidth)
+                } else {
+                    Circle()
+                        .inset(by: lineWidth / 2)
+                        .trim(from: 0, to: progress)
+                        .stroke(
+                            AngularGradient(
+                                colors: [tokens.start.color, tokens.end.color],
+                                center: .center,
+                                startAngle: .degrees(0),
+                                endAngle: .degrees(max(1, Double(progress) * 360))
+                            ),
+                            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                }
+                if let capAsset {
+                    PaletteRingCap(descriptor: capAsset, progress: progress, lineWidth: lineWidth)
+                }
             }
         }
     }
@@ -5919,7 +6158,7 @@ private struct DualQuotaRingParticles: NSViewRepresentable {
             let particle = CALayer()
             particle.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
             particle.cornerRadius = diameter / 2
-            particle.backgroundColor = WidgetPalette.dataFlowParticle.cgColor
+            particle.backgroundColor = FixedVisualPalette.dataFlowParticle.cgColor
             particle.opacity = 0
             particle.position = startPosition
             particle.contentsScale = particleContainer.contentsScale
@@ -6489,12 +6728,13 @@ private struct SingleQuotaRingLabel: View {
     let item: QuotaRingItem
     let language: WidgetLanguage
     let isStale: Bool
+    @Environment(\.visualTokens) private var visualTokens
 
     var body: some View {
         VStack(spacing: 1) {
             Text(item.kind.compactTitle)
                 .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(item.kind.color)
+                .foregroundStyle(item.kind.tokens(in: visualTokens).label.color)
             Text(item.remainingText)
                 .font(.system(size: 28, weight: .bold, design: .rounded))
                 .monospacedDigit()
@@ -6539,6 +6779,7 @@ struct QuotaResetSummary: View {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     private var presentation: QuotaRingPresentation {
         QuotaRingPresentation(
@@ -6553,7 +6794,7 @@ struct QuotaResetSummary: View {
                 QuotaResetLine(
                     title: item.kind.compactTitle,
                     window: item.window,
-                    color: item.kind.color,
+                    color: item.kind.tokens(in: visualTokens).label.color,
                     language: language
                 )
             }
@@ -6595,6 +6836,126 @@ struct QuotaResetLine: View {
     }
 }
 
+private struct ResetCreditAvailability: View {
+    let count: Int
+    let details: [ResetCreditDetail]?
+    let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
+    @State private var isHovering = false
+
+    private var disclosure: ResetCreditDisclosure {
+        ResetCreditDisclosure(totalCount: count, details: details ?? [])
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.counterclockwise.circle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(visualTokens.accent.primary.color)
+                Text(language.text("可用重置次数", "Available resets"))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Text("\(count)")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+            }
+
+            ForEach(Array(disclosure.inlineDetails.enumerated()), id: \.element.id) { index, detail in
+                HStack(spacing: 5) {
+                    Text(language.text("第 \(index + 1) 次", "Reset \(index + 1)"))
+                        .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Text(expirationText(detail.expiresAt))
+                        .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            if disclosure.showsExpandedTooltip {
+                HStack(spacing: 4) {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text(expandedTooltipHint)
+                }
+                    .font(.system(size: 8.2, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if disclosure.missingDetailCount > 0 {
+                Text(language.text(
+                    "另有 \(disclosure.missingDetailCount) 次未提供到期时间",
+                    "\(disclosure.missingDetailCount) expiry times unavailable"
+                ))
+                    .font(.system(size: 8.2, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .overlay(alignment: .topLeading) {
+            if isHovering, disclosure.showsExpandedTooltip {
+                ChartTooltipView(payload: tooltipPayload)
+                    .frame(width: chartTooltipWidth)
+                    .offset(x: 160, y: -4)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .zIndex(20)
+            }
+        }
+        .zIndex(isHovering ? 20 : 0)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var tooltipPayload: ChartTooltipPayload {
+        var rows = disclosure.fullDetails.enumerated().map { index, detail in
+            ChartTooltipRow(
+                id: detail.id,
+                label: language.text("第 \(index + 1) 次", "Reset \(index + 1)"),
+                value: expirationText(detail.expiresAt)
+            )
+        }
+        if disclosure.missingDetailCount > 0 {
+            rows.append(ChartTooltipRow(
+                id: "missing-expiry-details",
+                label: language.text("其余 \(disclosure.missingDetailCount) 次", "Other \(disclosure.missingDetailCount)"),
+                value: language.text("未提供到期时间", "Expiry unavailable")
+            ))
+        }
+        return ChartTooltipPayload(
+            title: language.text("可用重置次数 \(count)", "\(count) available resets"),
+            rows: rows
+        )
+    }
+
+    private var expandedTooltipHint: String {
+        if disclosure.inlineDetails.isEmpty {
+            return language.text(
+                "\(disclosure.hiddenCount) 次 · 悬停查看",
+                "\(disclosure.hiddenCount) resets · hover"
+            )
+        }
+        return language.text(
+            "其余 \(disclosure.hiddenCount) 次 · 悬停查看",
+            "\(disclosure.hiddenCount) more · hover"
+        )
+    }
+
+    private func expirationText(_ date: Date?) -> String {
+        guard let date else {
+            return language.text("未提供到期时间", "Expiry unavailable")
+        }
+        let value = resetDateTime(date, language: language)
+        return language.text("\(value) 到期", "Expires \(value)")
+    }
+}
+
 struct DailyTokenChart: View {
     let buckets: [DailyTokenBucket]
     let language: WidgetLanguage
@@ -6618,6 +6979,7 @@ struct DailyTokenBar: View {
     let bucket: DailyTokenBucket
     let maxTokens: Int64
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     private var barHeight: CGFloat {
         let ratio = Double(bucket.tokens) / Double(maxTokens)
@@ -6634,11 +6996,17 @@ struct DailyTokenBar: View {
                 .foregroundStyle(.secondary)
             ZStack(alignment: .bottom) {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(WidgetPalette.surfaceTrack)
+                    .fill(FixedVisualPalette.surfaceTrack)
                     .frame(height: 58)
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(bucket.tokens == 0 ? WidgetPalette.dataZero : WidgetPalette.brandPrimary.opacity(bucket.label == "今天" ? 1 : 0.58))
+                    .fill(bucket.tokens == 0 ? visualTokens.data.zero.color : visualTokens.data.series[0].color.opacity(bucket.label == "今天" ? 1 : 0.58))
                     .frame(height: barHeight)
+                    .overlay {
+                        if bucket.tokens > 0, let asset = visualTokens.assets[.chartBar] {
+                            PaletteAssetFill(descriptor: asset)
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        }
+                    }
             }
             Text(localizedDayLabel(bucket.label, language: language))
                 .font(.system(size: 9, weight: .medium))
@@ -6677,6 +7045,7 @@ private enum ModelUsagePeriod: String, CaseIterable, Identifiable {
 struct ModelUsagePanel: View {
     @State private var period: ModelUsagePeriod = .today
     @State private var searchText = ""
+    @Environment(\.visualTokens) private var visualTokens
     let modelUsage: ModelUsageBreakdown
     let language: WidgetLanguage
 
@@ -6763,7 +7132,7 @@ struct ModelUsagePanel: View {
         .padding(.vertical, 3)
         .background(
             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(WidgetPalette.surfaceTrack)
+                .fill(FixedVisualPalette.surfaceTrack)
         )
     }
 
@@ -6780,7 +7149,7 @@ struct ModelUsagePanel: View {
                         .padding(.vertical, 3)
                         .background(
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(period == item ? WidgetPalette.surfaceTrack : Color.clear)
+                                .fill(period == item ? visualTokens.selection.fill.color : Color.clear)
                         )
                 }
                 .buttonStyle(.plain)
@@ -6813,6 +7182,7 @@ struct ModelUsagePanel: View {
 }
 
 private struct ModelUsageHeader: View {
+    @Environment(\.visualTokens) private var visualTokens
     let language: WidgetLanguage
 
     var body: some View {
@@ -6820,10 +7190,10 @@ private struct ModelUsageHeader: View {
             header(language.text("模型", "Model"), width: 160, alignment: .leading)
             Color.clear.frame(width: 120, height: 1)
             Spacer(minLength: 4)
-            header(language.text("速度", "TPS"), width: 40, alignment: .trailing, color: WidgetPalette.statusNeutral)
-            header(language.text("未缓存", "Unc"), width: 42, alignment: .trailing, color: uncachedInputColor)
-            header(language.text("缓存", "Cache"), width: 42, alignment: .trailing, color: cachedInputColor)
-            header(language.text("输出", "Out"), width: 42, alignment: .trailing, color: WidgetPalette.statusSuccess)
+            header(language.text("速度", "TPS"), width: 40, alignment: .trailing, color: FixedVisualPalette.statusNeutral)
+            header(language.text("未缓存", "Unc"), width: 42, alignment: .trailing, color: visualTokens.data.tokenInput.color)
+            header(language.text("缓存", "Cache"), width: 42, alignment: .trailing, color: visualTokens.data.tokenCached.color)
+            header(language.text("输出", "Out"), width: 42, alignment: .trailing, color: visualTokens.data.tokenOutput.color)
             header(language.text("总消耗", "Total"), width: 46, alignment: .trailing, color: .primary)
             header(language.text("缓存率", "Hit"), width: 36, alignment: .trailing)
             header(language.text("费用", "Cost"), width: 46, alignment: .trailing)
@@ -6847,6 +7217,7 @@ private struct ModelUsageHeader: View {
 }
 
 private struct ModelUsageRow: View {
+    @Environment(\.visualTokens) private var visualTokens
     let item: ModelUsageItem
     let language: WidgetLanguage
     let maxTokens: Int64
@@ -6859,14 +7230,14 @@ private struct ModelUsageRow: View {
 
     private var providerColor: Color {
         let model = item.model.lowercased()
-        if model.contains("mimo") { return WidgetPalette.statusWarning }
-        if model.contains("gpt") || model.contains("codex") || model.hasPrefix("o1") || model.hasPrefix("o3") { return WidgetPalette.statusSuccess }
-        if model.contains("claude") { return WidgetPalette.brandSecondary }
-        if model.contains("qwen") { return WidgetPalette.statusInfo }
-        if model.contains("glm") { return WidgetPalette.brandPrimaryLight }
-        if model.contains("deepseek") { return WidgetPalette.statusDanger }
-        if model.contains("gemini") { return WidgetPalette.statusSuccess }
-        return WidgetPalette.statusNeutral
+        if model.contains("mimo") { return FixedVisualPalette.statusWarning }
+        if model.contains("gpt") || model.contains("codex") || model.hasPrefix("o1") || model.hasPrefix("o3") { return FixedVisualPalette.statusSuccess }
+        if model.contains("claude") { return visualTokens.accent.secondary.color }
+        if model.contains("qwen") { return FixedVisualPalette.statusInfo }
+        if model.contains("glm") { return visualTokens.accent.primaryLight.color }
+        if model.contains("deepseek") { return FixedVisualPalette.statusDanger }
+        if model.contains("gemini") { return FixedVisualPalette.statusSuccess }
+        return FixedVisualPalette.statusNeutral
     }
 
     private var hasPriceData: Bool {
@@ -6910,14 +7281,14 @@ private struct ModelUsageRow: View {
                 .lineLimit(1)
                 .frame(width: 40, alignment: .trailing)
 
-            value(item.uncachedInputTokens, width: 42, color: uncachedInputColor)
-            value(item.cachedInputTokens, width: 42, color: cachedInputColor)
-            value(item.outputTokens, width: 42, color: WidgetPalette.statusSuccess)
+            value(item.uncachedInputTokens, width: 42, color: visualTokens.data.tokenInput.color)
+            value(item.cachedInputTokens, width: 42, color: visualTokens.data.tokenCached.color)
+            value(item.outputTokens, width: 42, color: visualTokens.data.tokenOutput.color)
             value(item.tokens, width: 46, color: .primary, weight: .semibold)
             Text(cacheHitRate > 0 ? "\(Int(cacheHitRate))%" : "-")
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(cacheHitRate >= 50 ? WidgetPalette.brandSecondary : .secondary)
+                .foregroundStyle(cacheHitRate >= 50 ? visualTokens.accent.secondary.color : .secondary)
                 .frame(width: 36, alignment: .trailing)
             Text(formatModelUsageCost(item.estimatedCostUSD, currency: item.currency))
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -6958,7 +7329,7 @@ private struct ModelUsageProgressBar: View {
         GeometryReader { geometry in
             let ratio = maxValue > 0 ? min(1, CGFloat(value) / CGFloat(maxValue)) : 0
             RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(WidgetPalette.surfaceTrack)
+                .fill(FixedVisualPalette.surfaceTrack)
                 .overlay(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
                         .fill(color)
@@ -6969,14 +7340,14 @@ private struct ModelUsageProgressBar: View {
 }
 
 private func modelSpeedColor(_ tokensPerSecond: Double) -> Color {
-    if tokensPerSecond >= 80 { return WidgetPalette.statusSuccess }
-    if tokensPerSecond >= 40 { return WidgetPalette.statusInfo }
-    if tokensPerSecond >= 20 { return WidgetPalette.statusWarning }
-    return WidgetPalette.statusDanger
+    if tokensPerSecond >= 80 { return FixedVisualPalette.statusSuccess }
+    if tokensPerSecond >= 40 { return FixedVisualPalette.statusInfo }
+    if tokensPerSecond >= 20 { return FixedVisualPalette.statusWarning }
+    return FixedVisualPalette.statusDanger
 }
 
 private func modelCurrencyColor(_ currency: ModelTokenCurrency) -> Color {
-    currency == .cny ? WidgetPalette.statusDanger : WidgetPalette.statusSuccess
+    currency == .cny ? FixedVisualPalette.statusDanger : FixedVisualPalette.statusSuccess
 }
 
 private func formatModelUsageCost(_ value: Double?, currency: ModelTokenCurrency) -> String {
@@ -7005,6 +7376,7 @@ struct DetailedTokenMetricCard: View {
     let fallbackTokens: Int64?
     let language: WidgetLanguage
     let estimatedCostText: String
+    @Environment(\.visualTokens) private var visualTokens
 
     private var displayTokens: Int64? {
         usage?.tokens.visibleTotalTokens ?? fallbackTokens
@@ -7024,7 +7396,7 @@ struct DetailedTokenMetricCard: View {
                     .frame(width: 18, height: 18)
                     .background(
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(WidgetPalette.surfaceTrack)
+                            .fill(FixedVisualPalette.surfaceTrack)
                     )
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
@@ -7057,17 +7429,17 @@ struct DetailedTokenMetricCard: View {
                 TokenSplitLegendRow(
                     title: language.text("未缓存", "Input"),
                     value: usage?.tokens.uncachedInputTokens,
-                    color: uncachedInputColor
+                    color: visualTokens.data.tokenInput.color
                 )
                 TokenSplitLegendRow(
                     title: language.text("缓存", "Cached"),
                     value: usage?.tokens.billableCachedInputTokens,
-                    color: cachedInputColor
+                    color: visualTokens.data.tokenCached.color
                 )
                 TokenSplitLegendRow(
                     title: language.text("输出", "Output"),
                     value: usage?.tokens.outputTokens,
-                    color: outputTokenColor
+                    color: visualTokens.data.tokenOutput.color
                 )
             }
         }
@@ -7093,32 +7465,33 @@ private struct CacheHitBadge: View {
 
     private var color: Color {
         guard let rate else { return .secondary }
-        if rate >= 0.85 { return WidgetPalette.statusSuccess }
-        if rate >= 0.60 { return WidgetPalette.statusWarning }
-        return WidgetPalette.statusDanger
+        if rate >= 0.85 { return FixedVisualPalette.statusSuccess }
+        if rate >= 0.60 { return FixedVisualPalette.statusWarning }
+        return FixedVisualPalette.statusDanger
     }
 }
 
 struct TokenSplitBar: View {
     let tokens: TokenBreakdown?
+    @Environment(\.visualTokens) private var visualTokens
 
     var body: some View {
         GeometryReader { geometry in
             let splitTotal = tokens?.splitTotalTokens ?? 0
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(WidgetPalette.surfaceTrack)
+                    .fill(FixedVisualPalette.surfaceTrack)
 
                 if let tokens, splitTotal > 0 {
                     HStack(spacing: 0) {
                         Rectangle()
-                            .fill(uncachedInputColor)
+                            .fill(visualTokens.data.tokenInput.color)
                             .frame(width: segmentWidth(tokens.uncachedInputTokens, total: splitTotal, available: geometry.size.width))
                         Rectangle()
-                            .fill(cachedInputColor)
+                            .fill(visualTokens.data.tokenCached.color)
                             .frame(width: segmentWidth(tokens.billableCachedInputTokens, total: splitTotal, available: geometry.size.width))
                         Rectangle()
-                            .fill(outputTokenColor)
+                            .fill(visualTokens.data.tokenOutput.color)
                             .frame(width: segmentWidth(tokens.outputTokens, total: splitTotal, available: geometry.size.width))
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
@@ -7162,13 +7535,12 @@ private struct SubscriptionMilestone: Identifiable {
     let id: String
     let title: String
     let amountUSD: Double
-    let color: Color
 }
 
 private let subscriptionMilestones: [SubscriptionMilestone] = [
-    SubscriptionMilestone(id: "plus", title: "Plus", amountUSD: 20, color: WidgetPalette.statusInfo),
-    SubscriptionMilestone(id: "pro100", title: "Pro100", amountUSD: 100, color: WidgetPalette.brandSecondary),
-    SubscriptionMilestone(id: "pro200", title: "Pro200", amountUSD: 200, color: WidgetPalette.brandPrimaryLight)
+    SubscriptionMilestone(id: "plus", title: "Plus", amountUSD: 20),
+    SubscriptionMilestone(id: "pro100", title: "Pro100", amountUSD: 100),
+    SubscriptionMilestone(id: "pro200", title: "Pro200", amountUSD: 200)
 ]
 
 // Used only for the full-quota monthly ceiling. Actual usage still uses per-session model prices and token splits.
@@ -7189,6 +7561,7 @@ struct WoolProgressCard: View {
     let usage: PricedTokenUsage?
     let comparisonAvailable: Bool
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     private var cost: Double {
         comparisonAvailable ? (usage?.estimatedCostUSD ?? 0) : 0
@@ -7199,10 +7572,10 @@ struct WoolProgressCard: View {
     }
 
     private var accent: Color {
-        if cost >= 200 { return WidgetPalette.brandPrimaryLight }
-        if cost >= 100 { return WidgetPalette.brandSecondary }
-        if cost >= 20 { return WidgetPalette.statusInfo }
-        return WidgetPalette.statusWarning
+        if cost >= 200 { return visualTokens.data.milestones[2].color }
+        if cost >= 100 { return visualTokens.data.milestones[1].color }
+        if cost >= 20 { return visualTokens.data.milestones[0].color }
+        return FixedVisualPalette.statusWarning
     }
 
     var body: some View {
@@ -7233,7 +7606,7 @@ struct WoolProgressCard: View {
                 ForEach(subscriptionMilestones) { milestone in
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(milestone.color)
+                            .fill(milestoneColor(milestone))
                             .frame(width: 5, height: 5)
                         Text(milestone.title)
                             .font(.system(size: 8.5, weight: .semibold, design: .rounded))
@@ -7256,11 +7629,17 @@ struct WoolProgressCard: View {
         .padding(dashboardCardPadding)
         .cardBackground(cornerRadius: dashboardCardCornerRadius)
     }
+
+    private func milestoneColor(_ milestone: SubscriptionMilestone) -> Color {
+        let index = subscriptionMilestones.firstIndex(where: { $0.id == milestone.id }) ?? 0
+        return visualTokens.data.milestones[min(index, visualTokens.data.milestones.count - 1)].color
+    }
 }
 
 struct QuotaValueProgressBar: View {
     let currentValue: Double
     let maxValue: Double
+    @Environment(\.visualTokens) private var visualTokens
 
     var body: some View {
         GeometryReader { geometry in
@@ -7269,29 +7648,27 @@ struct QuotaValueProgressBar: View {
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(WidgetPalette.surfaceTrack)
+                    .fill(FixedVisualPalette.surfaceTrack)
                     .frame(height: 10)
                     .frame(maxHeight: .infinity, alignment: .center)
 
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                WidgetPalette.brandPrimaryLight,
-                                WidgetPalette.brandPrimary,
-                                WidgetPalette.brandSecondaryStrong
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+                    .fill(LinearGradient(colors: visualTokens.data.valueProgress.map(\.color), startPoint: .leading, endPoint: .trailing))
                     .frame(width: currentValue > 0 ? max(5, progressWidth) : 0, height: 10)
                     .frame(maxHeight: .infinity, alignment: .center)
+                    .overlay {
+                        if let asset = visualTokens.assets[.progressLinear], currentValue > 0 {
+                            PaletteAssetFill(descriptor: asset)
+                                .frame(width: max(5, progressWidth), height: 10)
+                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
 
                 ForEach(subscriptionMilestones) { milestone in
                     let x = valueOffset(milestone.amountUSD, width: width)
                     Circle()
-                        .fill(milestone.color)
+                        .fill(milestoneColor(milestone))
                         .frame(width: 7, height: 7)
                         .overlay(
                             Circle()
@@ -7328,6 +7705,11 @@ struct QuotaValueProgressBar: View {
 
         let raw = width * CGFloat(max(0, min(1, fraction)))
         return min(max(raw, 0), width)
+    }
+
+    private func milestoneColor(_ milestone: SubscriptionMilestone) -> Color {
+        let index = subscriptionMilestones.firstIndex(where: { $0.id == milestone.id }) ?? 0
+        return visualTokens.data.milestones[min(index, visualTokens.data.milestones.count - 1)].color
     }
 }
 
@@ -7366,6 +7748,7 @@ struct TokenMetricCard: View {
 struct MiniTrendCard: View {
     let buckets: [DailyTokenBucket]
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     private var maxTokens: Int64 {
         max(buckets.map(\.tokens).max() ?? 0, 1)
@@ -7381,7 +7764,7 @@ struct MiniTrendCard: View {
             HStack(alignment: .bottom, spacing: 6) {
                 ForEach(buckets) { bucket in
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(bucket.tokens == 0 ? WidgetPalette.dataZero : WidgetPalette.brandPrimary.opacity(bucket.label == "今天" ? 1 : 0.55))
+                        .fill(bucket.tokens == 0 ? visualTokens.data.zero.color : visualTokens.data.series[0].color.opacity(bucket.label == "今天" ? 1 : 0.55))
                         .frame(width: 12, height: miniBarHeight(bucket.tokens))
                 }
             }
@@ -7454,10 +7837,10 @@ struct ChartTooltipView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(WidgetPalette.cardFill(colorScheme, elevated: true))
+                .fill(FixedVisualPalette.cardFill(colorScheme, elevated: true))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(WidgetPalette.cardStroke(colorScheme, elevated: true), lineWidth: 0.9)
+                        .strokeBorder(FixedVisualPalette.cardStroke(colorScheme, elevated: true), lineWidth: 0.9)
                 )
                 .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.26 : 0.12), radius: 10, x: 0, y: 5)
         )
@@ -7583,6 +7966,7 @@ struct UsageHeatmapCard: View {
     let trend: UsageTrend
     let runtimeScope: RuntimeScope
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     var body: some View {
         DashboardCard {
@@ -7608,7 +7992,7 @@ struct UsageHeatmapCard: View {
                         .foregroundStyle(.secondary)
                     ForEach(0..<5, id: \.self) { level in
                         RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(heatmapColor(level: level))
+                            .fill(heatmapColor(level: level, tokens: visualTokens))
                             .frame(width: heatmapCellSize, height: heatmapCellSize)
                     }
                     Text(language.text("多", "More"))
@@ -7628,6 +8012,7 @@ struct UsageHeatmapView: View {
     let language: WidgetLanguage
     @State private var hoveredCell: UsageHeatmapDay?
     @State private var hoverAnchor: CGPoint = .zero
+    @Environment(\.visualTokens) private var visualTokens
 
     private let cellSize: CGFloat = heatmapCellSize
     private let cellSpacing: CGFloat = usageHeatmapCellSpacing
@@ -7707,12 +8092,12 @@ struct UsageHeatmapView: View {
                                         .frame(width: cellSize, height: cellSize)
                                 } else {
                                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                        .fill(heatmapColor(level: heatLevel(cell.tokens)))
+                                        .fill(heatmapColor(level: heatLevel(cell.tokens), tokens: visualTokens))
                                         .frame(width: cellSize, height: cellSize)
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 3, style: .continuous)
                                                 .strokeBorder(
-                                                    hoveredCell?.id == cell.id ? WidgetPalette.brandPrimary.opacity(0.78) : Color.clear,
+                                                    hoveredCell?.id == cell.id ? visualTokens.selection.focusRing.color : Color.clear,
                                                     lineWidth: 1
                                                 )
                                         )
@@ -7882,9 +8267,9 @@ struct UsageSevenDaySummaryCard: View {
     }
 
     private var changeTint: Color {
-        if trend.summary.isNewActivity { return WidgetPalette.statusSuccess }
-        guard let change = trend.summary.changePercent else { return WidgetPalette.statusNeutral }
-        return change >= 0 ? WidgetPalette.statusSuccess : WidgetPalette.statusWarning
+        if trend.summary.isNewActivity { return FixedVisualPalette.statusSuccess }
+        guard let change = trend.summary.changePercent else { return FixedVisualPalette.statusNeutral }
+        return change >= 0 ? FixedVisualPalette.statusSuccess : FixedVisualPalette.statusWarning
     }
 }
 
@@ -7894,6 +8279,7 @@ struct SevenDayLineChart: View {
     let language: WidgetLanguage
     @State private var hoveredBucket: UsageDayBucket?
     @State private var hoverAnchor: CGPoint = .zero
+    @Environment(\.visualTokens) private var visualTokens
 
     private var maxTokens: Int64 {
         max(buckets.map(\.tokens).max() ?? 0, 1)
@@ -7907,7 +8293,7 @@ struct SevenDayLineChart: View {
                     VStack(spacing: 0) {
                         ForEach(0..<3, id: \.self) { _ in
                             Rectangle()
-                                .fill(WidgetPalette.surfaceTrack.opacity(0.45))
+                                .fill(FixedVisualPalette.surfaceTrack.opacity(0.45))
                                 .frame(height: 1)
                             Spacer()
                         }
@@ -7921,14 +8307,14 @@ struct SevenDayLineChart: View {
                         }
                     }
                     .stroke(
-                        WidgetPalette.brandSecondary,
+                        visualTokens.data.series[1].color,
                         style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round)
                     )
 
                     ForEach(Array(points.enumerated()), id: \.offset) { index, point in
                         ZStack {
                             Circle()
-                                .fill(buckets[index].tokens > 0 ? WidgetPalette.brandSecondary : WidgetPalette.surfaceTrack)
+                                .fill(buckets[index].tokens > 0 ? visualTokens.data.series[1].color : FixedVisualPalette.surfaceTrack)
                                 .frame(width: hoveredBucket?.id == buckets[index].id ? 8 : 6, height: hoveredBucket?.id == buckets[index].id ? 8 : 6)
                         }
                         .position(point)
@@ -8090,6 +8476,7 @@ struct ProjectActivityOverview: View {
     let projectBoard: ProjectBoard?
     let runtimeScope: RuntimeScope
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     private var recentProjects: [ProjectUsage] {
         projectBoard?.recentProjects ?? []
@@ -8159,24 +8546,24 @@ struct ProjectActivityOverview: View {
                             MetricTile(
                                 title: language.text("活跃项目", "Active"),
                                 value: "\(recentProjects.count)",
-                                tint: WidgetPalette.brandSecondary
+                                tint: visualTokens.data.series[1].color
                             )
                             MetricTile(
                                 title: language.text("新增估算", "New est."),
                                 value: "\(newProjectCount)",
-                                tint: WidgetPalette.statusSuccess
+                                tint: FixedVisualPalette.statusSuccess
                             )
                         }
                         HStack(spacing: dashboardListRowSpacing) {
                             MetricTile(
                                 title: "Top1",
                                 value: topOneShare,
-                                tint: WidgetPalette.statusInfo
+                                tint: visualTokens.data.series[0].color
                             )
                             MetricTile(
                                 title: "Top3",
                                 value: topThreeShare,
-                                tint: WidgetPalette.statusWarning
+                                tint: visualTokens.data.series[2].color
                             )
                         }
 
@@ -8207,16 +8594,17 @@ struct ProjectActivityOverview: View {
 struct ProjectActivityRow: View {
     let project: ProjectUsage
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     var body: some View {
         HStack(alignment: .center, spacing: 7) {
             Image(systemName: "folder.fill")
                 .font(.system(size: 8.5, weight: .semibold))
-                .foregroundStyle(WidgetPalette.brandSecondary)
+                .foregroundStyle(visualTokens.data.series[1].color)
                 .frame(width: 18, height: 18)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(WidgetPalette.brandSecondary.opacity(0.12))
+                        .fill(visualTokens.data.series[1].color.opacity(0.12))
                 )
 
             VStack(alignment: .leading, spacing: 1) {
@@ -8240,7 +8628,7 @@ struct ProjectActivityRow: View {
         .padding(dashboardRowPadding)
         .background(
             RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
-                .fill(WidgetPalette.surfaceTrack.opacity(0.42))
+                .fill(FixedVisualPalette.surfaceTrack.opacity(0.42))
         )
         .help(project.fullPath.isEmpty ? project.name : project.fullPath)
     }
@@ -8275,6 +8663,7 @@ struct ProjectUsageRow: View {
     let project: ProjectUsage
     let maxTokens: Int64
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     private var progress: Double {
         guard maxTokens > 0 else { return 0 }
@@ -8308,9 +8697,9 @@ struct ProjectUsageRow: View {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(WidgetPalette.surfaceTrack)
+                        .fill(FixedVisualPalette.surfaceTrack)
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(WidgetPalette.brandSecondary.opacity(0.82))
+                        .fill(visualTokens.data.series[1].color.opacity(0.82))
                         .frame(width: max(4, geometry.size.width * CGFloat(progress)))
                 }
             }
@@ -8319,7 +8708,7 @@ struct ProjectUsageRow: View {
         .padding(dashboardRowPadding)
         .background(
             RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
-                .fill(WidgetPalette.surfaceTrack.opacity(0.42))
+                .fill(FixedVisualPalette.surfaceTrack.opacity(0.42))
         )
         .help(project.fullPath.isEmpty ? project.name : project.fullPath)
     }
@@ -8387,6 +8776,7 @@ struct ToolUsageRow: View {
     let tool: ToolUsage
     let maxCalls: Int
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     private var progress: Double {
         guard maxCalls > 0 else { return 0 }
@@ -8398,11 +8788,11 @@ struct ToolUsageRow: View {
             HStack(spacing: 7) {
                 Image(systemName: toolCategoryIcon(tool.category))
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(WidgetPalette.brandPrimary)
+                    .foregroundStyle(visualTokens.data.series[0].color)
                     .frame(width: 18, height: 18)
                     .background(
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(WidgetPalette.brandPrimary.opacity(0.12))
+                            .fill(visualTokens.data.series[0].color.opacity(0.12))
                     )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(tool.name)
@@ -8427,9 +8817,9 @@ struct ToolUsageRow: View {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(WidgetPalette.surfaceTrack)
+                        .fill(FixedVisualPalette.surfaceTrack)
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(WidgetPalette.brandPrimary.opacity(0.78))
+                        .fill(visualTokens.data.series[0].color.opacity(0.78))
                         .frame(width: max(4, geometry.size.width * CGFloat(progress)))
                 }
             }
@@ -8438,7 +8828,7 @@ struct ToolUsageRow: View {
         .padding(dashboardRowPadding)
         .background(
             RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
-                .fill(WidgetPalette.surfaceTrack.opacity(0.42))
+                .fill(FixedVisualPalette.surfaceTrack.opacity(0.42))
         )
         .help(toolHelpText)
     }
@@ -8522,6 +8912,7 @@ struct SkillUsageRow: View {
     let skill: SkillUsage
     let maxLoads: Int
     let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
 
     private var progress: Double {
         guard maxLoads > 0 else { return 0 }
@@ -8533,11 +8924,11 @@ struct SkillUsageRow: View {
             HStack(spacing: 7) {
                 Image(systemName: "puzzlepiece.extension.fill")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(WidgetPalette.brandSecondary)
+                    .foregroundStyle(visualTokens.data.series[1].color)
                     .frame(width: 18, height: 18)
                     .background(
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(WidgetPalette.brandSecondary.opacity(0.12))
+                            .fill(visualTokens.data.series[1].color.opacity(0.12))
                     )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(skill.name)
@@ -8563,9 +8954,9 @@ struct SkillUsageRow: View {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(WidgetPalette.surfaceTrack)
+                        .fill(FixedVisualPalette.surfaceTrack)
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(WidgetPalette.brandSecondary.opacity(0.78))
+                        .fill(visualTokens.data.series[1].color.opacity(0.78))
                         .frame(width: max(4, geometry.size.width * CGFloat(progress)))
                 }
             }
@@ -8574,7 +8965,7 @@ struct SkillUsageRow: View {
         .padding(dashboardRowPadding)
         .background(
             RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
-                .fill(WidgetPalette.surfaceTrack.opacity(0.42))
+                .fill(FixedVisualPalette.surfaceTrack.opacity(0.42))
         )
         .help(skillHelpText)
     }
@@ -8826,15 +9217,15 @@ struct TaskChip: View {
     private var chipAccentColor: Color {
         switch text.lowercased() {
         case "high", "urgent":
-            return WidgetPalette.statusDanger
+            return FixedVisualPalette.statusDanger
         case "medium":
-            return WidgetPalette.statusWarning
+            return FixedVisualPalette.statusWarning
         case "active":
-            return WidgetPalette.statusWarning
+            return FixedVisualPalette.statusWarning
         case "cron", "wake":
-            return WidgetPalette.brandSecondary
+            return FixedVisualPalette.statusScheduled
         case "done":
-            return WidgetPalette.statusSuccess
+            return FixedVisualPalette.statusSuccess
         default:
             return taskAccentColor(kind)
         }
@@ -8844,13 +9235,13 @@ struct TaskChip: View {
         guard colorScheme == .light else { return chipAccentColor }
         switch text.lowercased() {
         case "high", "urgent":
-            return WidgetPalette.statusDangerLightText
+            return FixedVisualPalette.statusDangerLightText
         case "medium", "active":
-            return WidgetPalette.statusWarningLightText
+            return FixedVisualPalette.statusWarningLightText
         case "cron", "wake":
-            return WidgetPalette.brandSecondaryLightText
+            return FixedVisualPalette.statusScheduledLightText
         case "done":
-            return WidgetPalette.statusSuccessLightText
+            return FixedVisualPalette.statusSuccessLightText
         default:
             return taskAccentForegroundColor(kind, colorScheme: colorScheme)
         }
@@ -8885,7 +9276,7 @@ struct InfoChip: View {
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(WidgetPalette.surfaceTrack)
+                .fill(FixedVisualPalette.surfaceTrack)
         )
     }
 }
@@ -8915,36 +9306,12 @@ struct MetricTile: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(WidgetPalette.surfaceTrack)
+                .fill(FixedVisualPalette.surfaceTrack)
         )
     }
 }
 
-struct RingRGBColor: Equatable {
-    let red: Double
-    let green: Double
-    let blue: Double
-
-    var color: Color {
-        Color(red: red, green: green, blue: blue)
-    }
-
-}
-
-enum WidgetPalette {
-    static let brandPrimaryRGB = RingRGBColor(red: 0.157, green: 0.400, blue: 0.969) // #2866F7
-    static let brandPrimaryStrongRGB = RingRGBColor(red: 0.122, green: 0.349, blue: 0.929) // #1F59ED
-    static let brandPrimaryLightRGB = RingRGBColor(red: 0.482, green: 0.627, blue: 1.000) // #7BA0FF
-    static let brandSecondaryRGB = RingRGBColor(red: 0.545, green: 0.427, blue: 1.000) // #8B6DFF
-    static let brandSecondaryStrongRGB = RingRGBColor(red: 0.427, green: 0.271, blue: 0.910) // #6D45E8
-    static let brandHighlightRGB = RingRGBColor(red: 0.855, green: 0.639, blue: 0.980) // #DAA3FA
-
-    static let brandPrimary = brandPrimaryRGB.color
-    static let brandPrimaryStrong = brandPrimaryStrongRGB.color
-    static let brandPrimaryLight = brandPrimaryLightRGB.color
-    static let brandSecondary = brandSecondaryRGB.color
-    static let brandSecondaryStrong = brandSecondaryStrongRGB.color
-    static let brandHighlight = brandHighlightRGB.color
+enum FixedVisualPalette {
     static let dataFlowParticle = NSColor.white
 
     static let statusSuccess = Color(red: 0.188, green: 0.820, blue: 0.345) // #30D158
@@ -8952,17 +9319,16 @@ enum WidgetPalette {
     static let statusWarning = Color(red: 1.000, green: 0.624, blue: 0.039) // #FF9F0A
     static let statusDanger = Color(red: 1.000, green: 0.271, blue: 0.227) // #FF453A
     static let statusNeutral = Color(red: 0.596, green: 0.596, blue: 0.616) // #98989D
-    static let dataReasoning = Color(red: 0.749, green: 0.353, blue: 0.949) // #BF5AF2
+    static let statusScheduled = Color(red: 0.545, green: 0.427, blue: 1.000) // #8B6DFF
 
     // Strong semantic foregrounds keep 9 pt labels readable on light glass.
     static let statusDangerLightText = Color(red: 0.706, green: 0.137, blue: 0.094) // #B42318
     static let statusWarningLightText = Color(red: 0.502, green: 0.294, blue: 0.000) // #804B00
     static let statusSuccessLightText = Color(red: 0.078, green: 0.439, blue: 0.224) // #147039
-    static let brandSecondaryLightText = Color(red: 0.384, green: 0.251, blue: 0.773) // #6240C5
     static let statusNeutralLightText = Color(red: 0.329, green: 0.333, blue: 0.369) // #54555E
+    static let statusScheduledLightText = Color(red: 0.384, green: 0.251, blue: 0.773) // #6240C5
 
     static let surfaceTrack = Color.primary.opacity(0.10)
-    static let dataZero = statusNeutral.opacity(0.35)
 
     static func windowScrim(_ colorScheme: ColorScheme, reduceTransparency: Bool = false) -> Color {
         if reduceTransparency {
@@ -9041,17 +9407,6 @@ enum WidgetPalette {
     }
 }
 
-private let quotaPrimaryStartColor = WidgetPalette.brandPrimaryLightRGB
-private let quotaPrimaryEndColor = WidgetPalette.brandPrimaryRGB
-private let quotaPrimaryColor = quotaPrimaryEndColor.color
-private let quotaPrimaryTrackColor = WidgetPalette.surfaceTrack
-private let quotaSecondaryStartColor = WidgetPalette.brandHighlightRGB
-private let quotaSecondaryEndColor = WidgetPalette.brandSecondaryRGB
-private let quotaSecondaryColor = quotaSecondaryEndColor.color
-private let quotaSecondaryTrackColor = WidgetPalette.surfaceTrack
-private let uncachedInputColor = WidgetPalette.statusInfo
-private let cachedInputColor = WidgetPalette.brandSecondary
-private let outputTokenColor = WidgetPalette.statusWarning
 private let dashboardGridSpacing: CGFloat = 10
 private let dashboardCardPadding: CGFloat = 10
 private let dashboardCardCornerRadius: CGFloat = 10
@@ -9069,12 +9424,22 @@ private let dashboardCardTitleSize: CGFloat = 11
 private let dashboardListRowSpacing: CGFloat = 6
 private let dashboardRowPadding: CGFloat = 7
 private let dashboardRowCornerRadius: CGFloat = 8
-private let settingsAccessoryColumnWidth: CGFloat = 220
-private let settingsControlCornerRadius: CGFloat = 8
-private let settingsSegmentHeight: CGFloat = 30
+let settingsAccessoryColumnWidth: CGFloat = 220
+let settingsControlCornerRadius: CGFloat = 8
+let settingsSegmentHeight: CGFloat = 30
+let settingsControlVisualHeight: CGFloat = settingsSegmentHeight + 6
+let settingsSectionTitleFontSize: CGFloat = 12.5
+let settingsSectionDetailFontSize: CGFloat = 10
+let settingsRowTitleFontSize: CGFloat = 11.5
+let settingsRowDetailFontSize: CGFloat = 9.5
+let settingsControlFontSize: CGFloat = 11
+private let settingsContentTopInset: CGFloat = 12
 private let settingsSwitchWidth: CGFloat = 56
 private let settingsShortcutControlSpacing: CGFloat = 8
 private let settingsShortcutRecorderWidth: CGFloat = 132
+private let settingsShortcutActionWidth: CGFloat = settingsAccessoryColumnWidth
+    - settingsShortcutRecorderWidth
+    - settingsShortcutControlSpacing
 private let usageTrendCardHeight: CGFloat = 214
 private let usageTrendCardSpacing: CGFloat = dashboardGridSpacing
 private let usageSevenDayMinimumCardWidth: CGFloat = 260
@@ -9188,19 +9553,8 @@ private func dashboardTabIcon(_ tab: DashboardTab) -> String {
     }
 }
 
-private func heatmapColor(level: Int) -> Color {
-    switch level {
-    case 0:
-        return WidgetPalette.surfaceTrack
-    case 1:
-        return WidgetPalette.brandSecondary.opacity(0.28)
-    case 2:
-        return WidgetPalette.brandSecondary.opacity(0.46)
-    case 3:
-        return WidgetPalette.brandSecondary.opacity(0.70)
-    default:
-        return WidgetPalette.brandSecondary.opacity(0.96)
-    }
+private func heatmapColor(level: Int, tokens: ResolvedVisualTokens) -> Color {
+    tokens.data.heatmap[max(0, min(level, tokens.data.heatmap.count - 1))].color
 }
 
 private func sourceQualityText(_ quality: UsageSourceQuality, language: WidgetLanguage) -> String {
@@ -9398,13 +9752,13 @@ private func localizedToolCategory(_ category: String, language: WidgetLanguage)
 private func taskAccentColor(_ kind: TaskColumnKind) -> Color {
     switch kind {
     case .active:
-        return WidgetPalette.statusWarning
+        return FixedVisualPalette.statusWarning
     case .pending:
-        return WidgetPalette.statusNeutral
+        return FixedVisualPalette.statusNeutral
     case .scheduled:
-        return WidgetPalette.brandSecondary
+        return FixedVisualPalette.statusScheduled
     case .done:
-        return WidgetPalette.statusSuccess
+        return FixedVisualPalette.statusSuccess
     }
 }
 
@@ -9412,13 +9766,13 @@ private func taskAccentForegroundColor(_ kind: TaskColumnKind, colorScheme: Colo
     guard colorScheme == .light else { return taskAccentColor(kind) }
     switch kind {
     case .active:
-        return WidgetPalette.statusWarningLightText
+        return FixedVisualPalette.statusWarningLightText
     case .pending:
-        return WidgetPalette.statusNeutralLightText
+        return FixedVisualPalette.statusNeutralLightText
     case .scheduled:
-        return WidgetPalette.brandSecondaryLightText
+        return FixedVisualPalette.statusScheduledLightText
     case .done:
-        return WidgetPalette.statusSuccessLightText
+        return FixedVisualPalette.statusSuccessLightText
     }
 }
 
@@ -9630,7 +9984,12 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
             "hasCredits": credits.hasCredits,
             "unlimited": credits.unlimited,
             "balance": jsonValue(credits.balance),
-            "resetCredits": jsonValue(credits.resetCredits)
+            "resetCredits": jsonValue(credits.resetCredits),
+            "resetCreditDetails": credits.resetCreditDetails.map { details in
+                details.map { detail in
+                    ["expiresAt": jsonValue(isoString(detail.expiresAt))]
+                }
+            } ?? NSNull()
         ] as [String: Any]
     }
 
@@ -9833,10 +10192,12 @@ final class MainAppWindow: NSWindow {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
     private let store = UsageStore()
-    private let settings = AppSettings()
+    private let paletteCatalog = PaletteCatalog.loadFromMainBundle()
+    private lazy var settings = AppSettings(paletteCatalog: paletteCatalog)
     private lazy var updateStore = AppUpdateStore(settings: settings)
     private var window: MainAppWindow?
     private var settingsWindow: NSWindow?
+    private var paletteLibraryWindow: NSWindow?
     private var titlebarToolbarController: NSTitlebarAccessoryViewController?
     private var statusItem: NSStatusItem?
     private var statusPopover: NSPopover?
@@ -9850,6 +10211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private let statusItemRenderer = StatusItemRenderer()
     private var lastRenderedStatusItemPresentation: StatusItemPresentation?
     private var lastRenderedStatusItemAppearanceName: NSAppearance.Name?
+    private var lastRenderedStatusItemPaletteIdentity: PaletteRenderIdentity?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -10135,15 +10497,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         if settingsWindow == nil {
             let settingsWindow = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 480, height: 620),
-                styleMask: [.titled, .closable, .miniaturizable],
+                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
             settingsWindow.title = settings.language.text("设置", "Settings")
+            settingsWindow.titleVisibility = .hidden
+            settingsWindow.titlebarAppearsTransparent = true
             settingsWindow.isReleasedWhenClosed = false
+            settingsWindow.isOpaque = false
+            settingsWindow.backgroundColor = .clear
+            settingsWindow.hasShadow = true
+            settingsWindow.isMovableByWindowBackground = true
+            settingsWindow.acceptsMouseMovedEvents = true
             settingsWindow.delegate = self
-            settingsWindow.contentView = NSHostingView(
-                rootView: SettingsPanelView(settings: settings, store: store, updateStore: updateStore)
+            settingsWindow.contentView = GlassHostingContainer(
+                rootView: SettingsPanelView(
+                    settings: settings,
+                    store: store,
+                    updateStore: updateStore,
+                    onOpenPaletteLibrary: { [weak self] in self?.openPaletteLibraryWindow() }
+                ),
+                cornerRadius: 20
             )
             settingsWindow.center()
             self.settingsWindow = settingsWindow
@@ -10155,6 +10530,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             settingsWindow.deminiaturize(nil)
         }
         settingsWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func openPaletteLibraryWindow() {
+        if paletteLibraryWindow == nil {
+            let paletteLibraryWindow = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 320),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+            paletteLibraryWindow.title = settings.language.text("配色库", "Palette Library")
+            paletteLibraryWindow.titleVisibility = .hidden
+            paletteLibraryWindow.titlebarAppearsTransparent = true
+            paletteLibraryWindow.isReleasedWhenClosed = false
+            paletteLibraryWindow.isOpaque = false
+            paletteLibraryWindow.backgroundColor = .clear
+            paletteLibraryWindow.hasShadow = true
+            paletteLibraryWindow.isMovableByWindowBackground = true
+            paletteLibraryWindow.acceptsMouseMovedEvents = true
+            paletteLibraryWindow.delegate = self
+            paletteLibraryWindow.contentMinSize = NSSize(width: 660, height: 320)
+            paletteLibraryWindow.contentView = GlassHostingContainer(
+                rootView: PaletteLibraryView(settings: settings),
+                cornerRadius: 20
+            )
+            paletteLibraryWindow.center()
+            self.paletteLibraryWindow = paletteLibraryWindow
+        }
+
+        guard let paletteLibraryWindow else { return }
+        paletteLibraryWindow.title = settings.language.text("配色库", "Palette Library")
+        if paletteLibraryWindow.isMiniaturized {
+            paletteLibraryWindow.deminiaturize(nil)
+        }
+        paletteLibraryWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -10170,6 +10581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             .receive(on: RunLoop.main)
             .sink { [weak self] language in
                 self?.settingsWindow?.title = language.text("设置", "Settings")
+                self?.paletteLibraryWindow?.title = language.text("配色库", "Palette Library")
                 self?.setupMainMenu()
                 self?.updateStatusItem()
             }
@@ -10178,6 +10590,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         settings.$themeMode
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
+                self?.updateStatusItem()
+            }
+            .store(in: &cancellables)
+
+        settings.$paletteID
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.lastRenderedStatusItemPaletteIdentity = nil
                 self?.updateStatusItem()
             }
             .store(in: &cancellables)
@@ -10395,21 +10815,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         guard let button = statusItem?.button else { return }
         let presentation = currentStatusItemPresentation()
         let appearance = button.effectiveAppearance
+        let paletteAppearance: PaletteAppearance = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+        let visualTokens = paletteCatalog.resolve(id: settings.paletteID, appearance: paletteAppearance)
 
         // Skip redundant redraws. Mutating `button.image`/`length` triggers a
         // status-bar relayout, which re-fires the `effectiveAppearance` KVO
         // observer and calls back into this method. Without this guard the icon
         // repaints in a tight feedback loop, pinning a CPU core.
         if presentation == lastRenderedStatusItemPresentation,
-           appearance.name == lastRenderedStatusItemAppearanceName {
+           appearance.name == lastRenderedStatusItemAppearanceName,
+           visualTokens.identity == lastRenderedStatusItemPaletteIdentity {
             return
         }
         lastRenderedStatusItemPresentation = presentation
         lastRenderedStatusItemAppearanceName = appearance.name
+        lastRenderedStatusItemPaletteIdentity = visualTokens.identity
 
         statusItem?.length = presentation.itemLength
         button.image = statusItemRenderer.render(
             presentation,
+            tokens: visualTokens,
             appearance: appearance
         )
         button.toolTip = presentation.tooltip
@@ -10578,6 +11003,17 @@ struct codexUMain {
             exit(StatusItemPresentationSelfTest.run() ? 0 : 1)
         }
 
+        if CommandLine.arguments.contains("--self-test-palettes") {
+            exit(PaletteCatalogSelfTest.run() ? 0 : 1)
+        }
+
+        if let previewIndex = CommandLine.arguments.firstIndex(of: "--render-palette-previews"),
+           CommandLine.arguments.indices.contains(previewIndex + 1) {
+            _ = NSApplication.shared
+            let outputURL = URL(fileURLWithPath: CommandLine.arguments[previewIndex + 1], isDirectory: true)
+            exit(PalettePreviewRenderer.renderBuiltIns(to: outputURL) ? 0 : 1)
+        }
+
         if CommandLine.arguments.contains("--self-test-particle-animation") {
             exit(QuotaParticleAnimationSelfTest.run() ? 0 : 1)
         }
@@ -10596,6 +11032,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-model-usage") {
             exit(ModelUsageSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-token-counter") {
+            exit(CodexTokenCounterNormalizerSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {

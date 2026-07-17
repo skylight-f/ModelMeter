@@ -1,6 +1,6 @@
 # Codex usage and remaining limit notes
 
-Date checked: 2026-07-13.
+Date checked: 2026-07-15.
 
 ## Official model
 
@@ -34,6 +34,8 @@ The generated schema for the installed Codex 0.144.2 runtime includes:
 - `GetAccountRateLimitsResponse`
 - `RateLimitSnapshot`
 - `RateLimitWindow`
+- `RateLimitResetCreditsSummary`
+- `RateLimitResetCredit`
 - `GetAccountTokenUsageResponse`
 - `AccountTokenUsageSummary`
 
@@ -44,6 +46,10 @@ Observed response combinations on this machine include:
 - primary: 300 minutes, secondary: 10080 minutes
 - primary: 10080 minutes, secondary: null
 - each window has `usedPercent` and `resetsAt`
+
+The same response can include the optional top-level `rateLimitResetCredits` object. Its required `availableCount` is the authoritative number of earned reset credits currently available. The optional `credits` array is detail-only: `null` means the backend returned only the count, and the backend may cap the array, so clients must not infer the count from its length. Missing `rateLimitResetCredits` means unsupported or unknown; it is not treated as zero. A present count of zero means the account supports the field but has no available reset credits.
+
+codexU reads `availableCount` and the optional `expiresAt` Unix timestamp from each returned available-credit detail row. It does not infer missing rows or expiry dates: when the backend omits or caps `credits`, the UI keeps the authoritative total and marks the unmatched expiry details as unavailable. Backend titles and descriptions are not displayed. codexU never calls `account/rateLimitResetCredit/consume`, because redeeming a credit is an account mutation and this widget is read-only.
 
 The widget therefore normalizes all returned slots before exposing quota data to the UI:
 
@@ -104,6 +110,7 @@ The JSONL stream can contain repeated cumulative token snapshots, so the parser 
 The widget displays both kinds of data separately:
 
 - Account limit remaining: from `account/rateLimits/read`
+- Available rate-limit resets: `rateLimitResetCredits.availableCount`, with per-credit expiry from optional `credits[].expiresAt`
 - Local token usage: from `threads.tokens_used`
 - Detailed token split and API-equivalent value: from local JSONL `token_count` events, with SQLite as the source of session paths and model names.
 

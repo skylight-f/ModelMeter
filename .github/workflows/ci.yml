@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make build
+      - name: Palette package and rendering tests
+        run: ./scripts/test-palettes.sh
+      - name: Menu bar rendering tests
+        run: ./scripts/test-status-item.sh
+      - name: Particle animation tests
+        run: ./scripts/test-particle-animation.sh
+      - name: Rate limit tests
+        run: ./scripts/test-rate-limits.sh
+      - name: Statistics time zone tests
+        run: ./scripts/test-statistics-time-zone.sh

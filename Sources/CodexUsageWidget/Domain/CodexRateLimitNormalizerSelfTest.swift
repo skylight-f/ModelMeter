@@ -10,6 +10,51 @@ enum CodexRateLimitNormalizerSelfTest {
             }
         }
 
+        expect(
+            CodexResetCreditNormalizer.normalizeAvailableCount(nil) == nil,
+            "missing reset-credit count should remain unsupported"
+        )
+        expect(
+            CodexResetCreditNormalizer.normalizeAvailableCount(-1) == nil,
+            "negative reset-credit count should be rejected"
+        )
+        expect(
+            CodexResetCreditNormalizer.normalizeAvailableCount(0) == 0,
+            "zero reset-credit count should remain distinct from unsupported"
+        )
+
+        let resetDetails = (0..<4).map { index in
+            ResetCreditDetail(
+                id: "reset-\(index)",
+                expiresAt: Date(timeIntervalSince1970: Double(1_800_000_000 + index))
+            )
+        }
+        let expandedResetDisclosure = ResetCreditDisclosure(
+            totalCount: 5,
+            details: resetDetails
+        )
+        expect(
+            expandedResetDisclosure.inlineDetails.count == 2,
+            "reset-credit inline disclosure should show at most two details"
+        )
+        expect(
+            expandedResetDisclosure.fullDetails.count == 4
+                && expandedResetDisclosure.hiddenCount == 3
+                && expandedResetDisclosure.missingDetailCount == 1
+                && expandedResetDisclosure.showsExpandedTooltip,
+            "reset-credit hover disclosure should retain all returned and missing details"
+        )
+        let compactResetDisclosure = ResetCreditDisclosure(
+            totalCount: 2,
+            details: Array(resetDetails.prefix(1))
+        )
+        expect(
+            compactResetDisclosure.inlineDetails.count == 1
+                && compactResetDisclosure.missingDetailCount == 1
+                && !compactResetDisclosure.showsExpandedTooltip,
+            "two or fewer reset credits should stay fully inline without a hover tooltip"
+        )
+
         let fiveHour = window(usedPercent: 12, durationMins: 300)
         let sevenDay = window(usedPercent: 34, durationMins: 10_080)
 

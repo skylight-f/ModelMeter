@@ -33,7 +33,7 @@ else
 CODESIGN_FLAGS := --force --deep --options runtime --timestamp --sign "$(SIGN_IDENTITY)" $(CODESIGN_EXTRA_FLAGS)
 endif
 
-.PHONY: build run probe test-rate-limits test-statistics-time-zone test-model-usage test-particle-animation test-macos-compatibility install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
+.PHONY: build run probe test-rate-limits test-statistics-time-zone test-model-usage test-token-counter test-particle-animation test-palettes test-macos-compatibility install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
 
 build:
 	rm -rf "$(APP_DIR)"
@@ -41,6 +41,7 @@ build:
 	cp Resources/Info.plist "$(APP_DIR)/Contents/Info.plist"
 	cp "$(APP_ICON)" "$(RESOURCES_DIR)/"
 	cp Resources/*.png "$(RESOURCES_DIR)/"
+	cp -R Resources/Palettes "$(RESOURCES_DIR)/Palettes"
 	/usr/bin/xattr -dr com.apple.quarantine "$(APP_DIR)" 2>/dev/null || true
 	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SWIFTC_FEATURE_FLAGS) $(SOURCES) \
 		-o "$(MACOS_DIR)/$(EXECUTABLE_NAME)" \
@@ -67,11 +68,17 @@ test-statistics-time-zone:
 test-model-usage:
 	./scripts/test-model-usage.sh
 
+test-token-counter: build
+	"$(MACOS_DIR)/$(EXECUTABLE_NAME)" --self-test-token-counter
+
 test-macos-compatibility:
 	./scripts/test-macos-compatibility.sh
 
 test-particle-animation:
 	./scripts/test-particle-animation.sh
+
+test-palettes:
+	./scripts/test-palettes.sh
 
 install: build
 	rm -rf "/Applications/$(APP_NAME).app"

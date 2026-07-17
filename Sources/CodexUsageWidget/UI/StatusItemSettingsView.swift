@@ -1,13 +1,10 @@
 import SwiftUI
 
-private let statusItemSettingsAccessoryWidth: CGFloat = 220
-private let statusItemSettingsControlHeight: CGFloat = 30
-private let statusItemSettingsCornerRadius: CGFloat = 8
-
 struct StatusItemSettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
     @State private var preferenceError: StatusItemPreferenceError?
+    @Environment(\.visualTokens) private var visualTokens
 
     private var language: WidgetLanguage { settings.language }
     private var preferences: StatusItemPreferences { settings.statusItemPreferences }
@@ -29,7 +26,7 @@ struct StatusItemSettingsView: View {
                     SettingsSegmentOption(value: .classic, title: language.text("经典", "Classic")),
                     SettingsSegmentOption(value: .rich, title: language.text("丰富", "Rich"))
                 ],
-                width: statusItemSettingsAccessoryWidth
+                width: settingsAccessoryColumnWidth
             )
         }
 
@@ -43,7 +40,7 @@ struct StatusItemSettingsView: View {
                     SettingsSegmentOption(value: .used, title: language.text("已用量", "Used")),
                     SettingsSegmentOption(value: .remaining, title: language.text("剩余量", "Remaining"))
                 ],
-                width: statusItemSettingsAccessoryWidth
+                width: settingsAccessoryColumnWidth
             )
         }
 
@@ -81,12 +78,12 @@ struct StatusItemSettingsView: View {
                 preferenceError = nil
             } label: {
                 Label(language.text("恢复默认", "Restore"), systemImage: "arrow.counterclockwise")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(WidgetPalette.brandPrimary)
-                    .frame(width: statusItemSettingsAccessoryWidth, height: statusItemSettingsControlHeight)
+                    .font(.system(size: settingsControlFontSize, weight: .semibold))
+                    .foregroundStyle(visualTokens.selection.foreground.color)
+                    .frame(width: settingsAccessoryColumnWidth, height: settingsControlVisualHeight)
                     .background(
-                        RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
-                            .fill(WidgetPalette.brandPrimary.opacity(0.10))
+                        RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                            .fill(visualTokens.selection.fill.color)
                     )
             }
             .buttonStyle(.plain)
@@ -169,6 +166,7 @@ private struct StatusItemPreviewRow: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.visualTokens) private var visualTokens
 
     private let builder = StatusItemPresentationBuilder()
     private let renderer = StatusItemRenderer()
@@ -179,16 +177,16 @@ private struct StatusItemPreviewRow: View {
             detail: settings.language.text("与菜单栏使用同一套绘制器", "Uses the same renderer as the menu bar")
         ) {
             ZStack {
-                RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
                     .fill(previewBackground)
-                Image(nsImage: renderer.render(presentation, appearance: previewAppearance))
+                Image(nsImage: renderer.render(presentation, tokens: visualTokens, appearance: previewAppearance))
                     .interpolation(.high)
                     .frame(
                         width: presentation.imageSize.width,
                         height: presentation.imageSize.height
                     )
             }
-            .frame(width: statusItemSettingsAccessoryWidth, height: 38)
+            .frame(width: settingsAccessoryColumnWidth, height: settingsControlVisualHeight)
             .accessibilityLabel(AppBrand.displayName)
             .accessibilityValue(presentation.accessibilityValue)
         }
@@ -222,6 +220,7 @@ private struct StatusItemPreviewRow: View {
 
 private struct StatusItemMetricMultiSelectControl: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.visualTokens) private var visualTokens
     let selectedMetrics: Set<StatusItemMetric>
     let language: WidgetLanguage
     let onToggle: (StatusItemMetric) -> Void
@@ -233,13 +232,13 @@ private struct StatusItemMetricMultiSelectControl: View {
                     onToggle(metric)
                 } label: {
                     Text(label(for: metric))
-                        .font(.system(size: 11, weight: isSelected(metric) ? .semibold : .medium))
+                        .font(.system(size: settingsControlFontSize, weight: isSelected(metric) ? .semibold : .medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
                         .foregroundStyle(isSelected(metric) ? Color.white : Color.secondary)
-                        .frame(maxWidth: .infinity, minHeight: statusItemSettingsControlHeight)
+                        .frame(maxWidth: .infinity, minHeight: settingsSegmentHeight)
                         .background(
-                            RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
+                            RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
                                 .fill(isSelected(metric) ? selectionColor(for: metric) : Color.clear)
                         )
                         .contentShape(Rectangle())
@@ -254,23 +253,23 @@ private struct StatusItemMetricMultiSelectControl: View {
 
                 if index < StatusItemMetric.allCases.count - 1 {
                     Rectangle()
-                        .fill(WidgetPalette.controlStroke(colorScheme))
+                        .fill(FixedVisualPalette.controlStroke(colorScheme))
                         .frame(width: 1, height: 16)
                         .padding(.horizontal, 1)
                 }
             }
         }
         .padding(3)
-        .frame(width: statusItemSettingsAccessoryWidth, height: statusItemSettingsControlHeight + 6)
+        .frame(width: settingsAccessoryColumnWidth, height: settingsControlVisualHeight)
         .background(
-            RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
-                .fill(WidgetPalette.controlFill(colorScheme))
+            RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                .fill(FixedVisualPalette.controlFill(colorScheme))
                 .overlay(
-                    RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
-                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                    RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                        .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                 )
         )
-        .clipShape(RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous))
     }
 
     private func isSelected(_ metric: StatusItemMetric) -> Bool {
@@ -291,11 +290,11 @@ private struct StatusItemMetricMultiSelectControl: View {
     private func selectionColor(for metric: StatusItemMetric) -> Color {
         switch metric {
         case .fiveHourQuota:
-            return WidgetPalette.brandPrimary
+            return visualTokens.quota.primary.end.color
         case .sevenDayQuota:
-            return WidgetPalette.brandSecondary
+            return visualTokens.quota.secondary.end.color
         case .todayTokens:
-            return WidgetPalette.brandPrimaryStrong
+            return visualTokens.accent.primaryStrong.color
         }
     }
 }
