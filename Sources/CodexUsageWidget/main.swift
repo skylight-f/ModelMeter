@@ -1851,35 +1851,45 @@ final class CodexUsageReader {
         var toolUsage: [String: ToolUsageAccumulator] = [:]
         var skillUsage: [String: SkillUsageAccumulator] = [:]
 
-        let parsedSessions: [(source: SessionUsageSource, entry: SessionUsageCacheEntry)] = sources.compactMap { source in
+        let sourceByThreadId = Dictionary(
+            uniqueKeysWithValues: sources.map { ($0.threadId, $0) }
+        )
+        var inheritedPrefixLengthByThreadId: [String: Int] = [:]
+        var forkBaselineTokensByThreadId: [String: Int64] = [:]
+
+        for source in sources {
             guard let entry = cachedSessionUsage(
                 source: source,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter
-            ) else { return nil }
-            return (source, entry)
-        }
-        let entryByThreadId = Dictionary(
-            uniqueKeysWithValues: parsedSessions.map { ($0.source.threadId, $0.entry) }
-        )
-        var forkBaselineTokensByThreadId: [String: Int64] = [:]
+            ),
+            let parentId = entry.forkedFromId,
+            let parentSource = sourceByThreadId[parentId],
+            let parentEntry = cachedSessionUsage(
+                source: parentSource,
+                fractionalFormatter: fractionalFormatter,
+                plainFormatter: plainFormatter
+            ) else { continue }
 
-        for (source, entry) in parsedSessions {
-            let inheritedPrefixLength: Int
-            if let parentId = entry.forkedFromId,
-               let parentEntry = entryByThreadId[parentId] {
-                inheritedPrefixLength = CodexForkUsageDeduplicator.inheritedPrefixLength(
-                    child: entry.deltas.map(\.eventIdentity),
-                    parent: parentEntry.deltas.map(\.eventIdentity)
-                )
-            } else {
-                inheritedPrefixLength = 0
-            }
+            let inheritedPrefixLength = CodexForkUsageDeduplicator.inheritedPrefixLength(
+                child: entry.deltas.map(\.eventIdentity),
+                parent: parentEntry.deltas.map(\.eventIdentity)
+            )
             if inheritedPrefixLength > 0 {
+                inheritedPrefixLengthByThreadId[source.threadId] = inheritedPrefixLength
                 forkBaselineTokensByThreadId[source.threadId] = entry.deltas
                     .prefix(inheritedPrefixLength)
                     .reduce(0) { $0 + $1.tokens.totalTokens }
             }
+        }
+
+        for source in sources {
+            guard let entry = cachedSessionUsage(
+                source: source,
+                fractionalFormatter: fractionalFormatter,
+                plainFormatter: plainFormatter
+            ) else { continue }
+            let inheritedPrefixLength = inheritedPrefixLengthByThreadId[source.threadId] ?? 0
             let effectiveDeltas = entry.deltas.dropFirst(inheritedPrefixLength)
 
             if entry.hasTokenEvents {

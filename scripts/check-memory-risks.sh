@@ -90,6 +90,9 @@ require_literal Sources/CodexUsageWidget/main.swift \
   'private static let maximumPersistentCacheBytes' '持久缓存读取缺少字节上限'
 require_literal Sources/CodexUsageWidget/main.swift \
   'releaseSessionUsageWorkingSet()' '完成聚合后没有释放 session 工作集'
+forbid_regex 'let parsedSessions:.*SessionUsageCacheEntry' '发现全量保留 SessionUsageCacheEntry；session 聚合必须依赖有界缓存并逐项处理'
+require_literal Sources/CodexUsageWidget/main.swift \
+  'let sourceByThreadId = Dictionary(' '分支去重缺少轻量 source 索引，可能退化为全量保留 session entry'
 require_literal Sources/CodexUsageWidget/Services/PerformanceMonitor.swift \
   'summary.samples.removeFirst' '性能操作样本缺少淘汰逻辑'
 require_literal Sources/CodexUsageWidget/Services/PerformanceMonitor.swift \
@@ -134,6 +137,7 @@ parent_traversal_count="$(count_regex 'deletingLastPathComponent\(\)')"
   printf -- '- 重复 Timer 强引用：已扫描\n'
   printf -- '- app-server 缓冲、请求并发与超时上限：已扫描\n'
   printf -- '- session/性能缓存上限与工作集释放：已扫描\n'
+  printf -- '- session 聚合全量 entry 保留：已扫描\n'
   printf -- '- 文件系统父路径上溯终止与循环去重：已扫描\n'
   printf -- '- Notification/KVO/Event monitor 清理路径：已扫描\n\n'
   printf '## 全局风险面清单\n\n'
