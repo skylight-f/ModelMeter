@@ -35,6 +35,30 @@ git fetch origin --tags
 
 3. Verify that the target `v<version>` tag and GitHub Release do not already exist unless the task is explicitly to repair or replace them.
 
+## Mandatory Global Memory-Risk Gate
+
+Run this gate before changing release metadata, packaging, committing, tagging, pushing, or creating a GitHub Release:
+
+```sh
+make memory-risk-check
+sed -n '1,240p' build/memory-risk/report.md
+```
+
+The scan covers the entire production source tree, not only the release diff. Treat any non-zero exit as a hard release blocker. There is no override flag: fix or explicitly bound the risky lifecycle before continuing.
+
+Do not accept the PASS line without reviewing the generated global inventory. Inspect every reported risk category and the related release diff, with particular attention to:
+
+- `Process` and `Pipe`: bounded stdout reads with partial-response semantics for long-lived pipes, drained or redirected stderr, EOF handling, timeout, termination, and forced cleanup.
+- `Timer`, notification/KVO observers, event monitors, and Combine subscriptions: weak captures and matching invalidation/removal/cancellation.
+- buffers, caches, samples, pending request maps, and static mutable collections: byte/count limits, eviction, timeout, and working-set release.
+- `Data(contentsOf:)` and transcript/session readers: trusted input boundaries, file-size checks, streaming behavior, and oversized-record handling.
+- recursive and parent-path traversal: explicit root/base termination, visited-node/path cycle guards, and regression coverage for platform-specific Foundation behavior.
+
+If a reviewer finds a plausible unbounded growth path that the script does not catch, stop the release, fix the risk, and extend `scripts/check-memory-risks.sh` so the same class of regression becomes automatically blocking.
+
+`make release-package` and `make release-check` rerun this gate. Do not bypass the repository wrappers by calling packaging scripts or lower-level release targets directly.
+The release package must also run the Claude Skill path resolver self-test so the macOS 13 root-parent regression is exercised before artifacts are produced.
+
 ## Versioning
 
 Use these conventions unless the user specifies otherwise:
@@ -82,7 +106,7 @@ Run the deterministic repository wrapper:
 make release-package
 ```
 
-It runs the self-tests, builds both architectures, checks the DMGs and checksums, mounts both images, verifies Mach-O architecture, and verifies codesign. Do not manually repeat those steps unless debugging the wrapper.
+It reruns the global memory-risk gate, runs the self-tests, builds both architectures, checks the DMGs and checksums, mounts both images, verifies Mach-O architecture, and verifies codesign. Do not manually repeat those steps unless debugging the wrapper.
 
 Expect these assets for `<version>`:
 
@@ -184,3 +208,4 @@ Report these facts to the user:
 - Local stale tag: delete and recreate only the local tag after confirming it points to an old pre-rebase commit.
 - Remote tag or release conflict: stop and inspect with `git ls-remote --tags origin v<version>` and `gh release view v<version>`. Do not overwrite remote state without explicit user approval.
 - Build failure: fix the underlying source or packaging issue, rerun `make release-all`, then regenerate checksums before publishing.
+- Memory-risk gate failure: stop before versioning or packaging, inspect `build/memory-risk/report.md`, fix the unbounded lifecycle, extend the gate when needed, and rerun `make memory-risk-check`. Never suppress or bypass the failure.

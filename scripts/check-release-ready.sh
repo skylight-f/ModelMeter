@@ -10,6 +10,7 @@ TAG="v${VERSION}"
 PLIST_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)"
 NOTES="docs/release-notes-v${VERSION}.md"
 
+make memory-risk-check
 [[ "$VERSION" == "$PLIST_VERSION" ]] || { echo "Info.plist version mismatch" >&2; exit 1; }
 [[ -f "$NOTES" ]] || { echo "Missing release notes: $NOTES" >&2; exit 1; }
 grep -q "## ${VERSION} -" CHANGELOG.md || { echo "CHANGELOG is missing $VERSION" >&2; exit 1; }

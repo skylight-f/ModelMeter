@@ -24,6 +24,60 @@ struct CodexTokenCounterSample: Equatable {
     }
 }
 
+struct CodexTokenEventIdentity: Codable, Equatable {
+    private let primaryHash: UInt64
+    private let secondaryHash: UInt64
+
+    init(cumulative: CodexTokenCounterSample?, lastUsage: CodexTokenCounterSample?) {
+        var primary: UInt64 = 0xcbf29ce484222325
+        var secondary: UInt64 = 0x9e3779b97f4a7c15
+        for value in Self.values(from: cumulative) + Self.values(from: lastUsage) {
+            Self.mix(value == nil ? 0 : 1, primary: &primary, secondary: &secondary)
+            if let value {
+                Self.mix(UInt64(bitPattern: value), primary: &primary, secondary: &secondary)
+            }
+        }
+        primaryHash = primary
+        secondaryHash = secondary
+    }
+
+    private static func values(from sample: CodexTokenCounterSample?) -> [Int64?] {
+        guard let sample else { return [nil, nil, nil, nil, nil] }
+        return [
+            sample.inputTokens,
+            sample.cachedInputTokens,
+            sample.outputTokens,
+            sample.reasoningOutputTokens,
+            sample.totalTokens
+        ]
+    }
+
+    private static func mix(
+        _ value: UInt64,
+        primary: inout UInt64,
+        secondary: inout UInt64
+    ) {
+        primary = (primary ^ value) &* 0x100000001b3
+        secondary ^= value &+ 0x9e3779b97f4a7c15
+        secondary = (secondary << 13) | (secondary >> 51)
+        secondary &*= 0xbf58476d1ce4e5b9
+    }
+}
+
+enum CodexForkUsageDeduplicator {
+    static func inheritedPrefixLength(
+        child: [CodexTokenEventIdentity],
+        parent: [CodexTokenEventIdentity]
+    ) -> Int {
+        var index = 0
+        let upperBound = min(child.count, parent.count)
+        while index < upperBound, child[index] == parent[index] {
+            index += 1
+        }
+        return index
+    }
+}
+
 struct CodexTokenCounterState {
     var cumulative: TokenBreakdown?
 }
@@ -253,6 +307,37 @@ enum CodexTokenCounterNormalizerSelfTest {
         expect(
             !CodexDetailedUsageSanity.isSuspicious(2_000_000_000, comparedWith: 0),
             "missing SQLite data must not suppress detailed usage"
+        )
+
+        func identity(total: Int64, last: Int64) -> CodexTokenEventIdentity {
+            CodexTokenEventIdentity(
+                cumulative: sample(input: total, total: total),
+                lastUsage: sample(input: last, total: last)
+            )
+        }
+
+        let parentEvents = [
+            identity(total: 100, last: 100),
+            identity(total: 160, last: 60),
+            identity(total: 240, last: 80),
+            identity(total: 300, last: 60)
+        ]
+        let forkEvents = [
+            identity(total: 100, last: 100),
+            identity(total: 160, last: 60),
+            identity(total: 240, last: 80),
+            identity(total: 275, last: 35)
+        ]
+        expect(
+            CodexForkUsageDeduplicator.inheritedPrefixLength(child: forkEvents, parent: parentEvents) == 3,
+            "forked sessions should exclude the token event prefix copied from their parent"
+        )
+        expect(
+            CodexForkUsageDeduplicator.inheritedPrefixLength(
+                child: [identity(total: 90, last: 90)],
+                parent: parentEvents
+            ) == 0,
+            "unrelated sessions must not lose token events"
         )
 
         if failures.isEmpty {

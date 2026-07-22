@@ -150,20 +150,25 @@ struct ClaudeSkillPathResolver {
         let start = URL(fileURLWithPath: projectPath, isDirectory: true).standardizedFileURL
         var chain: [URL] = []
         var current = start
+        var visitedPaths = Set<String>()
 
-        while true {
+        while visitedPaths.insert(current.path).inserted {
             chain.append(current)
             if fileManager.fileExists(atPath: current.appendingPathComponent(".git").path) {
                 return chain
             }
             let parent = current.deletingLastPathComponent()
-            if parent.path == current.path { break }
+            if Self.shouldStopAscending(currentPath: current.path, parentPath: parent.path) { break }
             current = parent
         }
 
         // Without a discoverable repository root, Claude's historical project boundary
         // cannot be reconstructed safely. Limit fallback to the recorded cwd.
         return [start]
+    }
+
+    fileprivate static func shouldStopAscending(currentPath: String, parentPath: String) -> Bool {
+        currentPath == "/" || parentPath == currentPath
     }
 
     private func readableResolutions(_ candidates: [URL]) -> [ClaudeSkillFileResolution] {
@@ -266,6 +271,14 @@ enum ClaudeSkillPathResolverSelfTest {
         expect(
             resolver.resolve(name: "missing", projectPath: project.path, homeDirectory: home) == nil,
             "missing skill should remain unresolved"
+        )
+        expect(
+            ClaudeSkillPathResolver.shouldStopAscending(currentPath: "/", parentPath: "/.."),
+            "filesystem root traversal should stop even when Foundation returns /.. as its parent"
+        )
+        expect(
+            resolver.resolve(name: "missing", projectPath: "/", homeDirectory: home) == nil,
+            "missing skill lookup from the filesystem root should terminate"
         )
 
         if failures.isEmpty {

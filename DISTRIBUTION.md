@@ -70,10 +70,17 @@ This creates the DMG and a `SHA-256` checksum file next to it.
 For a formal release, prefer the repository wrappers instead of manually repeating build and verification commands:
 
 ```sh
+make memory-risk-check
+sed -n '1,240p' build/memory-risk/report.md
+```
+
+This mandatory gate scans the full production source tree for unbounded stream reads, app-server pipe reads that wait for a full fixed-size buffer instead of returning partial responses, process-pipe lifecycle errors, repeating callback retention, missing observer cleanup, unbounded caches or pending-request collections, and parent-path traversal without explicit root termination or cycle guards. Review the generated inventory before continuing. A failure blocks all later release work and must not be bypassed.
+
+```sh
 make release-package
 ```
 
-This runs the self-tests, builds both architectures, verifies both DMGs and checksums, mounts each image, checks the embedded Mach-O architecture, and verifies the app signature.
+This reruns the memory-risk gate, runs the self-tests including the macOS 13 Claude Skill root-parent regression, builds both architectures, verifies both DMGs and checksums, mounts each image, checks the embedded Mach-O architecture, and verifies the app signature.
 
 After copying the generated SHA-256 values into `docs/release-notes-v<version>.md`, run:
 
@@ -81,7 +88,7 @@ After copying the generated SHA-256 values into `docs/release-notes-v<version>.m
 make release-check
 ```
 
-This validates version/document consistency, release assets, checksums, release notes, and tag/release conflicts. It intentionally does not tag, push, or publish; those external writes remain explicit steps documented in `AGENTS.md` and `.agents/skills/codexu-release/SKILL.md`.
+This reruns the memory-risk gate and validates version/document consistency, release assets, checksums, release notes, and tag/release conflicts. It intentionally does not tag, push, or publish; those external writes remain explicit steps documented in `AGENTS.md` and `.agents/skills/codexu-release/SKILL.md`.
 
 ## Developer ID signed build
 

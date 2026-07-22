@@ -157,19 +157,13 @@ private final class ClaudeCodeTranscriptReader {
         }
         defer { try? handle.close() }
 
-        let data = handle.readDataToEndOfFile()
-        guard let text = String(data: data, encoding: .utf8) else {
-            return summary
-        }
-
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            let line = String(rawLine)
+        func parseLine(_ lineData: Data) {
+            guard let line = String(data: lineData, encoding: .utf8) else { return }
             guard line.contains("\"usage\"") || line.contains("\"tool_use\"") || line.contains("attribution") else {
-                continue
+                return
             }
-            guard let data = line.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                continue
+            guard let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                return
             }
 
             let message = object["message"] as? [String: Any]
@@ -194,14 +188,14 @@ private final class ClaudeCodeTranscriptReader {
             guard let usage = message?["usage"] as? [String: Any],
                   let tokens = parseUsage(usage),
                   !tokens.isZero else {
-                continue
+                return
             }
 
             let messageId = claudeStringValue(message?["id"])
                 ?? claudeStringValue(object["uuid"])
                 ?? claudeStringValue(object["id"])
             if let messageId, seenMessageIds.contains(messageId) {
-                continue
+                return
             }
             if let messageId {
                 seenMessageIds.insert(messageId)
@@ -215,6 +209,31 @@ private final class ClaudeCodeTranscriptReader {
                 projectPath: projectPath,
                 sessionId: sessionId
             ))
+        }
+
+        let maximumLineBytes = 4 * 1_024 * 1_024
+        var buffer = Data()
+        var droppingOversizedLine = false
+        while true {
+            let chunk = try? handle.read(upToCount: 64 * 1_024)
+            guard let chunk, !chunk.isEmpty else { break }
+            buffer.append(chunk)
+
+            while let newline = buffer.firstIndex(of: 10) {
+                let lineData = buffer.subdata(in: buffer.startIndex..<newline)
+                buffer.removeSubrange(buffer.startIndex...newline)
+                if !droppingOversizedLine, lineData.count <= maximumLineBytes, !lineData.isEmpty {
+                    parseLine(lineData)
+                }
+                droppingOversizedLine = false
+            }
+            if buffer.count > maximumLineBytes {
+                buffer.removeAll(keepingCapacity: false)
+                droppingOversizedLine = true
+            }
+        }
+        if !droppingOversizedLine, !buffer.isEmpty, buffer.count <= maximumLineBytes {
+            parseLine(buffer)
         }
 
         return summary

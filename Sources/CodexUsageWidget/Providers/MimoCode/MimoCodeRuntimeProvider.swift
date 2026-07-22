@@ -883,18 +883,51 @@ private final class MimoCodeLocalReader {
         process.executableURL = sqlite
         process.arguments = ["-json", database.path, query]
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
         } catch {
             return []
         }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
+        guard let data = readBoundedProcessOutput(
+            output.fileHandleForReading,
+            process: process,
+            maximumBytes: 32 * 1_024 * 1_024
+        ) else {
+            return []
+        }
         process.waitUntilExit()
         guard process.terminationStatus == 0,
               let objects = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return [] }
         return objects
+    }
+
+    private func readBoundedProcessOutput(
+        _ handle: FileHandle,
+        process: Process,
+        maximumBytes: Int
+    ) -> Data? {
+        defer { try? handle.close() }
+        var result = Data()
+        while true {
+            let chunk: Data
+            do {
+                guard let next = try handle.read(upToCount: 64 * 1_024),
+                      !next.isEmpty else { break }
+                chunk = next
+            } catch {
+                if process.isRunning { process.terminate() }
+                return nil
+            }
+            guard chunk.count <= maximumBytes,
+                  result.count <= maximumBytes - chunk.count else {
+                if process.isRunning { process.terminate() }
+                return nil
+            }
+            result.append(chunk)
+        }
+        return result
     }
 }
 

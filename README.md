@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **建议升级到 v1.1.1 或更高版本。** v1.1.1 带来源感知的今日任务分类与下次运行时间，新增 Codex Team 月额度兼容、Claude Code Skill 路径定位和可调整主窗口，并强化本地性能与阶段验收门禁。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
+> **建议升级到 v1.1.5 或更高版本。** v1.1.5 修复从已有 Codex 对话创建分支后，继承的 token 历史被重复计入累计、今日和近 7 日用量的问题；分支现在只统计创建后的新增用量。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
 [产品官网](https://shanggqm.github.io/codexU-site/) · [下载最新版本](https://github.com/shanggqm/codexU/releases/latest) · [English](README.en.md)
 
@@ -163,10 +163,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/AgentDesk-1.1.1-mac-arm64.dmg
-dist/AgentDesk-1.1.1-mac-arm64.dmg.sha256
-dist/AgentDesk-1.1.1-mac-x86_64.dmg
-dist/AgentDesk-1.1.1-mac-x86_64.dmg.sha256
+dist/AgentDesk-1.1.5-mac-arm64.dmg
+dist/AgentDesk-1.1.5-mac-arm64.dmg.sha256
+dist/AgentDesk-1.1.5-mac-x86_64.dmg
+dist/AgentDesk-1.1.5-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
