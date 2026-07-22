@@ -5530,13 +5530,12 @@ struct DualQuotaRing: View {
                 }
             }
 
-            VStack {
-                HStack {
-                    Text(language.text("用量", "Usage"))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
+            VStack(spacing: 0) {
+                OverviewVisualHeader(
+                    title: language.text("用量", "Usage"),
+                    systemName: nil,
+                    badge: nil
+                )
                 Spacer(minLength: 0)
             }
             .allowsHitTesting(false)

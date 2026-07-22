@@ -1,6 +1,42 @@
 import AppKit
 import SwiftUI
 
+struct OverviewVisualHeader: View {
+    @Environment(\.visualTokens) private var visualTokens
+    let title: String
+    let systemName: String?
+    let badge: String?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 4) {
+            Group {
+                if let systemName {
+                    Label(title, systemImage: systemName)
+                } else {
+                    Text(title)
+                }
+            }
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.secondary)
+
+            Spacer(minLength: 2)
+
+            if let badge {
+                Text(badge)
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(visualTokens.accent.primary.color)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(visualTokens.accent.primary.color.opacity(0.12))
+                    )
+            }
+        }
+        .frame(height: 16, alignment: .center)
+    }
+}
+
 struct LeadershipPreviewFixture: Equatable {
     let level: Int
 
@@ -19,7 +55,6 @@ struct LeadershipPreviewFixture: Equatable {
 
 struct LeadershipCommandRadiusButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.visualTokens) private var visualTokens
     let snapshot: LeadershipDashboardSnapshot
     let previewLevel: Int?
     let language: WidgetLanguage
@@ -48,22 +83,12 @@ struct LeadershipCommandRadiusButton: View {
                         plaqueWidth: 95
                     )
 
-                    VStack {
-                        HStack(alignment: .center, spacing: 4) {
-                            Label(language.text("AI 领导力", "AI Leadership"), systemImage: "scope")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                            Spacer(minLength: 2)
-                            Text("28D")
-                                .font(.system(size: 8, weight: .bold, design: .rounded))
-                                .foregroundStyle(visualTokens.accent.primary.color)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(visualTokens.accent.primary.color.opacity(0.12))
-                                )
-                        }
+                    VStack(spacing: 0) {
+                        OverviewVisualHeader(
+                            title: language.text("AI 领导力", "AI Leadership"),
+                            systemName: "scope",
+                            badge: "28D"
+                        )
                         Spacer()
                     }
                 }
