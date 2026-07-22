@@ -3783,7 +3783,6 @@ struct UsageWidgetView: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var selectedDashboardTab: DashboardTab = .tasks
     @State private var focusedThreadID: String?
-    @State private var leadershipPreviewLevel: Int?
 
     static let widgetDefaultWidth: CGFloat = 820
     static let widgetMinWidth: CGFloat = 820
@@ -3939,7 +3938,6 @@ struct UsageWidgetView: View {
         HStack(alignment: .top, spacing: 14) {
             LeadershipCommandRadiusButton(
                 snapshot: store.multiRuntimeSnapshot.leadership,
-                previewLevel: leadershipPreviewLevel,
                 language: language,
                 visualEnergyMode: store.visualEnergyMode
             ) {
@@ -4032,8 +4030,7 @@ struct UsageWidgetView: View {
         case .leadership:
             LeadershipDashboardPanel(
                 snapshot: store.multiRuntimeSnapshot.leadership,
-                language: language,
-                previewLevel: $leadershipPreviewLevel
+                language: language
             )
         case .usage:
             UsageTrendPanel(

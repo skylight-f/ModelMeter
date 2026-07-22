@@ -1,9 +1,13 @@
+import Darwin
 import Foundation
 
 final class LeadershipDataReader {
     private let fileManager = FileManager.default
     private let cacheVersion = 1
     private let maximumCacheEntries = 2_048
+    private let maximumCacheBytes: Int64 = 64 * 1_024 * 1_024
+    private let maximumSQLiteOutputBytes = 32 * 1_024 * 1_024
+    private let maximumSQLiteReadChunkBytes = 64 * 1_024
 
     func load(context: RuntimeLoadContext) -> LeadershipDashboardSnapshot {
         let earliestDay = context.statistics.calendar.date(
@@ -243,10 +247,14 @@ final class LeadershipDataReader {
         process.executableURL = URL(fileURLWithPath: sqlitePath)
         process.arguments = ["-readonly", "-json", databasePath, query]
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            let data = output.fileHandleForReading.readDataToEndOfFile()
+            guard let data = readBoundedProcessOutput(
+                output.fileHandleForReading,
+                process: process,
+                maximumBytes: maximumSQLiteOutputBytes
+            ) else { return [] }
             process.waitUntilExit()
             guard process.terminationStatus == 0,
                   let value = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
@@ -254,6 +262,52 @@ final class LeadershipDataReader {
             return value
         } catch {
             return []
+        }
+    }
+
+    private func readBoundedProcessOutput(
+        _ handle: FileHandle,
+        process: Process,
+        maximumBytes: Int
+    ) -> Data? {
+        guard let descriptor = try? POSIXPipeReader.duplicateDescriptor(for: handle) else {
+            terminate(process)
+            return nil
+        }
+        defer {
+            Darwin.close(descriptor)
+            try? handle.close()
+        }
+
+        var result = Data()
+        while true {
+            let chunk: Data
+            do {
+                guard let next = try POSIXPipeReader.readChunk(
+                    from: descriptor,
+                    maximumBytes: maximumSQLiteReadChunkBytes
+                ) else { break }
+                chunk = next
+            } catch {
+                terminate(process)
+                return nil
+            }
+            guard chunk.count <= maximumBytes,
+                  result.count <= maximumBytes - chunk.count else {
+                terminate(process)
+                return nil
+            }
+            result.append(chunk)
+        }
+        return result
+    }
+
+    private func terminate(_ process: Process) {
+        guard process.isRunning else { return }
+        let pid = process.processIdentifier
+        process.terminate()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
+            if process.isRunning { Darwin.kill(pid, SIGKILL) }
         }
     }
 
@@ -390,7 +444,9 @@ final class LeadershipDataReader {
 
     private func readCache(context: RuntimeLoadContext) -> LeadershipSourceCache {
         let url = cacheURL(context: context)
-        guard let data = try? Data(contentsOf: url),
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              Int64(values.fileSize ?? 0) <= maximumCacheBytes,
+              let data = try? Data(contentsOf: url),
               let cache = try? JSONDecoder().decode(LeadershipSourceCache.self, from: data),
               cache.version == cacheVersion
         else { return LeadershipSourceCache(version: cacheVersion, entries: [:]) }
@@ -406,7 +462,9 @@ final class LeadershipDataReader {
             )
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
-            try encoder.encode(cache).write(to: url, options: .atomic)
+            let data = try encoder.encode(cache)
+            guard Int64(data.count) <= maximumCacheBytes else { return }
+            try data.write(to: url, options: .atomic)
         } catch {}
     }
 

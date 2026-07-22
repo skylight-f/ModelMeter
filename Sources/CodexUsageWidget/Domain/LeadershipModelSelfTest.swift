@@ -22,13 +22,23 @@ enum LeadershipModelSelfTest {
         )?.score
 
         let titleCases = [
-            (19, "AI 使用者"), (20, "AI 协作者"),
-            (34, "AI 协作者"), (35, "Agent 领队"),
-            (64, "硅基经理"), (65, "一人公司 CEO"),
-            (79, "一人公司 CEO"), (80, "AI 治理者"),
-            (92, "AI 治理者"), (93, "一人成军"),
-            (99, "一人成军"), (100, "一人成军")
+            (19, "碳基牛马"), (20, "赛博监工"),
+            (34, "赛博监工"), (35, "分身队长"),
+            (64, "硅基领主"), (65, "硅基统帅"),
+            (79, "硅基统帅"), (80, "超级个体"),
+            (92, "超级个体"), (93, "人类最强者"),
+            (99, "人类最强者"), (100, "人类最强者")
         ].allSatisfy { LeadershipScoreModel.title(for: $0.0).name == $0.1 }
+        let englishTitleCases = [
+            (1, "Carbon Laborer"), (2, "Cyber Overseer"),
+            (3, "Clone Captain"), (4, "Silicon Lord"),
+            (5, "Silicon Marshal"), (6, "Super Individual"),
+            (7, "Humanity's Apex")
+        ].allSatisfy { item in
+            let (level, name) = item
+            let score = [0, 20, 35, 50, 65, 80, 93][level - 1]
+            return LeadershipScoreModel.title(for: score).englishName == name
+        }
         let topRankIsUnified = [93, 99, 100].allSatisfy {
             let title = LeadershipScoreModel.title(for: $0)
             return title.level == 7 && title.lowerBound == 93 && title.upperBound == 100
@@ -78,6 +88,7 @@ enum LeadershipModelSelfTest {
             && oneDayScore! <= 33
             && matureScore == 100
             && titleCases
+            && englishTitleCases
             && topRankIsUnified
             && hoursCorrect
             && concurrencyCorrect

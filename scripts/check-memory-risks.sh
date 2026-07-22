@@ -88,6 +88,10 @@ require_literal Sources/CodexUsageWidget/main.swift \
   'private static let memorySessionUsageCacheLimit' 'session 内存缓存缺少独立数量上限'
 require_literal Sources/CodexUsageWidget/main.swift \
   'private static let maximumPersistentCacheBytes' '持久缓存读取缺少字节上限'
+require_literal Sources/CodexUsageWidget/Services/LeadershipDataReader.swift \
+  'private let maximumCacheBytes' 'AI 领导力磁盘缓存缺少字节上限'
+require_literal Sources/CodexUsageWidget/Providers/ClaudeCode/ClaudeCodeRuntimeProvider.swift \
+  'private let maximumCacheBytes' 'Claude transcript 磁盘缓存缺少字节上限'
 require_literal Sources/CodexUsageWidget/main.swift \
   'releaseSessionUsageWorkingSet()' '完成聚合后没有释放 session 工作集'
 forbid_regex 'let parsedSessions:.*SessionUsageCacheEntry' '发现全量保留 SessionUsageCacheEntry；session 聚合必须依赖有界缓存并逐项处理'

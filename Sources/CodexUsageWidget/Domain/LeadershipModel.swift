@@ -92,6 +92,18 @@ struct LeadershipTitle: Codable, Equatable {
     let name: String
     let lowerBound: Int
     let upperBound: Int
+
+    var englishName: String {
+        switch level {
+        case 1: "Carbon Laborer"
+        case 2: "Cyber Overseer"
+        case 3: "Clone Captain"
+        case 4: "Silicon Lord"
+        case 5: "Silicon Marshal"
+        case 6: "Super Individual"
+        default: "Humanity's Apex"
+        }
+    }
 }
 
 struct LeadershipDayPoint: Codable, Identifiable, Equatable {
@@ -250,13 +262,13 @@ enum LeadershipScoreModel {
 
     static func title(for score: Int) -> LeadershipTitle {
         switch score {
-        case 93...: LeadershipTitle(level: 7, name: "一人成军", lowerBound: 93, upperBound: 100)
-        case 80...92: LeadershipTitle(level: 6, name: "AI 治理者", lowerBound: 80, upperBound: 92)
-        case 65...79: LeadershipTitle(level: 5, name: "一人公司 CEO", lowerBound: 65, upperBound: 79)
-        case 50...64: LeadershipTitle(level: 4, name: "硅基经理", lowerBound: 50, upperBound: 64)
-        case 35...49: LeadershipTitle(level: 3, name: "Agent 领队", lowerBound: 35, upperBound: 49)
-        case 20...34: LeadershipTitle(level: 2, name: "AI 协作者", lowerBound: 20, upperBound: 34)
-        default: LeadershipTitle(level: 1, name: "AI 使用者", lowerBound: 0, upperBound: 19)
+        case 93...: LeadershipTitle(level: 7, name: "人类最强者", lowerBound: 93, upperBound: 100)
+        case 80...92: LeadershipTitle(level: 6, name: "超级个体", lowerBound: 80, upperBound: 92)
+        case 65...79: LeadershipTitle(level: 5, name: "硅基统帅", lowerBound: 65, upperBound: 79)
+        case 50...64: LeadershipTitle(level: 4, name: "硅基领主", lowerBound: 50, upperBound: 64)
+        case 35...49: LeadershipTitle(level: 3, name: "分身队长", lowerBound: 35, upperBound: 49)
+        case 20...34: LeadershipTitle(level: 2, name: "赛博监工", lowerBound: 20, upperBound: 34)
+        default: LeadershipTitle(level: 1, name: "碳基牛马", lowerBound: 0, upperBound: 19)
         }
     }
 

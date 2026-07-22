@@ -59,26 +59,9 @@ struct OverviewPlaceholderGlyph: View {
     }
 }
 
-struct LeadershipPreviewFixture: Equatable {
-    let level: Int
-
-    private static let scores = [10, 27, 42, 57, 72, 86, 96]
-    private static let peaks = [1, 2, 4, 6, 9, 14, 21]
-    private static let agents = [1, 2, 4, 6, 10, 16, 24]
-    private static let hours = [0.8, 2.1, 4.6, 8.2, 14.8, 28.6, 46.0]
-
-    private var index: Int { min(max(level, 1), 7) - 1 }
-    var score: Int { Self.scores[index] }
-    var title: LeadershipTitle { LeadershipScoreModel.title(for: score) }
-    var peakConcurrency: Int { Self.peaks[index] }
-    var agentCount: Int { Self.agents[index] }
-    var aiHours: Double { Self.hours[index] }
-}
-
 struct LeadershipCommandRadiusButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let snapshot: LeadershipDashboardSnapshot
-    let previewLevel: Int?
     let language: WidgetLanguage
     let visualEnergyMode: VisualEnergyMode
     let action: () -> Void
@@ -100,6 +83,7 @@ struct LeadershipCommandRadiusButton: View {
 
                     LeadershipBadgeLockup(
                         title: displayTitle,
+                        language: language,
                         emptyTitle: language.text("记录建立中", "Building history"),
                         imageSize: 58,
                         plaqueWidth: 95
@@ -162,14 +146,10 @@ struct LeadershipCommandRadiusButton: View {
         .help(language.text("查看 AI 领导力详情；轨道节点表示今日 Agent，最多显示 12 个", "View AI leadership details; orbit nodes represent today's agents, up to 12"))
     }
 
-    private var preview: LeadershipPreviewFixture? {
-        previewLevel.map(LeadershipPreviewFixture.init(level:))
-    }
-
-    private var displayScore: Int? { preview?.score ?? report?.score }
-    private var displayTitle: LeadershipTitle? { preview?.title ?? report?.title }
-    private var displayPeakConcurrencyValue: Int? { preview?.peakConcurrency ?? report?.peakConcurrency }
-    private var displayTodayAgentCount: Int? { preview?.agentCount ?? today?.agentCount }
+    private var displayScore: Int? { report?.score }
+    private var displayTitle: LeadershipTitle? { report?.title }
+    private var displayPeakConcurrencyValue: Int? { report?.peakConcurrency }
+    private var displayTodayAgentCount: Int? { today?.agentCount }
     private var displayLeadershipAgentCount: Int? { report?.agentCount }
 
     private var leadershipAgentValue: String {
@@ -183,7 +163,8 @@ struct LeadershipCommandRadiusButton: View {
 
     private var accessibilitySummary: String {
         let score = displayScore.map(String.init) ?? language.text("暂无得分", "No score")
-        let title = displayTitle?.name ?? language.text("记录建立中", "Building history")
+        let title = displayTitle.map { localizedLeadershipTitle($0, language: language) }
+            ?? language.text("记录建立中", "Building history")
         let peak = displayPeakConcurrencyValue.map(String.init) ?? language.text("暂无", "unavailable")
         let agents = displayLeadershipAgentCount.map(String.init) ?? language.text("暂无", "unavailable")
         return language.text(
@@ -454,6 +435,7 @@ private struct LeadershipBadgeLockup: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.visualTokens) private var visualTokens
     let title: LeadershipTitle?
+    let language: WidgetLanguage
     let emptyTitle: String
     let imageSize: CGFloat
     let plaqueWidth: CGFloat
@@ -465,16 +447,16 @@ private struct LeadershipBadgeLockup: View {
                     .frame(width: imageSize, height: imageSize)
                     .shadow(color: visualTokens.accent.primary.color.opacity(0.18), radius: 5, y: 2)
 
-                HStack(spacing: 3) {
+                HStack(spacing: 4) {
                     Text("L\(min(title.level, 7))")
-                    Text(title.name)
+                    Text(localizedLeadershipTitle(title, language: language))
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                 }
-                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .font(.system(size: 10, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.white)
-                .padding(.horizontal, 6)
-                .frame(width: plaqueWidth, height: 18)
+                .padding(.horizontal, 8)
+                .frame(width: plaqueWidth, height: 22)
                 .background(
                     Capsule(style: .continuous)
                         .fill(FixedVisualPalette.leadershipPlaqueFill(colorScheme))
@@ -483,7 +465,7 @@ private struct LeadershipBadgeLockup: View {
                                 .strokeBorder(visualTokens.accent.primary.color.opacity(0.56), lineWidth: 0.8)
                         )
                 )
-                .offset(y: imageSize / 2 + 6)
+                .offset(y: imageSize / 2 + 7)
             } else {
                 OverviewPlaceholderGlyph(systemName: "person.3.fill")
 
@@ -542,34 +524,24 @@ struct LeadershipDashboardPanel: View {
     @Environment(\.visualTokens) private var visualTokens
     let snapshot: LeadershipDashboardSnapshot
     let language: WidgetLanguage
-    @Binding var previewLevel: Int?
     @State private var period: LeadershipPeriod = .twentyEightDays
 
     private var report: LeadershipReport? {
         snapshot.report(period: period)
     }
 
-    private var preview: LeadershipPreviewFixture? {
-        previewLevel.map(LeadershipPreviewFixture.init(level:))
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                LeadershipPeriodControl(selection: $period, language: language)
-                Spacer(minLength: 10)
-                LeadershipPreviewMenu(selection: $previewLevel, language: language)
-            }
+            LeadershipPeriodControl(selection: $period, language: language)
 
             LeadershipRankProgressHeader(
-                score: preview?.score ?? report?.score,
-                title: preview?.title ?? report?.title,
-                isPreviewing: preview != nil,
+                score: report?.score,
+                title: report?.title,
                 language: language
             )
 
             if let report {
-                LeadershipFactStrip(report: report, preview: preview, language: language)
+                LeadershipFactStrip(report: report, language: language)
 
                 HStack(alignment: .top, spacing: 10) {
                     LeadershipDimensionCard(report: report, language: language)
@@ -594,7 +566,6 @@ private struct LeadershipRankProgressHeader: View {
     @Environment(\.visualTokens) private var visualTokens
     let score: Int?
     let title: LeadershipTitle?
-    let isPreviewing: Bool
     let language: WidgetLanguage
 
     private var normalizedScore: Double {
@@ -609,24 +580,24 @@ private struct LeadershipRankProgressHeader: View {
 
                 ZStack(alignment: .topLeading) {
                     ForEach(1...7, id: \.self) { level in
-                        let fixture = LeadershipPreviewFixture(level: level)
+                        let rankTitle = LeadershipScoreModel.title(for: scoreThreshold(for: level))
                         let isCurrent = title?.level == level
                         VStack(spacing: 1) {
                             LeadershipBadgeImage(level: level)
-                                .frame(width: isCurrent ? 29 : 25, height: isCurrent ? 29 : 25)
+                                .frame(width: isCurrent ? 33 : 29, height: isCurrent ? 33 : 29)
                                 .shadow(
                                     color: visualTokens.accent.primary.color.opacity(isCurrent ? 0.42 : 0.10),
                                     radius: isCurrent ? 6 : 2,
                                     y: 1
                                 )
-                            Text(fixture.title.name)
-                                .font(.system(size: 7.2, weight: isCurrent ? .bold : .semibold, design: .rounded))
-                                .foregroundStyle(isCurrent ? visualTokens.accent.primaryStrong.color : Color.secondary)
+                                .opacity(title == nil || isCurrent ? 1 : 0.72)
+                            Text(localizedLeadershipTitle(rankTitle, language: language))
+                                .font(.system(size: 8.2, weight: isCurrent ? .bold : .semibold, design: .rounded))
+                                .foregroundStyle(isCurrent ? Color.primary : Color.secondary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.72)
                         }
                         .frame(width: 62)
-                        .opacity(title == nil || isCurrent ? 1 : 0.72)
                         .position(
                             x: trackInset + trackWidth * CGFloat(threshold(for: level)),
                             y: 23
@@ -694,10 +665,6 @@ private struct LeadershipRankProgressHeader: View {
                     .foregroundStyle(.secondary)
                 Text(currentTitle)
                     .fontWeight(.bold)
-                if isPreviewing {
-                    Text(language.text("样式预览", "Style preview"))
-                        .foregroundStyle(visualTokens.accent.primaryStrong.color)
-                }
                 Spacer(minLength: 0)
             }
             .font(.system(size: 8, weight: .semibold, design: .rounded))
@@ -711,7 +678,7 @@ private struct LeadershipRankProgressHeader: View {
 
     private var currentTitle: String {
         guard let title else { return language.text("记录建立中", "Building history") }
-        return "L\(min(title.level, 7)) · \(title.name)"
+        return "L\(min(title.level, 7)) · \(localizedLeadershipTitle(title, language: language))"
     }
 
     private func threshold(for level: Int) -> Double {
@@ -725,41 +692,22 @@ private struct LeadershipRankProgressHeader: View {
         default: 0.93
         }
     }
+
+    private func scoreThreshold(for level: Int) -> Int {
+        switch level {
+        case 1: 0
+        case 2: 20
+        case 3: 35
+        case 4: 50
+        case 5: 65
+        case 6: 80
+        default: 93
+        }
+    }
 }
 
-private struct LeadershipPreviewMenu: View {
-    @Binding var selection: Int?
-    let language: WidgetLanguage
-
-    var body: some View {
-        Menu {
-            Button {
-                selection = nil
-            } label: {
-                Label(language.text("真实数据", "Live data"), systemImage: selection == nil ? "checkmark" : "chart.line.uptrend.xyaxis")
-            }
-            Divider()
-            ForEach(1...7, id: \.self) { level in
-                let fixture = LeadershipPreviewFixture(level: level)
-                Button {
-                    selection = level
-                } label: {
-                    Label("L\(level) · \(fixture.title.name)", systemImage: selection == level ? "checkmark" : "circle.hexagongrid")
-                }
-            }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "testtube.2")
-                Text(selection.map { "L\($0)" } ?? language.text("样式预览", "Style preview"))
-            }
-            .font(.system(size: 9, weight: .semibold))
-            .padding(.horizontal, 9)
-            .frame(height: 26)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help(language.text("仅预览等级样式，不修改真实数据", "Preview rank styles without changing live data"))
-    }
+private func localizedLeadershipTitle(_ title: LeadershipTitle, language: WidgetLanguage) -> String {
+    language.text(title.name, title.englishName)
 }
 
 private struct LeadershipPeriodControl: View {
@@ -927,7 +875,6 @@ private struct LeadershipDimensionRow: View {
 
 private struct LeadershipFactStrip: View {
     let report: LeadershipReport
-    let preview: LeadershipPreviewFixture?
     let language: WidgetLanguage
 
     var body: some View {
@@ -935,22 +882,22 @@ private struct LeadershipFactStrip: View {
             LeadershipFactTile(
                 systemName: "sparkles",
                 label: language.text("领导力分值", "Leadership score"),
-                value: preview.map { String($0.score) } ?? report.score.map(String.init) ?? "--"
+                value: report.score.map(String.init) ?? "--"
             )
             LeadershipFactTile(
                 systemName: "person.3.fill",
                 label: language.text("领导 Agent", "Agents"),
-                value: preview.map { String($0.agentCount) } ?? report.agentCount.map(String.init) ?? "--"
+                value: report.agentCount.map(String.init) ?? "--"
             )
             LeadershipFactTile(
                 systemName: "clock.fill",
                 label: language.text("AI 工时", "AI hours"),
-                value: leadershipHours(preview?.aiHours ?? report.aiHours)
+                value: leadershipHours(report.aiHours)
             )
             LeadershipFactTile(
                 systemName: "arrow.up.right.and.arrow.down.left",
                 label: language.text("峰值并发", "Peak concurrency"),
-                value: preview.map { "\($0.peakConcurrency)×" } ?? report.peakConcurrency.map { "\($0)×" } ?? "--"
+                value: report.peakConcurrency.map { "\($0)×" } ?? "--"
             )
         }
     }

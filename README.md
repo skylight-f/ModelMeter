@@ -1,7 +1,19 @@
 # codexU
 
+![codexU v1.2.0 AI 领导力评估模型](docs/screenshot-v1.2.0-ai-leadership.png)
+
+## 全网首推：AI 领导力评估模型
+
+codexU v1.2.0 首次把“一个人能领导多少 AI、这些 AI 工作了多久、形成了怎样的编排与自主运行能力”变成一套本地、可解释、可持续积累的评估模型。它将 Codex 与 Claude Code 的真实 Worker 记录合并到同一条时间轴，以滚动 28 天的管理半径、劳动力杠杆、编排能力和自主运行为四个核心维度，给出 0–100 分 AI 领导力得分与中英双语七级称号。
+
+- **一眼看懂 AI 组织规模**：主视觉同时展示领导力得分、28 天领导 Agent 数、AI 工时和峰值并发；轨道节点随今日 Agent 动态运行。
+- **不是靠 token 刷分**：只使用本机可验证或可推导的 Agent 生命周期、父子关系、并发与自主运行证据；不可靠的成本、交付和估算区间不进入得分。
+- **Codex + Claude Code 合并评估**：AI 领导力衡量的是你调动的完整 AI 劳动力，不按 Runtime 拆分，也不把跨项目峰值简单相加。
+- **从“碳基牛马”到“人类最强者”**：七级徽章、固定 0–100 等级进度与指挥半径动效，让得分既可解释，也有鲜明的个人成长标识。
+- **本地优先、隐私优先**：评分全程在 Mac 本机完成，不上传 usage、线程、路径、日志或账户数据。
+
 > [!IMPORTANT]
-> **建议升级到 v1.1.5 或更高版本。** v1.1.5 修复从已有 Codex 对话创建分支后，继承的 token 历史被重复计入累计、今日和近 7 日用量的问题；分支现在只统计创建后的新增用量。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
+> **建议升级到 v1.2.0 或更高版本。** v1.2.0 全网首推本地 AI 领导力评估模型，并继续保留 v1.1.5 的 Codex 分支 token 去重修复。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
 [产品官网](https://shanggqm.github.io/codexU-site/) · [下载最新版本](https://github.com/shanggqm/codexU/releases/latest) · [English](README.en.md)
 
@@ -43,7 +55,7 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 - 支持 Claude Code 本机 transcript 用量统计、最近 7 日趋势、项目排行、工具/Skill TOP 和任务看板基础能力。
 - 汇总今日、近 7 天和累计 token 用量，并细分未缓存输入、命中缓存输入和输出。
 - 按 OpenAI API token 价格估算本月 API 等效价值，并在 Plus、Pro 100、Pro 200 和满额月价值之间展示进度刻度。
-- 在顶部概览最左侧用“等级徽章 + 指挥半径轨道”展示滚动 28 天 AI 领导力：徽章固定在圆心，得分、今日 Agent、今日 AI 工时和峰值并发使用 2×2 指标矩阵。双环紧随其右并保持原尺寸，左上角明确标注“用量”。
+- 在顶部概览最左侧用“等级徽章 + 指挥半径轨道”展示滚动 28 天 AI 领导力：徽章固定在圆心，得分、近 28 天领导 Agent、近 28 天 AI 工时和峰值并发使用 2×2 指标矩阵；轨道节点仍按今日 Agent 动态变化。双环紧随其右并保持原尺寸，左上角明确标注“用量”。
 - 下方仪表盘支持今日任务、AI 领导力、用量趋势、项目排行和 Skill 使用视图。AI 领导力始终评估 Codex 与 Claude Code 的合计表现；详情顶部用完整徽章路径展示全部等级节点，分值直接标在进度条上，再以四个核心指标、四维能力、每日 AI 工时/Agent/峰值组合趋势和项目贡献解释得分。
 - 今日任务按事实源自适应组织：Codex 使用“最近活跃、待继续、定时、今日归档”，Claude Code 使用本机 task 的“进行中、待处理、计划中、已完成”；近期活动与归档都不会被包装成仍在执行或成功完成。
 - 任务卡片优先展示标题、工作区、事实时间和可信状态；可确定时显示 automation 下次运行时间，只有存在有效 Session Deep Link 的卡片才提供整卡点击、hover、手型和键盘焦点反馈。
@@ -160,10 +172,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.1.5-mac-arm64.dmg
-dist/codexU-1.1.5-mac-arm64.dmg.sha256
-dist/codexU-1.1.5-mac-x86_64.dmg
-dist/codexU-1.1.5-mac-x86_64.dmg.sha256
+dist/codexU-1.2.0-mac-arm64.dmg
+dist/codexU-1.2.0-mac-arm64.dmg.sha256
+dist/codexU-1.2.0-mac-x86_64.dmg
+dist/codexU-1.2.0-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。

@@ -1,7 +1,19 @@
 # codexU
 
+![codexU v1.2.0 AI Leadership assessment model](docs/screenshot-v1.2.0-ai-leadership.png)
+
+## A First-of-Its-Kind AI Leadership Assessment Model
+
+codexU v1.2.0 turns a new OPC question—how many AI workers one person can lead, how long they work, and how well they are orchestrated—into a local, explainable model that compounds over time. It combines real Codex and Claude Code worker records on one timeline, then produces a rolling 28-day score from four dimensions: management span, labor leverage, orchestration, and autonomous operation.
+
+- **See the AI organization at a glance:** score, 28-day led agents, AI hours, and peak concurrency sit beside a live command-radius orbit driven by today's agents.
+- **No token-based score inflation:** only locally verifiable or derived worker lifecycles, parent-child relationships, concurrency, and autonomous runs count. Unreliable cost, delivery, and estimated intervals stay outside the score.
+- **Codex + Claude Code, evaluated together:** AI leadership represents the complete workforce you direct, without runtime filters or naïve addition of per-project peaks.
+- **Seven memorable ranks:** a fixed 0–100 progression, seven badge identities, and a living orbit turn an explainable score into a recognizable growth marker.
+- **Local and private:** evaluation stays on your Mac and does not upload usage, threads, paths, logs, or account data.
+
 > [!IMPORTANT]
-> **Upgrade to v1.1.5 or later.** v1.1.5 fixes inherited token history being counted again after branching an existing Codex conversation. Forked conversations now count only usage added after the branch point. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
+> **Upgrade to v1.2.0 or later.** v1.2.0 introduces the local AI Leadership assessment model while retaining the Codex branch token deduplication fix from v1.1.5. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
 
 codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex and Claude Code quota, token usage, today's tasks, and local AI leadership. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, daily progress, and how much AI labor one person is directing.
 
@@ -31,7 +43,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Supports Claude Code local transcript usage, 7-day trends, project rankings, top tools/Skills, and a basic task board.
 - Summarizes token usage for today, the last 7 days, and lifetime totals with uncached input, cached input, and output splits.
 - Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value. The bar uses a segmented nonlinear scale, so movement past Pro 200 remains visible and is not a linear dollar ratio.
-- Leads the overview with a rank emblem and command-radius orbit for rolling 28-day AI leadership. The emblem stays locked to the orbit center, while score, today's agents, AI hours, and peak concurrency form a 2×2 metric grid. The unchanged quota rings sit immediately to its right with an explicit Usage label.
+- Leads the overview with a rank emblem and command-radius orbit for rolling 28-day AI leadership. The emblem stays locked to the orbit center, while score, 28-day led agents, 28-day AI hours, and peak concurrency form a 2×2 metric grid; orbit nodes continue to represent today's agents. The unchanged quota rings sit immediately to its right with an explicit Usage label.
 - Adds lower dashboard tabs for today's tasks, AI leadership, usage trend, project ranking, and Skill usage. AI leadership always evaluates the combined Codex and Claude Code workforce; its detail view starts with the full badge path for every rank and places the score directly on the progress track, followed by four headline metrics, four dimensions, a daily AI-hours/agents/peak combo chart, and project contributions.
 - Organizes today's tasks according to each factual source: Codex uses Recent, To continue, Scheduled, and Archived today; Claude Code uses explicit local task states for Active, Pending, Planned, and Completed. Recent activity and archival are not presented as proof of running or success.
 - Task cards prioritize title, workspace, factual time, and trusted state. Automations show the next run only when it can be determined, and only cards with a valid session deep link expose whole-card click, hover, pointer, and keyboard-focus feedback.
@@ -133,10 +145,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.1.5-mac-arm64.dmg
-dist/codexU-1.1.5-mac-arm64.dmg.sha256
-dist/codexU-1.1.5-mac-x86_64.dmg
-dist/codexU-1.1.5-mac-x86_64.dmg.sha256
+dist/codexU-1.2.0-mac-arm64.dmg
+dist/codexU-1.2.0-mac-arm64.dmg.sha256
+dist/codexU-1.2.0-mac-x86_64.dmg
+dist/codexU-1.2.0-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

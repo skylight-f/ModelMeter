@@ -88,9 +88,9 @@ Update only the release-relevant files unless the user asks for broader docs:
 - `CHANGELOG.md`: add the new release section and date.
 - `README.md`: update current version, download links, and visible release notes in Chinese.
 - `README.en.md`: update current version, download links, and visible release notes in English.
-- `docs/release-notes-*.md`: update the release notes used by `gh release create --notes-file`.
+- `docs/release-notes-*.md`: keep the complete local release record used by `make release-check`, including verification, assets, checksums, and the actual signing/notarization status.
 
-For beta trains, prefer the existing train note file when present, such as `docs/release-notes-v1.0.0-beta.md`; otherwise create a version-specific notes file. Leave checksum placeholders until after packaging, then fill them with the actual SHA-256 values.
+Start the first non-heading paragraph of the release notes with a standalone Chinese summary sentence on one physical line, followed by a `## 主要更新` section. The first sentence and that section are the only content published in the GitHub Release body. For beta trains, prefer the existing train note file when present, such as `docs/release-notes-v1.0.0-beta.md`; otherwise create a version-specific notes file. Leave checksum placeholders until after packaging, then fill them with the actual SHA-256 values.
 
 Run:
 
@@ -134,6 +134,19 @@ Do not create the release commit or tag until this command passes.
 
 Do not claim Apple notarization unless a notarization step was actually run. The current Makefile release flow uses the signing behavior configured in the repository.
 
+## Prepare GitHub Release Body
+
+Generate the concise GitHub Release body from the complete local release notes before committing, tagging, or pushing:
+
+```sh
+.agents/skills/codexu-release/scripts/make-github-release-body.sh \
+  docs/release-notes-<notes>.md \
+  build/github-release-body-v<version>.md
+sed -n '1,160p' build/github-release-body-v<version>.md
+```
+
+The generated body must contain only the opening sentence and the complete `## 主要更新` section. Do not publish the release-note title, verification details, asset list, checksums, signing/notarization text, or any later section. Keep those details in the tracked release notes for local validation and auditability. Treat a generation error or unexpected excerpt as a release blocker.
+
 ## Commit, Tag, And Push
 
 Stage release metadata and documentation, not generated DMGs unless repository policy changes:
@@ -168,7 +181,7 @@ git push origin v<version>
 
 ## Create GitHub Release
 
-Create the GitHub Release with the exact packaged assets:
+Create the GitHub Release with the exact packaged assets and the generated concise body:
 
 ```sh
 gh release create v<version> \
@@ -177,7 +190,7 @@ gh release create v<version> \
   dist/codexU-<version>-mac-x86_64.dmg \
   dist/codexU-<version>-mac-x86_64.dmg.sha256 \
   --title "codexU v<version>" \
-  --notes-file docs/release-notes-<notes>.md \
+  --notes-file build/github-release-body-v<version>.md \
   --prerelease
 ```
 
@@ -188,9 +201,13 @@ Omit `--prerelease` only for stable releases. If a release already exists, inspe
 Verify the published release:
 
 ```sh
-gh release view v<version> --json tagName,name,isPrerelease,isDraft,url,assets,publishedAt,targetCommitish
+gh release view v<version> --json tagName,name,body,isPrerelease,isDraft,url,assets,publishedAt,targetCommitish
+gh release view v<version> --json body --jq .body > build/published-github-release-body-v<version>.md
+diff -u build/github-release-body-v<version>.md build/published-github-release-body-v<version>.md
 git status --short
 ```
+
+Confirm that the published `body` matches the generated file and contains no sections other than `## 主要更新`.
 
 Some `gh` versions do not support `isLatest`; remove unsupported JSON fields rather than treating that as a release failure.
 

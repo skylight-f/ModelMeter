@@ -64,6 +64,7 @@ struct ClaudeCodeRuntimeProvider: RuntimeUsageProvider {
 private final class ClaudeCodeTranscriptReader {
     private let fileManager = FileManager.default
     private let cacheVersion = 2
+    private let maximumCacheBytes: Int64 = 128 * 1_024 * 1_024
 
     func loadLocalUsage(context: RuntimeLoadContext, messages: inout [String]) -> LocalUsage? {
         let projectsRoot = context.homeDirectory
@@ -579,7 +580,9 @@ private final class ClaudeCodeTranscriptReader {
         context: RuntimeLoadContext
     ) -> (cache: ClaudeSessionDiskCache, usesLegacySecondPrecision: Bool) {
         let url = cacheURL(context: context)
-        guard let data = try? Data(contentsOf: url) else {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              Int64(values.fileSize ?? 0) <= maximumCacheBytes,
+              let data = try? Data(contentsOf: url) else {
             return (ClaudeSessionDiskCache(version: cacheVersion, entries: [:]), false)
         }
 
@@ -612,6 +615,7 @@ private final class ClaudeCodeTranscriptReader {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .millisecondsSince1970
             let data = try encoder.encode(cache)
+            guard Int64(data.count) <= maximumCacheBytes else { return false }
             try data.write(to: url, options: .atomic)
             return true
         } catch {
