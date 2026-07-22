@@ -37,6 +37,28 @@ struct OverviewVisualHeader: View {
     }
 }
 
+struct OverviewPlaceholderGlyph: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let systemName: String
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(FixedVisualPalette.controlFill(colorScheme))
+            Circle()
+                .strokeBorder(
+                    FixedVisualPalette.secondaryText(colorScheme).opacity(0.78),
+                    lineWidth: 2
+                )
+            Image(systemName: systemName)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(FixedVisualPalette.secondaryText(colorScheme))
+        }
+        .frame(width: 44, height: 44)
+        .accessibilityHidden(true)
+    }
+}
+
 struct LeadershipPreviewFixture: Equatable {
     let level: Int
 
@@ -417,7 +439,8 @@ private struct LeadershipCommandRadiusGraphic: View {
 
     private var ringCount: Int {
         switch level {
-        case ...1: 1
+        case ...0: 0
+        case 1: 1
         case 2...4: 2
         default: 3
         }
@@ -434,31 +457,40 @@ private struct LeadershipBadgeLockup: View {
 
     var body: some View {
         ZStack {
-            LeadershipBadgeImage(level: title?.level ?? 0)
-                .frame(width: imageSize, height: imageSize)
-                .shadow(color: visualTokens.accent.primary.color.opacity(0.18), radius: 5, y: 2)
+            if let title {
+                LeadershipBadgeImage(level: title.level)
+                    .frame(width: imageSize, height: imageSize)
+                    .shadow(color: visualTokens.accent.primary.color.opacity(0.18), radius: 5, y: 2)
 
-            HStack(spacing: 3) {
-                if let title {
+                HStack(spacing: 3) {
                     Text("L\(min(title.level, 7))")
+                    Text(title.name)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
                 }
-                Text(title?.name ?? emptyTitle)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 6)
+                .frame(width: plaqueWidth, height: 18)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(FixedVisualPalette.leadershipPlaqueFill(colorScheme))
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(visualTokens.accent.primary.color.opacity(0.56), lineWidth: 0.8)
+                        )
+                )
+                .offset(y: imageSize / 2 + 6)
+            } else {
+                OverviewPlaceholderGlyph(systemName: "person.3.fill")
+
+                Text(emptyTitle)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
+                    .offset(y: imageSize / 2 + 6)
             }
-            .font(.system(size: 8, weight: .bold, design: .rounded))
-            .foregroundStyle(Color.white)
-            .padding(.horizontal, 6)
-            .frame(width: plaqueWidth, height: 18)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(FixedVisualPalette.leadershipPlaqueFill(colorScheme))
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .strokeBorder(visualTokens.accent.primary.color.opacity(0.56), lineWidth: 0.8)
-                    )
-            )
-            .offset(y: imageSize / 2 + 6)
         }
         .frame(width: plaqueWidth, height: imageSize)
         .accessibilityElement(children: .combine)
@@ -477,11 +509,7 @@ private struct LeadershipBadgeImage: View {
                     .antialiased(true)
                     .scaledToFit()
             } else {
-                Image(systemName: "circle.hexagongrid.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(.tertiary)
-                    .padding(7)
+                OverviewPlaceholderGlyph(systemName: "person.3.fill")
             }
         }
         .accessibilityHidden(true)

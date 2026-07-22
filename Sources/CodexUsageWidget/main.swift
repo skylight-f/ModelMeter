@@ -6757,15 +6757,15 @@ private struct QuotaUnavailablePlaceholder: View {
     let language: WidgetLanguage
 
     var body: some View {
-        VStack(spacing: 7) {
-            Image(systemName: isAuthoritative ? "infinity.circle" : "gauge")
-                .font(.system(size: 24, weight: .medium))
+        ZStack {
+            OverviewPlaceholderGlyph(systemName: isAuthoritative ? "infinity" : "percent")
             Text(
                 isAuthoritative
                     ? language.text("当前无额度限制", "No active quota limits")
                     : language.text("暂无额度数据", "No quota data")
             )
                 .font(.system(size: 10, weight: .semibold))
+                .offset(y: 35)
         }
         .foregroundStyle(.secondary)
         .frame(
