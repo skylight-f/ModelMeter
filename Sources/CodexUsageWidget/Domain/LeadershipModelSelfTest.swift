@@ -26,9 +26,13 @@ enum LeadershipModelSelfTest {
             (34, "AI 协作者"), (35, "Agent 领队"),
             (64, "硅基经理"), (65, "一人公司 CEO"),
             (79, "一人公司 CEO"), (80, "AI 治理者"),
-            (92, "AI 治理者"), (93, "生态架构师"),
-            (99, "生态架构师"), (100, "一人成军")
+            (92, "AI 治理者"), (93, "一人成军"),
+            (99, "一人成军"), (100, "一人成军")
         ].allSatisfy { LeadershipScoreModel.title(for: $0.0).name == $0.1 }
+        let topRankIsUnified = [93, 99, 100].allSatisfy {
+            let title = LeadershipScoreModel.title(for: $0)
+            return title.level == 7 && title.lowerBound == 93 && title.upperBound == 100
+        }
 
         let workers = [
             worker("a", project: "p1", kind: .main),
@@ -74,6 +78,7 @@ enum LeadershipModelSelfTest {
             && oneDayScore! <= 33
             && matureScore == 100
             && titleCases
+            && topRankIsUnified
             && hoursCorrect
             && concurrencyCorrect
             && agentCountCorrect

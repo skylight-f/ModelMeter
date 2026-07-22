@@ -4,12 +4,12 @@ import SwiftUI
 struct LeadershipPreviewFixture: Equatable {
     let level: Int
 
-    private static let scores = [10, 27, 42, 57, 72, 86, 96, 100]
-    private static let peaks = [1, 2, 4, 6, 9, 14, 21, 32]
-    private static let agents = [1, 2, 4, 6, 10, 16, 24, 36]
-    private static let hours = [0.8, 2.1, 4.6, 8.2, 14.8, 28.6, 46.0, 72.0]
+    private static let scores = [10, 27, 42, 57, 72, 86, 96]
+    private static let peaks = [1, 2, 4, 6, 9, 14, 21]
+    private static let agents = [1, 2, 4, 6, 10, 16, 24]
+    private static let hours = [0.8, 2.1, 4.6, 8.2, 14.8, 28.6, 46.0]
 
-    private var index: Int { min(max(level, 1), 8) - 1 }
+    private var index: Int { min(max(level, 1), 7) - 1 }
     var score: Int { Self.scores[index] }
     var title: LeadershipTitle { LeadershipScoreModel.title(for: score) }
     var peakConcurrency: Int { Self.peaks[index] }
@@ -23,6 +23,7 @@ struct LeadershipCommandRadiusButton: View {
     let snapshot: LeadershipDashboardSnapshot
     let previewLevel: Int?
     let language: WidgetLanguage
+    let visualEnergyMode: VisualEnergyMode
     let action: () -> Void
     @State private var isHovering = false
 
@@ -36,7 +37,8 @@ struct LeadershipCommandRadiusButton: View {
                     LeadershipCommandRadiusGraphic(
                         level: displayTitle?.level ?? 0,
                         peakConcurrency: displayPeakConcurrency,
-                        highlighted: isHovering
+                        highlighted: isHovering,
+                        animates: visualEnergyMode == .normal && !reduceMotion
                     )
 
                     LeadershipBadgeLockup(
@@ -187,13 +189,76 @@ private struct LeadershipCommandRadiusGraphic: View {
     let level: Int
     let peakConcurrency: Int
     let highlighted: Bool
+    let animates: Bool
 
     var body: some View {
-        Canvas { context, size in
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let allRadii: [CGFloat] = [30, 46, 62]
-            let radii = Array(allRadii[0..<ringCount])
+        TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: !animates)) { timeline in
+            Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: true) { context, size in
+                draw(
+                    context: &context,
+                    size: size,
+                    time: timeline.date.timeIntervalSinceReferenceDate,
+                    breath: breathingStrength(at: timeline.date.timeIntervalSinceReferenceDate)
+                )
+            }
+        }
+        .opacity(highlighted ? 1 : 0.96)
+        .accessibilityHidden(true)
+    }
 
+    private func draw(
+        context: inout GraphicsContext,
+        size: CGSize,
+        time: TimeInterval,
+        breath: Double
+    ) {
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let allRadii: [CGFloat] = [30, 46, 62]
+        let radii = Array(allRadii[0..<ringCount])
+
+        drawRingGlows(context: &context, center: center, radii: radii, breath: breath)
+
+        for (index, radius) in radii.enumerated() {
+            drawRing(
+                context: &context,
+                center: center,
+                radius: radius,
+                index: index,
+                ringTotal: radii.count
+            )
+        }
+
+        let visibleNodeCount = min(max(peakConcurrency, 0), Self.maximumVisibleNodes)
+        for index in 0..<visibleNodeCount {
+            let ringIndex = index % max(ringCount, 1)
+            let nodesOnRing = (visibleNodeCount + ringCount - 1 - ringIndex) / ringCount
+            let positionOnRing = index / max(ringCount, 1)
+            let basePhase = -Double.pi / 2 + Double(ringIndex) * 0.54
+            let distributedAngle = Double(positionOnRing) / Double(max(nodesOnRing, 1)) * Double.pi * 2
+            let angle = basePhase + distributedAngle + time * orbitVelocity(for: ringIndex)
+            let radius = radii[ringIndex]
+            let point = CGPoint(
+                x: center.x + radius * CGFloat(cos(angle)),
+                y: center.y + radius * CGFloat(sin(angle))
+            )
+            drawNode(
+                context: &context,
+                point: point,
+                ringIndex: ringIndex,
+                isOuterRing: ringIndex == radii.count - 1,
+                breath: breath
+            )
+        }
+    }
+
+    private func drawRingGlows(
+        context: inout GraphicsContext,
+        center: CGPoint,
+        radii: [CGFloat],
+        breath: Double
+    ) {
+        context.drawLayer { glow in
+            glow.addFilter(.blur(radius: 4.2 + CGFloat(breath) * 2.0))
             for (index, radius) in radii.enumerated() {
                 let rect = CGRect(
                     x: center.x - radius,
@@ -202,68 +267,127 @@ private struct LeadershipCommandRadiusGraphic: View {
                     height: radius * 2
                 )
                 let strength = Double(index + 1) / Double(max(radii.count, 1))
-                let glowOpacity = 0.055 + strength * 0.045 + (highlighted ? 0.025 : 0)
-                context.stroke(
-                    Path(ellipseIn: rect),
-                    with: .color(visualTokens.accent.primary.color.opacity(glowOpacity)),
-                    lineWidth: 7 + CGFloat(index) * 1.5
-                )
-                context.stroke(
-                    Path(ellipseIn: rect),
-                    with: .color(visualTokens.accent.primaryLight.color.opacity(0.13 + strength * 0.08)),
-                    lineWidth: 3.6 + CGFloat(index) * 0.7
-                )
-                let dash: [CGFloat]
-                switch index {
-                case 0: dash = []
-                case 1: dash = [5, 3]
-                default: dash = [8, 3, 2, 3]
+                let colors = ringColors(for: index).map {
+                    $0.opacity(0.13 + strength * 0.06 + breath * 0.08 + (highlighted ? 0.05 : 0))
                 }
-                context.stroke(
+                glow.stroke(
                     Path(ellipseIn: rect),
-                    with: .color(visualTokens.accent.primaryStrong.color.opacity(0.50 + strength * 0.22 + (highlighted ? 0.10 : 0))),
-                    style: StrokeStyle(
-                        lineWidth: 1.4 + CGFloat(index) * 0.45,
-                        lineCap: .round,
-                        lineJoin: .round,
-                        dash: dash
-                    )
-                )
-            }
-
-            let visibleNodeCount = min(max(peakConcurrency, 0), Self.maximumVisibleNodes)
-            for index in 0..<visibleNodeCount {
-                let ringIndex = index % max(ringCount, 1)
-                let nodesOnRing = (visibleNodeCount + ringCount - 1 - ringIndex) / ringCount
-                let positionOnRing = index / max(ringCount, 1)
-                let phase = -Double.pi / 2 + Double(ringIndex) * 0.54
-                let angle = phase + Double(positionOnRing) / Double(max(nodesOnRing, 1)) * Double.pi * 2
-                let radius = radii[ringIndex]
-                let point = CGPoint(
-                    x: center.x + radius * CGFloat(cos(angle)),
-                    y: center.y + radius * CGFloat(sin(angle))
-                )
-                let nodeSize: CGFloat = ringIndex == radii.count - 1 ? 8 : 7
-                let nodeRect = CGRect(
-                    x: point.x - nodeSize / 2,
-                    y: point.y - nodeSize / 2,
-                    width: nodeSize,
-                    height: nodeSize
-                )
-                context.fill(
-                    Path(ellipseIn: nodeRect.insetBy(dx: -5, dy: -5)),
-                    with: .color(visualTokens.accent.primary.color.opacity(highlighted ? 0.18 : 0.12))
-                )
-                context.fill(Path(ellipseIn: nodeRect), with: .color(visualTokens.accent.primaryStrong.color))
-                context.stroke(
-                    Path(ellipseIn: nodeRect.insetBy(dx: -1.8, dy: -1.8)),
-                    with: .color(visualTokens.accent.primaryLight.color.opacity(0.72)),
-                    lineWidth: 1.2
+                    with: .linearGradient(
+                        Gradient(colors: colors),
+                        startPoint: CGPoint(x: rect.minX, y: rect.minY),
+                        endPoint: CGPoint(x: rect.maxX, y: rect.maxY)
+                    ),
+                    lineWidth: 4.8 + CGFloat(index) * 0.9 + CGFloat(breath) * 1.4
                 )
             }
         }
-        .opacity(highlighted ? 1 : 0.96)
-        .accessibilityHidden(true)
+    }
+
+    private func drawRing(
+        context: inout GraphicsContext,
+        center: CGPoint,
+        radius: CGFloat,
+        index: Int,
+        ringTotal: Int
+    ) {
+        let rect = CGRect(
+            x: center.x - radius,
+            y: center.y - radius,
+            width: radius * 2,
+            height: radius * 2
+        )
+        let path = Path(ellipseIn: rect)
+        let strength = Double(index + 1) / Double(max(ringTotal, 1))
+        let colors = ringColors(for: index)
+        let startPoint = CGPoint(x: rect.minX, y: rect.minY)
+        let endPoint = CGPoint(x: rect.maxX, y: rect.maxY)
+
+        context.stroke(
+            path,
+            with: .linearGradient(
+                Gradient(colors: colors.map { $0.opacity(0.20 + strength * 0.06) }),
+                startPoint: startPoint,
+                endPoint: endPoint
+            ),
+            lineWidth: 3.2 + CGFloat(index) * 0.55
+        )
+
+        let dash: [CGFloat]
+        switch index {
+        case 0: dash = []
+        case 1: dash = [5, 3]
+        default: dash = [8, 3, 2, 3]
+        }
+        context.stroke(
+            path,
+            with: .linearGradient(Gradient(colors: colors), startPoint: startPoint, endPoint: endPoint),
+            style: StrokeStyle(
+                lineWidth: 1.7 + CGFloat(index) * 0.38,
+                lineCap: .round,
+                lineJoin: .round,
+                dash: dash
+            )
+        )
+    }
+
+    private func drawNode(
+        context: inout GraphicsContext,
+        point: CGPoint,
+        ringIndex: Int,
+        isOuterRing: Bool,
+        breath: Double
+    ) {
+        let nodeSize: CGFloat = isOuterRing ? 8 : 7
+        let nodeRect = CGRect(
+            x: point.x - nodeSize / 2,
+            y: point.y - nodeSize / 2,
+            width: nodeSize,
+            height: nodeSize
+        )
+        let nodeColor = ringColors(for: ringIndex).last ?? visualTokens.accent.primaryStrong.color
+
+        context.fill(
+            Path(ellipseIn: nodeRect.insetBy(dx: -5.0, dy: -5.0)),
+            with: .color(nodeColor.opacity(0.07 + breath * 0.04 + (highlighted ? 0.03 : 0)))
+        )
+        context.fill(
+            Path(ellipseIn: nodeRect.insetBy(dx: -2.8, dy: -2.8)),
+            with: .color(nodeColor.opacity(0.18 + breath * 0.08 + (highlighted ? 0.06 : 0)))
+        )
+        context.fill(Path(ellipseIn: nodeRect), with: .color(nodeColor))
+        context.stroke(
+            Path(ellipseIn: nodeRect.insetBy(dx: -1.5, dy: -1.5)),
+            with: .color(visualTokens.accent.highlight.color.opacity(0.82)),
+            lineWidth: 1.15
+        )
+        context.fill(
+            Path(ellipseIn: CGRect(x: point.x - 1.3, y: point.y - 1.8, width: 2.1, height: 2.1)),
+            with: .color(Color.white.opacity(0.88))
+        )
+    }
+
+    private func ringColors(for index: Int) -> [Color] {
+        switch index {
+        case 0:
+            [visualTokens.accent.primaryLight.color, visualTokens.accent.primaryStrong.color, visualTokens.accent.secondary.color]
+        case 1:
+            [visualTokens.accent.secondary.color, visualTokens.accent.highlight.color, visualTokens.accent.primary.color]
+        default:
+            [visualTokens.accent.primary.color, visualTokens.accent.secondaryStrong.color, visualTokens.accent.highlight.color]
+        }
+    }
+
+    private func orbitVelocity(for ringIndex: Int) -> Double {
+        switch ringIndex {
+        case 0: 0.34
+        case 1: -0.23
+        default: 0.16
+        }
+    }
+
+    private func breathingStrength(at time: TimeInterval) -> Double {
+        guard animates else { return 0.30 }
+        return 0.5 + sin(time * Double.pi * 2 / 3.8) * 0.5
     }
 
     private var ringCount: Int {
@@ -429,7 +553,7 @@ private struct LeadershipRankProgressHeader: View {
                 let trackWidth = max(geometry.size.width - trackInset * 2, 1)
 
                 ZStack(alignment: .topLeading) {
-                    ForEach(1...8, id: \.self) { level in
+                    ForEach(1...7, id: \.self) { level in
                         let fixture = LeadershipPreviewFixture(level: level)
                         let isCurrent = title?.level == level
                         VStack(spacing: 1) {
@@ -460,7 +584,10 @@ private struct LeadershipRankProgressHeader: View {
             GeometryReader { geometry in
                 let trackInset: CGFloat = 38
                 let trackWidth = max(geometry.size.width - trackInset * 2, 1)
-                let scorePosition = trackInset + trackWidth * CGFloat(score == nil ? 0.5 : normalizedScore)
+                let progressEnd = trackInset + trackWidth * CGFloat(normalizedScore)
+                let scorePosition = score == nil
+                    ? trackInset + trackWidth / 2
+                    : min(max(progressEnd - 27, trackInset + 27), trackInset + trackWidth - 27)
 
                 ZStack(alignment: .topLeading) {
                     Capsule()
@@ -470,14 +597,19 @@ private struct LeadershipRankProgressHeader: View {
                     Capsule()
                         .fill(
                             LinearGradient(
-                                colors: [visualTokens.accent.primary.color, visualTokens.accent.primaryStrong.color],
+                                colors: [
+                                    visualTokens.accent.primaryLight.color,
+                                    visualTokens.accent.primary.color,
+                                    visualTokens.accent.secondaryStrong.color,
+                                    visualTokens.accent.highlight.color
+                                ],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
                         )
                         .frame(width: trackWidth * CGFloat(normalizedScore), height: 16)
                         .offset(x: trackInset)
-                    ForEach(1...8, id: \.self) { level in
+                    ForEach(1...7, id: \.self) { level in
                         Circle()
                             .fill(level <= (title?.level ?? 0) ? Color.white : visualTokens.accent.primary.color.opacity(0.34))
                             .overlay(Circle().strokeBorder(visualTokens.accent.primaryStrong.color.opacity(0.72), lineWidth: 0.8))
@@ -490,10 +622,8 @@ private struct LeadershipRankProgressHeader: View {
                     Text(score.map { "\($0) / 100" } ?? "-- / 100")
                         .font(.system(size: 8.5, weight: .heavy, design: .rounded))
                         .monospacedDigit()
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .frame(height: 14)
-                        .background(Capsule().fill(visualTokens.accent.primaryStrong.color))
+                        .foregroundStyle(score == nil || normalizedScore < 0.09 ? visualTokens.accent.primaryStrong.color : Color.white)
+                        .shadow(color: Color.black.opacity(score == nil ? 0 : 0.28), radius: 1, y: 0.5)
                         .position(x: scorePosition, y: 8)
                 }
             }
@@ -521,7 +651,7 @@ private struct LeadershipRankProgressHeader: View {
 
     private var currentTitle: String {
         guard let title else { return language.text("记录建立中", "Building history") }
-        return "L\(min(title.level, 8)) · \(title.name)"
+        return "L\(min(title.level, 7)) · \(title.name)"
     }
 
     private func threshold(for level: Int) -> Double {
@@ -532,8 +662,7 @@ private struct LeadershipRankProgressHeader: View {
         case 4: 0.50
         case 5: 0.65
         case 6: 0.80
-        case 7: 0.93
-        default: 1
+        default: 0.93
         }
     }
 }
@@ -550,7 +679,7 @@ private struct LeadershipPreviewMenu: View {
                 Label(language.text("真实数据", "Live data"), systemImage: selection == nil ? "checkmark" : "chart.line.uptrend.xyaxis")
             }
             Divider()
-            ForEach(1...8, id: \.self) { level in
+            ForEach(1...7, id: \.self) { level in
                 let fixture = LeadershipPreviewFixture(level: level)
                 Button {
                     selection = level

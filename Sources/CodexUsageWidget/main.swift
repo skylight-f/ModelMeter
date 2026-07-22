@@ -3940,7 +3940,8 @@ struct UsageWidgetView: View {
             LeadershipCommandRadiusButton(
                 snapshot: store.multiRuntimeSnapshot.leadership,
                 previewLevel: leadershipPreviewLevel,
-                language: language
+                language: language,
+                visualEnergyMode: store.visualEnergyMode
             ) {
                 selectedDashboardTab = .leadership
             }

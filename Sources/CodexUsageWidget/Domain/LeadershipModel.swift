@@ -250,8 +250,7 @@ enum LeadershipScoreModel {
 
     static func title(for score: Int) -> LeadershipTitle {
         switch score {
-        case 100: LeadershipTitle(level: 8, name: "一人成军", lowerBound: 100, upperBound: 100)
-        case 93...99: LeadershipTitle(level: 7, name: "生态架构师", lowerBound: 93, upperBound: 99)
+        case 93...: LeadershipTitle(level: 7, name: "一人成军", lowerBound: 93, upperBound: 100)
         case 80...92: LeadershipTitle(level: 6, name: "AI 治理者", lowerBound: 80, upperBound: 92)
         case 65...79: LeadershipTitle(level: 5, name: "一人公司 CEO", lowerBound: 65, upperBound: 79)
         case 50...64: LeadershipTitle(level: 4, name: "硅基经理", lowerBound: 50, upperBound: 64)
@@ -262,7 +261,7 @@ enum LeadershipScoreModel {
     }
 
     static func nextTitle(after title: LeadershipTitle) -> LeadershipTitle? {
-        guard title.level < 8 else { return nil }
+        guard title.level < 7 else { return nil }
         let nextScore: Int
         switch title.level {
         case 1: nextScore = 20
@@ -270,8 +269,7 @@ enum LeadershipScoreModel {
         case 3: nextScore = 50
         case 4: nextScore = 65
         case 5: nextScore = 80
-        case 6: nextScore = 93
-        default: nextScore = 100
+        default: nextScore = 93
         }
         return self.title(for: nextScore)
     }
