@@ -8,6 +8,7 @@ MACOS_DIR := $(APP_DIR)/Contents/MacOS
 RESOURCES_DIR := $(APP_DIR)/Contents/Resources
 SOURCES := $(shell find Sources/CodexUsageWidget -name '*.swift' | sort)
 APP_ICON := Resources/codexU.icns
+LEADERSHIP_BADGES := $(sort $(wildcard Resources/LeadershipBadges/leadership-badge-l*.png))
 DEPLOYMENT_TARGET ?= 13.0
 HOST_ARCH := $(shell uname -m)
 APPLE_SILICON_TARGET_TRIPLE ?= arm64-apple-macos$(DEPLOYMENT_TARGET)
@@ -32,14 +33,15 @@ else
 CODESIGN_FLAGS := --force --deep --options runtime --timestamp --sign "$(SIGN_IDENTITY)" $(CODESIGN_EXTRA_FLAGS)
 endif
 
-.PHONY: build run probe test-rate-limits test-statistics-time-zone test-token-counter test-app-server-pipe test-task-runtime test-leadership-model test-claude-skill-paths test-codex-session-link test-performance-monitor test-phase-one-gate test-particle-animation test-palettes test-macos-compatibility memory-risk-check phase-one-check phase-one-soak install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
+.PHONY: build run probe test-rate-limits test-statistics-time-zone test-token-counter test-app-server-pipe test-task-runtime test-leadership-model test-leadership-assets test-claude-skill-paths test-codex-session-link test-performance-monitor test-phase-one-gate test-particle-animation test-palettes test-macos-compatibility memory-risk-check phase-one-check phase-one-soak install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
 
-build:
+build: test-leadership-assets
 	rm -rf "$(APP_DIR)"
 	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)"
 	cp Resources/Info.plist "$(APP_DIR)/Contents/Info.plist"
 	cp "$(APP_ICON)" "$(RESOURCES_DIR)/"
 	cp Resources/*.png "$(RESOURCES_DIR)/"
+	cp -R Resources/LeadershipBadges "$(RESOURCES_DIR)/LeadershipBadges"
 	cp -R Resources/Palettes "$(RESOURCES_DIR)/Palettes"
 	/usr/bin/xattr -dr com.apple.quarantine "$(APP_DIR)" 2>/dev/null || true
 	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SWIFTC_FEATURE_FLAGS) $(SOURCES) \
@@ -73,6 +75,15 @@ test-task-runtime: build
 
 test-leadership-model: build
 	"$(MACOS_DIR)/$(APP_NAME)" --self-test-leadership-model
+
+test-leadership-assets:
+	@test "$(words $(LEADERSHIP_BADGES))" -eq 7 || { echo "expected 7 leadership badge PNGs"; exit 1; }
+	@for badge in $(LEADERSHIP_BADGES); do \
+		width=$$(sips -g pixelWidth "$$badge" | awk '/pixelWidth/ { print $$2 }'); \
+		height=$$(sips -g pixelHeight "$$badge" | awk '/pixelHeight/ { print $$2 }'); \
+		alpha=$$(sips -g hasAlpha "$$badge" | awk '/hasAlpha/ { print $$2 }'); \
+		test "$$width" -ge 1024 -a "$$height" -ge 1024 -a "$$alpha" = yes || { echo "invalid leadership badge: $$badge ($$width x $$height, alpha=$$alpha)"; exit 1; }; \
+	done
 
 test-claude-skill-paths: build
 	"$(MACOS_DIR)/$(APP_NAME)" --self-test-claude-skill-paths

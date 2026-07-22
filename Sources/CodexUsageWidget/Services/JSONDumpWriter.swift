@@ -48,7 +48,6 @@ private func leadershipJSONObject(_ snapshot: LeadershipDashboardSnapshot) -> [S
 private func leadershipJSONObject(_ report: LeadershipReport) -> [String: Any] {
     [
         "period": report.period.rawValue,
-        "runtime": report.runtimeFilter.rawValue,
         "score": runtimeJSONValue(report.score),
         "coreScore": runtimeJSONValue(report.coreScore),
         "title": report.title.map { title in

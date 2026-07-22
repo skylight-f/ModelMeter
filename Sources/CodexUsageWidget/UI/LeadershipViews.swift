@@ -1,53 +1,76 @@
+import AppKit
 import SwiftUI
 
-struct LeadershipPyramidButton: View {
-    @Environment(\.colorScheme) private var colorScheme
+struct LeadershipCommandRadiusButton: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.visualTokens) private var visualTokens
     let snapshot: LeadershipDashboardSnapshot
     let language: WidgetLanguage
     let action: () -> Void
+    @State private var isHovering = false
 
     private var report: LeadershipReport? { snapshot.defaultReport }
     private var today: LeadershipReport? { snapshot.todayReport }
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text(language.text("AI 领导力", "AI Leadership"))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 2)
-                    Text("28D")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .foregroundStyle(visualTokens.accent.primary.color)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(visualTokens.accent.primary.color.opacity(0.12))
+            VStack(spacing: 8) {
+                ZStack {
+                    LeadershipCommandRadiusGraphic(
+                        level: report?.title?.level ?? 0,
+                        peakConcurrency: report?.peakConcurrency ?? 0,
+                        highlighted: isHovering
+                    )
+
+                    VStack(spacing: -1) {
+                        Text(report?.score.map(String.init) ?? "--")
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+
+                        LeadershipBadgeLockup(
+                            title: report?.title,
+                            emptyTitle: language.text("记录建立中", "Building history"),
+                            imageSize: 58,
+                            plaqueWidth: 95
                         )
-                }
-
-                HStack(alignment: .lastTextBaseline, spacing: 6) {
-                    Text(report?.score.map(String.init) ?? "--")
-                        .font(.system(size: 27, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(report?.title?.name ?? language.text("记录建立中", "Building history"))
-                            .font(.system(size: 11, weight: .bold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.76)
-                        Text(scoreCaption)
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
                     }
-                    Spacer(minLength: 0)
-                }
+                    .offset(y: 4)
 
-                LeadershipPyramidGraphic(currentLevel: report?.title?.level ?? 0)
-                    .frame(height: 77)
+                    VStack {
+                        HStack(alignment: .center, spacing: 4) {
+                            Text(language.text("AI 领导力", "AI Leadership"))
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 2)
+                            Text("28D")
+                                .font(.system(size: 8, weight: .bold, design: .rounded))
+                                .foregroundStyle(visualTokens.accent.primary.color)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(visualTokens.accent.primary.color.opacity(0.12))
+                                )
+                        }
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            if overflowNodeCount > 0 {
+                                Text("+\(overflowNodeCount)")
+                                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                                    .foregroundStyle(visualTokens.accent.primaryStrong.color)
+                                    .padding(.horizontal, 4)
+                                    .frame(height: 14)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(visualTokens.accent.primary.color.opacity(0.14))
+                                    )
+                                    .help(language.text("另有 \(overflowNodeCount) 个峰值并发 Agent", "\(overflowNodeCount) additional agents at peak"))
+                            }
+                        }
+                    }
+                }
+                .frame(width: 145, height: 145)
 
                 HStack(spacing: 4) {
                     LeadershipTodayFact(
@@ -61,24 +84,24 @@ struct LeadershipPyramidButton: View {
                         label: language.text("AI 工时", "AI hours")
                     )
                 }
+                .frame(width: 154)
             }
-            .padding(10)
-            .frame(maxWidth: .infinity, minHeight: 201, alignment: .topLeading)
-            .cardBackground(cornerRadius: 12, elevated: true)
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .frame(width: 154, alignment: .top)
+            .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilitySummary)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            if reduceMotion {
+                isHovering = hovering
+            } else {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    isHovering = hovering
+                }
+            }
+        }
         .help(language.text("查看 AI 领导力详情", "View AI leadership details"))
-    }
-
-    private var scoreCaption: String {
-        guard let report else { return language.text("本机事实数据", "Local facts") }
-        return language.text(
-            "\(report.activeDayCount)/28 活跃日",
-            "\(report.activeDayCount)/28 active days"
-        )
     }
 
     private var todayAgentValue: String {
@@ -87,6 +110,10 @@ struct LeadershipPyramidButton: View {
 
     private var todayHoursValue: String {
         leadershipHours(today?.aiHours)
+    }
+
+    private var overflowNodeCount: Int {
+        max((report?.peakConcurrency ?? 0) - LeadershipCommandRadiusGraphic.maximumVisibleNodes, 0)
     }
 
     private var accessibilitySummary: String {
@@ -136,68 +163,149 @@ private struct LeadershipTodayFact: View {
     @Environment(\.colorScheme) private var colorScheme
 }
 
-private struct LeadershipPyramidGraphic: View {
+private struct LeadershipCommandRadiusGraphic: View {
     @Environment(\.visualTokens) private var visualTokens
-    let currentLevel: Int
+    static let maximumVisibleNodes = 8
+
+    let level: Int
+    let peakConcurrency: Int
+    let highlighted: Bool
 
     var body: some View {
         Canvas { context, size in
-            let tierCount = 7
-            let visualLevel = min(max(currentLevel, 0), tierCount)
-            let centerX = size.width / 2 - 3
-            let bottomY = size.height - 3
-            let baseHalfWidth = max(30, (size.width - 24) / 2)
+            let center = CGPoint(x: size.width / 2, y: size.height / 2 + 8)
+            let allRadii: [CGFloat] = [31, 48, 65]
+            let radii = Array(allRadii[0..<ringCount])
 
-            for tier in 0..<tierCount {
-                let level = tier + 1
-                let halfWidth = max(12, baseHalfWidth - CGFloat(tier) * 7)
-                let tierBottom = bottomY - CGFloat(tier) * 8.6
-                let tierTop = tierBottom - 6.2
-                let depth: CGFloat = 4.2
-                let earned = level <= visualLevel
-                let current = level == visualLevel
-                let baseColor = current
-                    ? visualTokens.accent.primaryStrong.color
-                    : earned
-                        ? visualTokens.accent.primary.color.opacity(0.54 + Double(tier) * 0.035)
-                        : FixedVisualPalette.surfaceTrack.opacity(0.72)
-
-                var front = Path()
-                front.move(to: CGPoint(x: centerX - halfWidth, y: tierTop))
-                front.addLine(to: CGPoint(x: centerX + halfWidth, y: tierTop))
-                front.addLine(to: CGPoint(x: centerX + halfWidth + depth, y: tierBottom))
-                front.addLine(to: CGPoint(x: centerX - halfWidth + depth, y: tierBottom))
-                front.closeSubpath()
-                context.fill(front, with: .color(baseColor))
-
-                var top = Path()
-                top.move(to: CGPoint(x: centerX - halfWidth, y: tierTop))
-                top.addLine(to: CGPoint(x: centerX + halfWidth, y: tierTop))
-                top.addLine(to: CGPoint(x: centerX + halfWidth + depth, y: tierTop - depth))
-                top.addLine(to: CGPoint(x: centerX - halfWidth + depth, y: tierTop - depth))
-                top.closeSubpath()
-                context.fill(
-                    top,
-                    with: .linearGradient(
-                        Gradient(colors: [
-                            earned ? visualTokens.accent.primaryLight.color : FixedVisualPalette.surfaceTrack,
-                            baseColor
-                        ]),
-                        startPoint: CGPoint(x: centerX - halfWidth, y: tierTop - depth),
-                        endPoint: CGPoint(x: centerX + halfWidth, y: tierTop)
-                    )
+            for (index, radius) in radii.enumerated() {
+                let rect = CGRect(
+                    x: center.x - radius,
+                    y: center.y - radius,
+                    width: radius * 2,
+                    height: radius * 2
                 )
+                let opacity = 0.18 + Double(index) * 0.07 + (highlighted ? 0.08 : 0)
+                context.stroke(
+                    Path(ellipseIn: rect),
+                    with: .color(visualTokens.accent.primary.color.opacity(opacity)),
+                    style: StrokeStyle(lineWidth: index == radii.count - 1 ? 1.2 : 0.8, dash: index == 0 ? [] : [2.5, 3.5])
+                )
+            }
 
-                if current {
-                    context.stroke(
-                        front,
-                        with: .color(visualTokens.accent.highlight.color.opacity(0.9)),
-                        lineWidth: 1.2
-                    )
+            let visibleNodeCount = min(max(peakConcurrency, 0), Self.maximumVisibleNodes)
+            for index in 0..<visibleNodeCount {
+                let ringIndex = index % max(ringCount, 1)
+                let nodesOnRing = (visibleNodeCount + ringCount - 1 - ringIndex) / ringCount
+                let positionOnRing = index / max(ringCount, 1)
+                let phase = -Double.pi / 2 + Double(ringIndex) * 0.54
+                let angle = phase + Double(positionOnRing) / Double(max(nodesOnRing, 1)) * Double.pi * 2
+                let radius = radii[ringIndex]
+                let point = CGPoint(
+                    x: center.x + radius * CGFloat(cos(angle)),
+                    y: center.y + radius * CGFloat(sin(angle))
+                )
+                let nodeSize: CGFloat = ringIndex == radii.count - 1 ? 6.5 : 5.5
+                let nodeRect = CGRect(
+                    x: point.x - nodeSize / 2,
+                    y: point.y - nodeSize / 2,
+                    width: nodeSize,
+                    height: nodeSize
+                )
+                context.fill(Path(ellipseIn: nodeRect), with: .color(visualTokens.accent.primaryStrong.color))
+                context.stroke(Path(ellipseIn: nodeRect.insetBy(dx: -1.5, dy: -1.5)), with: .color(visualTokens.accent.primaryLight.color.opacity(0.42)), lineWidth: 1)
+            }
+        }
+        .opacity(highlighted ? 1 : 0.88)
+        .accessibilityHidden(true)
+    }
+
+    private var ringCount: Int {
+        switch level {
+        case ...1: 1
+        case 2...4: 2
+        default: 3
+        }
+    }
+}
+
+private struct LeadershipBadgeLockup: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.visualTokens) private var visualTokens
+    let title: LeadershipTitle?
+    let emptyTitle: String
+    let imageSize: CGFloat
+    let plaqueWidth: CGFloat
+
+    var body: some View {
+        VStack(spacing: -5) {
+            LeadershipBadgeImage(level: title?.level ?? 0)
+                .frame(width: imageSize, height: imageSize)
+                .shadow(color: visualTokens.accent.primary.color.opacity(0.18), radius: 5, y: 2)
+
+            HStack(spacing: 3) {
+                if let title {
+                    Text("L\(min(title.level, 7))")
+                        .foregroundStyle(visualTokens.accent.primaryStrong.color)
                 }
+                Text(title?.name ?? emptyTitle)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .padding(.horizontal, 6)
+            .frame(width: plaqueWidth, height: 18)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(FixedVisualPalette.controlFill(colorScheme))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .strokeBorder(visualTokens.accent.primary.color.opacity(0.38), lineWidth: 0.8)
+                    )
+            )
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct LeadershipBadgeImage: View {
+    let level: Int
+
+    var body: some View {
+        Group {
+            if let image = LeadershipBadgeAssets.image(for: level) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
+                    .scaledToFit()
+            } else {
+                Image(systemName: "circle.hexagongrid.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.tertiary)
+                    .padding(7)
             }
         }
         .accessibilityHidden(true)
+    }
+}
+
+private enum LeadershipBadgeAssets {
+    private static let cache = NSCache<NSNumber, NSImage>()
+
+    static func image(for level: Int) -> NSImage? {
+        guard level > 0 else { return nil }
+        let assetLevel = min(max(level, 1), 7)
+        let key = NSNumber(value: assetLevel)
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let url = Bundle.main.url(
+            forResource: "leadership-badge-l\(assetLevel)",
+            withExtension: "png",
+            subdirectory: "LeadershipBadges"
+        ), let image = NSImage(contentsOf: url) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
     }
 }
 
@@ -207,19 +315,14 @@ struct LeadershipDashboardPanel: View {
     let snapshot: LeadershipDashboardSnapshot
     let language: WidgetLanguage
     @State private var period: LeadershipPeriod = .twentyEightDays
-    @State private var runtime: LeadershipRuntimeFilter = .all
 
     private var report: LeadershipReport? {
-        snapshot.report(period: period, runtime: runtime)
+        snapshot.report(period: period)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                LeadershipPeriodControl(selection: $period, language: language)
-                Spacer(minLength: 8)
-                LeadershipRuntimeControl(selection: $runtime, language: language)
-            }
+            LeadershipPeriodControl(selection: $period, language: language)
 
             if let report {
                 HStack(alignment: .top, spacing: 10) {
@@ -261,25 +364,6 @@ private struct LeadershipPeriodControl: View {
                 case .today: language.text("今日", "Today")
                 case .sevenDays: language.text("7 天", "7 days")
                 case .twentyEightDays: language.text("28 天", "28 days")
-                }
-            }
-        )
-    }
-}
-
-private struct LeadershipRuntimeControl: View {
-    @Binding var selection: LeadershipRuntimeFilter
-    let language: WidgetLanguage
-
-    var body: some View {
-        LeadershipMiniSegments(
-            selection: $selection,
-            options: LeadershipRuntimeFilter.allCases,
-            label: { runtime in
-                switch runtime {
-                case .all: language.text("全部", "All")
-                case .codex: "Codex"
-                case .claudeCode: "Claude Code"
                 }
             }
         )
@@ -334,23 +418,35 @@ private struct LeadershipScoreCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(report.score.map(String.init) ?? "--")
-                    .font(.system(size: 39, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                Text("/ 100")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 4)
+            ZStack(alignment: .topTrailing) {
+                HStack(alignment: .center, spacing: 7) {
+                    LeadershipBadgeLockup(
+                        title: report.title,
+                        emptyTitle: language.text("记录不足", "Insufficient history"),
+                        imageSize: 46,
+                        plaqueWidth: 85
+                    )
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text(report.score.map(String.init) ?? "--")
+                                .font(.system(size: 34, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                            Text("/100")
+                                .font(.system(size: 8, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.tertiary)
+                        }
+                        Text(periodLabel)
+                            .font(.system(size: 8, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
                 Image(systemName: evidenceIcon)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(evidenceColor)
                     .help(evidenceLabel)
             }
-
-            Text(report.title?.name ?? language.text("记录不足", "Insufficient history"))
-                .font(.system(size: 16, weight: .bold))
-                .lineLimit(1)
 
             Text(scoreExplanation)
                 .font(.system(size: 9, weight: .medium))
@@ -386,6 +482,14 @@ private struct LeadershipScoreCard: View {
             )
         }
         return language.text("可信证据低于出分门槛", "Evidence is below the scoring threshold")
+    }
+
+    private var periodLabel: String {
+        switch period {
+        case .today: return language.text("今日", "Today")
+        case .sevenDays: return language.text("近 7 天", "7 days")
+        case .twentyEightDays: return language.text("近 28 天", "28 days")
+        }
     }
 
     private var evidenceLabel: String {

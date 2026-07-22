@@ -61,22 +61,6 @@ enum LeadershipPeriod: String, Codable, CaseIterable, Identifiable, Equatable {
     }
 }
 
-enum LeadershipRuntimeFilter: String, Codable, CaseIterable, Identifiable, Equatable {
-    case all
-    case codex
-    case claudeCode
-
-    var id: String { rawValue }
-
-    func includes(_ runtime: RuntimeScope) -> Bool {
-        switch self {
-        case .all: true
-        case .codex: runtime == .codex
-        case .claudeCode: runtime == .claudeCode
-        }
-    }
-}
-
 enum LeadershipDimensionKind: String, Codable, CaseIterable, Identifiable, Equatable {
     case span
     case leverage
@@ -131,7 +115,6 @@ struct LeadershipProjectContribution: Codable, Identifiable, Equatable {
 
 struct LeadershipReport: Codable, Identifiable, Equatable {
     let period: LeadershipPeriod
-    let runtimeFilter: LeadershipRuntimeFilter
     let score: Int?
     let coreScore: Double?
     let title: LeadershipTitle?
@@ -148,7 +131,7 @@ struct LeadershipReport: Codable, Identifiable, Equatable {
     let dailyPoints: [LeadershipDayPoint]
     let projects: [LeadershipProjectContribution]
 
-    var id: String { "\(period.rawValue)-\(runtimeFilter.rawValue)" }
+    var id: String { period.rawValue }
 }
 
 struct LeadershipDashboardSnapshot: Equatable {
@@ -162,19 +145,16 @@ struct LeadershipDashboardSnapshot: Equatable {
         reports: []
     )
 
-    func report(
-        period: LeadershipPeriod,
-        runtime: LeadershipRuntimeFilter
-    ) -> LeadershipReport? {
-        reports.first { $0.period == period && $0.runtimeFilter == runtime }
+    func report(period: LeadershipPeriod) -> LeadershipReport? {
+        reports.first { $0.period == period }
     }
 
     var defaultReport: LeadershipReport? {
-        report(period: .twentyEightDays, runtime: .all)
+        report(period: .twentyEightDays)
     }
 
     var todayReport: LeadershipReport? {
-        report(period: .today, runtime: .all)
+        report(period: .today)
     }
 }
 
@@ -271,13 +251,13 @@ enum LeadershipScoreModel {
     static func title(for score: Int) -> LeadershipTitle {
         switch score {
         case 100: LeadershipTitle(level: 8, name: "一人成军", lowerBound: 100, upperBound: 100)
-        case 93...99: LeadershipTitle(level: 7, name: "一人集团", lowerBound: 93, upperBound: 99)
-        case 80...92: LeadershipTitle(level: 6, name: "超级个体", lowerBound: 80, upperBound: 92)
+        case 93...99: LeadershipTitle(level: 7, name: "生态架构师", lowerBound: 93, upperBound: 99)
+        case 80...92: LeadershipTitle(level: 6, name: "AI 治理者", lowerBound: 80, upperBound: 92)
         case 65...79: LeadershipTitle(level: 5, name: "一人公司 CEO", lowerBound: 65, upperBound: 79)
-        case 50...64: LeadershipTitle(level: 4, name: "硅基厂长", lowerBound: 50, upperBound: 64)
-        case 35...49: LeadershipTitle(level: 3, name: "AI 包工头", lowerBound: 35, upperBound: 49)
-        case 20...34: LeadershipTitle(level: 2, name: "Agent 领班", lowerBound: 20, upperBound: 34)
-        default: LeadershipTitle(level: 1, name: "AI 协作者", lowerBound: 0, upperBound: 19)
+        case 50...64: LeadershipTitle(level: 4, name: "硅基经理", lowerBound: 50, upperBound: 64)
+        case 35...49: LeadershipTitle(level: 3, name: "Agent 领队", lowerBound: 35, upperBound: 49)
+        case 20...34: LeadershipTitle(level: 2, name: "AI 协作者", lowerBound: 20, upperBound: 34)
+        default: LeadershipTitle(level: 1, name: "AI 使用者", lowerBound: 0, upperBound: 19)
         }
     }
 
@@ -318,17 +298,14 @@ struct LeadershipAggregator {
         now: Date,
         calendar: Calendar
     ) -> LeadershipDashboardSnapshot {
-        let reports = LeadershipPeriod.allCases.flatMap { period in
-            LeadershipRuntimeFilter.allCases.map { runtime in
-                makeReport(
-                    workers: workers,
-                    intervals: intervals,
-                    period: period,
-                    runtime: runtime,
-                    now: now,
-                    calendar: calendar
-                )
-            }
+        let reports = LeadershipPeriod.allCases.map { period in
+            makeReport(
+                workers: workers,
+                intervals: intervals,
+                period: period,
+                now: now,
+                calendar: calendar
+            )
         }
         return LeadershipDashboardSnapshot(
             modelVersion: LeadershipScoreModel.version,
@@ -341,7 +318,6 @@ struct LeadershipAggregator {
         workers: [LeadershipWorker],
         intervals: [LeadershipInterval],
         period: LeadershipPeriod,
-        runtime: LeadershipRuntimeFilter,
         now: Date,
         calendar: Calendar
     ) -> LeadershipReport {
@@ -349,8 +325,7 @@ struct LeadershipAggregator {
         let todayStart = calendar.startOfDay(for: now)
         let start = calendar.date(byAdding: .day, value: -(period.dayCount - 1), to: todayStart) ?? todayStart
         let filtered = intervals.filter { interval in
-            runtime.includes(interval.runtime)
-                && interval.quality.isScorable
+            interval.quality.isScorable
                 && interval.endAt > start
                 && interval.startAt < end
         }.compactMap { clip($0, start: start, end: end) }
@@ -403,7 +378,6 @@ struct LeadershipAggregator {
 
         return LeadershipReport(
             period: period,
-            runtimeFilter: runtime,
             score: final?.score,
             coreScore: final?.core,
             title: final.map { LeadershipScoreModel.title(for: $0.score) },
