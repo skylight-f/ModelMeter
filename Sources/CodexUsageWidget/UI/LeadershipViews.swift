@@ -125,14 +125,14 @@ struct LeadershipCommandRadiusButton: View {
                         )
                         OverviewFactTile(
                             systemName: "person.3.fill",
-                            value: todayAgentValue,
-                            label: language.text("Agent", "Agents")
+                            value: leadershipAgentValue,
+                            label: language.text("领导Agent", "Led agents")
                         )
                     }
                     HStack(spacing: 4) {
                         OverviewFactTile(
                             systemName: "clock.fill",
-                            value: todayHoursValue,
+                            value: leadershipHoursValue,
                             label: language.text("AI 工时", "AI hours")
                         )
                         OverviewFactTile(
@@ -170,22 +170,25 @@ struct LeadershipCommandRadiusButton: View {
     private var displayTitle: LeadershipTitle? { preview?.title ?? report?.title }
     private var displayPeakConcurrencyValue: Int? { preview?.peakConcurrency ?? report?.peakConcurrency }
     private var displayTodayAgentCount: Int? { preview?.agentCount ?? today?.agentCount }
+    private var displayLeadershipAgentCount: Int? { report?.agentCount }
 
-    private var todayAgentValue: String {
-        displayTodayAgentCount.map(String.init) ?? "--"
+    private var leadershipAgentValue: String {
+        guard let count = displayLeadershipAgentCount else { return "--" }
+        return language.text("\(count) 个", "\(count)")
     }
 
-    private var todayHoursValue: String {
-        leadershipHours(preview?.aiHours ?? today?.aiHours)
+    private var leadershipHoursValue: String {
+        leadershipHours(report?.aiHours)
     }
 
     private var accessibilitySummary: String {
         let score = displayScore.map(String.init) ?? language.text("暂无得分", "No score")
         let title = displayTitle?.name ?? language.text("记录建立中", "Building history")
         let peak = displayPeakConcurrencyValue.map(String.init) ?? language.text("暂无", "unavailable")
+        let agents = displayLeadershipAgentCount.map(String.init) ?? language.text("暂无", "unavailable")
         return language.text(
-            "AI 领导力，\(score) 分，\(title)，今日领导 \(todayAgentValue) 个 Agent，AI 工时 \(todayHoursValue)，峰值并发 \(peak)",
-            "AI leadership, score \(score), \(title), \(todayAgentValue) agents today, \(todayHoursValue) AI hours, peak concurrency \(peak)"
+            "AI 领导力，\(score) 分，\(title)，近 28 天领导 \(agents) 个 Agent，AI 工时 \(leadershipHoursValue)，峰值并发 \(peak)",
+            "AI leadership, score \(score), \(title), \(agents) agents over 28 days, \(leadershipHoursValue) AI hours over 28 days, peak concurrency \(peak)"
         )
     }
 }
