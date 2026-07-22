@@ -5528,6 +5528,18 @@ struct DualQuotaRing: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            VStack {
+                HStack {
+                    Text(language.text("用量", "Usage"))
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                Spacer(minLength: 0)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
@@ -9136,7 +9148,7 @@ private func dashboardTabIcon(_ tab: DashboardTab) -> String {
     case .tasks:
         return "checklist"
     case .leadership:
-        return "chart.bar.xaxis"
+        return "scope"
     case .usage:
         return "calendar"
     case .projects:
